@@ -1,11 +1,8 @@
-"""Thin wrapper around Ollama embeddings API."""
+"""In-process embeddings via fastembed (ONNX Runtime)."""
 
 import logging
 import math
-import time
-from typing import Any, cast
-
-import ollama
+import os
 
 from lilbee.config import EMBEDDING_DIM, EMBEDDING_MODEL, MAX_EMBED_CHARS
 
@@ -16,21 +13,43 @@ log = logging.getLogger(__name__)
 # Worst-case table text (87% special chars) fails at 2345 chars; 2000 gives ~15% margin.
 _MAX_EMBED_CHARS = MAX_EMBED_CHARS
 
-_MAX_BATCH_CHARS = 6000
+# Lazy singleton — created on first use, reused for the process lifetime.
+_model: object | None = None
 
 
-def _call_with_retry(fn: Any, *args: Any, **kwargs: Any) -> Any:
-    """Retry fn up to 3 times with exponential backoff on connection errors."""
-    delays = [1, 2, 4]
-    last_err: Exception | None = None
-    for attempt, delay in enumerate(delays):
-        try:
-            return fn(*args, **kwargs)  # type: ignore[operator]
-        except (ConnectionError, OSError) as exc:
-            last_err = exc
-            log.warning("Ollama call failed (attempt %d/3): %s", attempt + 1, exc)
-            time.sleep(delay)
-    raise last_err  # type: ignore[misc]
+def _get_providers() -> list[str]:
+    """Detect ONNX Runtime execution providers.
+
+    Auto-detects CUDA if available (user installed fastembed-gpu).
+    Falls back to CPU. Skips CoreML — it's slower for nomic-embed-text
+    due to unsupported rotary embedding ops.
+    Override with LILBEE_EMBEDDING_PROVIDERS env var (comma-separated).
+    """
+    override = os.environ.get("LILBEE_EMBEDDING_PROVIDERS")
+    if override:
+        return [p.strip() for p in override.split(",") if p.strip()]
+
+    try:
+        import onnxruntime
+
+        available = onnxruntime.get_available_providers()
+        if "CUDAExecutionProvider" in available:
+            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    except ImportError:
+        pass
+    return ["CPUExecutionProvider"]
+
+
+def _get_model() -> "TextEmbedding":  # type: ignore[name-defined]  # noqa: F821
+    """Return the fastembed model singleton, creating it on first call."""
+    global _model
+    if _model is None:
+        from fastembed import TextEmbedding
+
+        providers = _get_providers()
+        log.info("Loading embedding model %s (providers: %s)", EMBEDDING_MODEL, providers)
+        _model = TextEmbedding(model_name=EMBEDDING_MODEL, providers=providers)
+    return _model  # type: ignore[return-value]
 
 
 def _truncate(text: str) -> str:
@@ -53,49 +72,29 @@ def _validate_vector(vector: list[float]) -> None:
 
 
 def validate_model() -> None:
-    """Check that the configured embedding model is available in Ollama."""
-    try:
-        models = ollama.list()
-        names = {m.model for m in models.models if m.model}
-        # Also match without :latest tag
-        base_names = {n.split(":")[0] for n in names}
-        if EMBEDDING_MODEL not in names and EMBEDDING_MODEL not in base_names:
-            raise RuntimeError(
-                f"Embedding model '{EMBEDDING_MODEL}' not found in Ollama. "
-                f"Run: ollama pull {EMBEDDING_MODEL}"
-            )
-    except (ConnectionError, OSError) as exc:
-        raise RuntimeError(f"Cannot connect to Ollama: {exc}. Is Ollama running?") from exc
+    """Load the embedding model, downloading if needed."""
+    _get_model()
 
 
 def embed(text: str) -> list[float]:
     """Embed a single text string, return vector."""
-    response = _call_with_retry(ollama.embed, model=EMBEDDING_MODEL, input=_truncate(text))
-    result = cast(list[float], response["embeddings"][0])
+    model = _get_model()
+    results = list(model.embed([_truncate(text)]))
+    result: list[float] = results[0].tolist()
     _validate_vector(result)
     return result
 
 
 def embed_batch(texts: list[str]) -> list[list[float]]:
-    """Embed multiple texts with adaptive batching, return list of vectors."""
+    """Embed multiple texts, return list of vectors.
+
+    fastembed handles internal batching — no manual chunking needed.
+    """
     if not texts:
         return []
-    vectors: list[list[float]] = []
-    batch: list[str] = []
-    batch_chars = 0
-    for text in texts:
-        truncated = _truncate(text)
-        chunk_len = len(truncated)
-        if batch and batch_chars + chunk_len > _MAX_BATCH_CHARS:
-            response = _call_with_retry(ollama.embed, model=EMBEDDING_MODEL, input=batch)
-            vectors.extend(cast(list[list[float]], response["embeddings"]))
-            batch = []
-            batch_chars = 0
-        batch.append(truncated)
-        batch_chars += chunk_len
-    if batch:
-        response = _call_with_retry(ollama.embed, model=EMBEDDING_MODEL, input=batch)
-        vectors.extend(cast(list[list[float]], response["embeddings"]))
+    model = _get_model()
+    truncated = [_truncate(t) for t in texts]
+    vectors = [arr.tolist() for arr in model.embed(truncated)]
     for vec in vectors:
         _validate_vector(vec)
     return vectors

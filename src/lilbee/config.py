@@ -45,9 +45,9 @@ DOCUMENTS_DIR = _data_root / "documents"
 DATA_DIR = _data_root / "data"
 LANCEDB_DIR = DATA_DIR / "lancedb"
 
-# Ollama models — configurable via LILBEE_CHAT_MODEL / LILBEE_EMBEDDING_MODEL
+# Models — configurable via LILBEE_CHAT_MODEL / LILBEE_EMBEDDING_MODEL
 CHAT_MODEL = _env("CHAT_MODEL", "mistral")
-EMBEDDING_MODEL = _env("EMBEDDING_MODEL", "nomic-embed-text")
+EMBEDDING_MODEL = _env("EMBEDDING_MODEL", "nomic-ai/nomic-embed-text-v1.5")
 EMBEDDING_DIM = _env_int("EMBEDDING_DIM", 768)
 
 # Chunking — configurable via LILBEE_CHUNK_SIZE / LILBEE_CHUNK_OVERLAP
@@ -59,7 +59,7 @@ MAX_EMBED_CHARS = _env_int("MAX_EMBED_CHARS", 2000)
 
 # Retrieval
 TOP_K = _env_int("TOP_K", 10)
-MAX_DISTANCE = float(_env("MAX_DISTANCE", "1.5"))
+MAX_DISTANCE = float(_env("MAX_DISTANCE", "0.7"))
 
 # System prompt for RAG answers
 SYSTEM_PROMPT = _env(

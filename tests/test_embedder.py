@@ -1,228 +1,191 @@
-"""Tests for the Ollama embedding wrapper (mocked — no live server needed)."""
+"""Tests for the fastembed embedding wrapper (mocked — no model download needed)."""
 
+import os
 from unittest import mock
 
+import numpy as np
 import pytest
+
+import lilbee.embedder as mod
 
 
 class TestTruncate:
     def test_short_text_unchanged(self):
-        from lilbee.embedder import _truncate
-
         text = "short text"
-        assert _truncate(text) == text
+        assert mod._truncate(text) == text
 
     def test_long_text_truncated(self):
-        from lilbee.embedder import _MAX_EMBED_CHARS, _truncate
-
-        text = "x" * (_MAX_EMBED_CHARS + 500)
-        result = _truncate(text)
-        assert len(result) == _MAX_EMBED_CHARS
+        text = "x" * (mod._MAX_EMBED_CHARS + 500)
+        result = mod._truncate(text)
+        assert len(result) == mod._MAX_EMBED_CHARS
 
     def test_exact_limit_unchanged(self):
-        from lilbee.embedder import _MAX_EMBED_CHARS, _truncate
+        text = "a" * mod._MAX_EMBED_CHARS
+        assert mod._truncate(text) == text
 
-        text = "a" * _MAX_EMBED_CHARS
-        assert _truncate(text) == text
+
+def _env_without(*keys: str) -> dict[str, str]:
+    """Return a copy of os.environ without the specified keys."""
+    return {k: v for k, v in os.environ.items() if k not in keys}
+
+
+class TestGetProviders:
+    def test_default_cpu(self):
+        env = _env_without("LILBEE_EMBEDDING_PROVIDERS")
+        with mock.patch.dict("os.environ", env, clear=True):
+            providers = mod._get_providers()
+            assert "CPUExecutionProvider" in providers
+
+    def test_env_override(self):
+        override = "CUDAExecutionProvider,CPUExecutionProvider"
+        with mock.patch.dict("os.environ", {"LILBEE_EMBEDDING_PROVIDERS": override}):
+            providers = mod._get_providers()
+            assert providers == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+    def test_onnxruntime_import_error_falls_back_to_cpu(self):
+        env = _env_without("LILBEE_EMBEDDING_PROVIDERS")
+        # Simulate onnxruntime not installed by making import raise
+        import_orig = __builtins__.__import__ if hasattr(__builtins__, "__import__") else __import__
+
+        def mock_import(name, *args, **kwargs):
+            if name == "onnxruntime":
+                raise ImportError("No module named 'onnxruntime'")
+            return import_orig(name, *args, **kwargs)
+
+        with (
+            mock.patch.dict("os.environ", env, clear=True),
+            mock.patch("builtins.__import__", side_effect=mock_import),
+        ):
+            providers = mod._get_providers()
+            assert providers == ["CPUExecutionProvider"]
+
+    def test_cuda_auto_detected(self):
+        mock_ort = mock.MagicMock()
+        mock_ort.get_available_providers.return_value = [
+            "CUDAExecutionProvider",
+            "CPUExecutionProvider",
+        ]
+        env = _env_without("LILBEE_EMBEDDING_PROVIDERS")
+        with (
+            mock.patch.dict("os.environ", env, clear=True),
+            mock.patch.dict("sys.modules", {"onnxruntime": mock_ort}),
+        ):
+            providers = mod._get_providers()
+            assert providers == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+
+class TestGetModel:
+    def setup_method(self):
+        self._original = mod._model
+        mod._model = None
+
+    def teardown_method(self):
+        mod._model = self._original
+
+    def test_creates_singleton(self):
+        mock_cls = mock.MagicMock()
+        mock_instance = mock.MagicMock()
+        mock_cls.return_value = mock_instance
+        with mock.patch.dict("sys.modules", {"fastembed": mock.MagicMock(TextEmbedding=mock_cls)}):
+            result = mod._get_model()
+            assert result is mock_instance
+            mock_cls.assert_called_once()
+
+    def test_reuses_singleton(self):
+        sentinel = object()
+        mod._model = sentinel
+        assert mod._get_model() is sentinel
 
 
 class TestEmbed:
-    @mock.patch("ollama.embed")
-    def test_returns_vector(self, mock_ollama):
-        mock_ollama.return_value = {"embeddings": [[0.1] * 768]}
-        from lilbee.embedder import embed
+    def test_returns_vector(self):
+        mock_model = mock.MagicMock()
+        mock_model.embed.return_value = [np.array([0.1] * 768)]
+        with mock.patch.object(mod, "_get_model", return_value=mock_model):
+            vec = mod.embed("test")
+            assert vec == pytest.approx([0.1] * 768)
+            mock_model.embed.assert_called_once_with(["test"])
 
-        vec = embed("test")
-        assert vec == [0.1] * 768
-        mock_ollama.assert_called_once()
-
-    @mock.patch("ollama.embed")
-    def test_passes_correct_model(self, mock_ollama):
-        mock_ollama.return_value = {"embeddings": [[0.0] * 768]}
-        from lilbee.embedder import embed
-
-        embed("hello")
-        call_kwargs = mock_ollama.call_args
-        assert call_kwargs[1]["input"] == "hello"
-
-    @mock.patch("ollama.embed")
-    def test_truncates_long_input(self, mock_ollama):
-        from lilbee.embedder import _MAX_EMBED_CHARS, embed
-
-        mock_ollama.return_value = {"embeddings": [[0.0] * 768]}
-        long_text = "a" * (_MAX_EMBED_CHARS + 1000)
-        embed(long_text)
-        actual_input = mock_ollama.call_args[1]["input"]
-        assert len(actual_input) == _MAX_EMBED_CHARS
+    def test_truncates_long_input(self):
+        mock_model = mock.MagicMock()
+        mock_model.embed.return_value = [np.array([0.0] * 768)]
+        with mock.patch.object(mod, "_get_model", return_value=mock_model):
+            long_text = "a" * (mod._MAX_EMBED_CHARS + 1000)
+            mod.embed(long_text)
+            actual_input = mock_model.embed.call_args[0][0][0]
+            assert len(actual_input) == mod._MAX_EMBED_CHARS
 
 
 class TestEmbedBatch:
-    @mock.patch("ollama.embed")
-    def test_returns_multiple_vectors(self, mock_ollama):
-        mock_ollama.return_value = {"embeddings": [[0.1] * 768, [0.2] * 768]}
-        from lilbee.embedder import embed_batch
-
-        result = embed_batch(["a", "b"])
-        assert len(result) == 2
-        mock_ollama.assert_called_once()
+    def test_returns_multiple_vectors(self):
+        mock_model = mock.MagicMock()
+        mock_model.embed.return_value = [np.array([0.1] * 768), np.array([0.2] * 768)]
+        with mock.patch.object(mod, "_get_model", return_value=mock_model):
+            result = mod.embed_batch(["a", "b"])
+            assert len(result) == 2
+            mock_model.embed.assert_called_once_with(["a", "b"])
 
     def test_empty_input_returns_empty(self):
-        from lilbee.embedder import embed_batch
+        assert mod.embed_batch([]) == []
 
-        assert embed_batch([]) == []
-
-    @mock.patch("ollama.embed")
-    def test_passes_list_as_input(self, mock_ollama):
-        mock_ollama.return_value = {"embeddings": [[0.0] * 768, [0.0] * 768]}
-        from lilbee.embedder import embed_batch
-
-        embed_batch(["hello", "world"])
-        assert mock_ollama.call_args[1]["input"] == ["hello", "world"]
-
-    @mock.patch("ollama.embed")
-    def test_batches_large_input(self, mock_ollama):
-        """Texts exceeding _MAX_BATCH_CHARS split into multiple API calls."""
-        from lilbee.embedder import _MAX_BATCH_CHARS, _MAX_EMBED_CHARS, embed_batch
-
-        # Use chunks under _MAX_EMBED_CHARS so they don't get truncated
-        chunk_size = min(_MAX_EMBED_CHARS, _MAX_BATCH_CHARS // 2 + 1)
-        # Need enough chunks so total chars > _MAX_BATCH_CHARS
-        n_to_fill = _MAX_BATCH_CHARS // chunk_size + 1
-        texts = ["x" * chunk_size for _ in range(n_to_fill + 1)]
-        mock_ollama.side_effect = [
-            {"embeddings": [[0.1] * 768 for _ in range(n_to_fill)]},
-            {"embeddings": [[0.1] * 768]},
-        ]
-        result = embed_batch(texts)
-        assert len(result) == n_to_fill + 1
-        assert mock_ollama.call_count == 2
-
-    @mock.patch("ollama.embed")
-    def test_truncates_long_texts_in_batch(self, mock_ollama):
-        from lilbee.embedder import _MAX_EMBED_CHARS, embed_batch
-
-        mock_ollama.return_value = {"embeddings": [[0.0] * 768, [0.0] * 768]}
-        texts = ["short", "x" * (_MAX_EMBED_CHARS + 500)]
-        embed_batch(texts)
-        # Both fit in one batch after truncation (total < _MAX_BATCH_CHARS)
-        mock_ollama.assert_called_once()
-        call_input = mock_ollama.call_args[1]["input"]
-        assert call_input[0] == "short"
-        assert len(call_input[1]) == _MAX_EMBED_CHARS
+    def test_truncates_long_texts(self):
+        mock_model = mock.MagicMock()
+        mock_model.embed.return_value = [np.array([0.0] * 768), np.array([0.0] * 768)]
+        with mock.patch.object(mod, "_get_model", return_value=mock_model):
+            texts = ["short", "x" * (mod._MAX_EMBED_CHARS + 500)]
+            mod.embed_batch(texts)
+            call_input = mock_model.embed.call_args[0][0]
+            assert call_input[0] == "short"
+            assert len(call_input[1]) == mod._MAX_EMBED_CHARS
 
 
 class TestValidateVector:
     def test_valid_vector_passes(self):
-        from lilbee.embedder import _validate_vector
+        mod._validate_vector([0.1] * 768)  # Should not raise
 
-        _validate_vector([0.1] * 768)  # Should not raise
+    def test_wrong_dim_raises(self):
+        mock_model = mock.MagicMock()
+        mock_model.embed.return_value = [np.array([0.1, 0.2])]
+        with (
+            mock.patch.object(mod, "_get_model", return_value=mock_model),
+            pytest.raises(ValueError, match="dimension mismatch"),
+        ):
+            mod.embed("test")
 
-    @mock.patch("ollama.embed")
-    def test_embed_wrong_dim_raises(self, mock_ollama):
-        mock_ollama.return_value = {"embeddings": [[0.1, 0.2]]}  # Wrong dim
-        from lilbee.embedder import embed
-
-        with pytest.raises(ValueError, match="dimension mismatch"):
-            embed("test")
-
-    @mock.patch("ollama.embed")
-    def test_embed_nan_raises(self, mock_ollama):
+    def test_nan_raises(self):
         import math
 
-        mock_ollama.return_value = {"embeddings": [[math.nan] + [0.1] * 767]}
-        from lilbee.embedder import embed
+        mock_model = mock.MagicMock()
+        mock_model.embed.return_value = [np.array([math.nan] + [0.1] * 767)]
+        with (
+            mock.patch.object(mod, "_get_model", return_value=mock_model),
+            pytest.raises(ValueError, match="invalid value"),
+        ):
+            mod.embed("test")
 
-        with pytest.raises(ValueError, match="invalid value"):
-            embed("test")
-
-    @mock.patch("ollama.embed")
-    def test_embed_batch_wrong_dim_raises(self, mock_ollama):
-        mock_ollama.return_value = {"embeddings": [[0.1, 0.2]]}  # Wrong dim
-        from lilbee.embedder import embed_batch
-
-        with pytest.raises(ValueError, match="dimension mismatch"):
-            embed_batch(["test"])
-
-    @mock.patch("ollama.embed")
-    def test_embed_inf_raises(self, mock_ollama):
+    def test_inf_raises(self):
         import math
 
-        mock_ollama.return_value = {"embeddings": [[math.inf] + [0.1] * 767]}
-        from lilbee.embedder import embed
+        mock_model = mock.MagicMock()
+        mock_model.embed.return_value = [np.array([math.inf] + [0.1] * 767)]
+        with (
+            mock.patch.object(mod, "_get_model", return_value=mock_model),
+            pytest.raises(ValueError, match="invalid value"),
+        ):
+            mod.embed("test")
 
-        with pytest.raises(ValueError, match="invalid value"):
-            embed("test")
+    def test_embed_batch_wrong_dim_raises(self):
+        mock_model = mock.MagicMock()
+        mock_model.embed.return_value = [np.array([0.1, 0.2])]
+        with (
+            mock.patch.object(mod, "_get_model", return_value=mock_model),
+            pytest.raises(ValueError, match="dimension mismatch"),
+        ):
+            mod.embed_batch(["test"])
 
 
 class TestValidateModel:
-    def test_model_found(self):
-        mock_model = mock.MagicMock()
-        mock_model.model = "nomic-embed-text:latest"
-        mock_response = mock.MagicMock()
-        mock_response.models = [mock_model]
-        with mock.patch("ollama.list", return_value=mock_response):
-            from lilbee.embedder import validate_model
-
-            validate_model()  # Should not raise
-
-    def test_model_found_by_base_name(self):
-        mock_model = mock.MagicMock()
-        mock_model.model = "nomic-embed-text:latest"
-        mock_response = mock.MagicMock()
-        mock_response.models = [mock_model]
-        with mock.patch("ollama.list", return_value=mock_response):
-            from lilbee.embedder import validate_model
-
-            validate_model()  # "nomic-embed-text" matches base of "nomic-embed-text:latest"
-
-    def test_model_not_found(self):
-        mock_model = mock.MagicMock()
-        mock_model.model = "llama3:latest"
-        mock_response = mock.MagicMock()
-        mock_response.models = [mock_model]
-        with mock.patch("ollama.list", return_value=mock_response):
-            from lilbee.embedder import validate_model
-
-            with pytest.raises(RuntimeError, match="not found"):
-                validate_model()
-
-    def test_connection_error(self):
-        with mock.patch("ollama.list", side_effect=ConnectionError("refused")):
-            from lilbee.embedder import validate_model
-
-            with pytest.raises(RuntimeError, match="Cannot connect"):
-                validate_model()
-
-
-class TestRetry:
-    @mock.patch("time.sleep")  # Don't actually sleep
-    @mock.patch("ollama.embed")
-    def test_retry_on_connection_error(self, mock_ollama, mock_sleep):
-        mock_ollama.side_effect = [
-            ConnectionError("refused"),
-            {"embeddings": [[0.1] * 768]},
-        ]
-        from lilbee.embedder import embed
-
-        vec = embed("test")
-        assert len(vec) == 768
-        assert mock_ollama.call_count == 2
-
-    @mock.patch("time.sleep")
-    @mock.patch("ollama.embed")
-    def test_retry_exhaustion_raises(self, mock_ollama, mock_sleep):
-        mock_ollama.side_effect = ConnectionError("refused")
-        from lilbee.embedder import embed
-
-        with pytest.raises(ConnectionError):
-            embed("test")
-        assert mock_ollama.call_count == 3
-
-    @mock.patch("ollama.embed")
-    def test_no_retry_on_value_error(self, mock_ollama):
-        mock_ollama.side_effect = ValueError("bad input")
-        from lilbee.embedder import embed
-
-        with pytest.raises(ValueError):
-            embed("test")
-        assert mock_ollama.call_count == 1
+    def test_calls_get_model(self):
+        with mock.patch.object(mod, "_get_model") as mock_get:
+            mod.validate_model()
+            mock_get.assert_called_once()

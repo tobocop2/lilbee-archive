@@ -5,6 +5,7 @@ description = "Local RAG for the terminal. Drop files in a folder, ask questions
 requires-python = ">=3.11"
 dependencies = [
     "ollama",
+    "fastembed>=0.6",
     "lancedb",
     "pymupdf4llm",
     "tree-sitter>=0.25",

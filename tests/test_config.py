@@ -119,7 +119,7 @@ class TestMaxDistance:
         env = {k: v for k, v in os.environ.items() if not k.startswith("LILBEE_")}
         with mock.patch.dict(os.environ, env, clear=True):
             cfg = _reload_config()
-            assert cfg.MAX_DISTANCE == 1.5
+            assert cfg.MAX_DISTANCE == 0.7
 
     def test_max_distance_override(self):
         with mock.patch.dict(os.environ, {"LILBEE_MAX_DISTANCE": "1.5"}):
@@ -147,13 +147,13 @@ class TestDefaults:
         with mock.patch.dict(os.environ, env, clear=True):
             cfg = _reload_config()
             assert cfg.CHAT_MODEL == "mistral"
-            assert cfg.EMBEDDING_MODEL == "nomic-embed-text"
+            assert cfg.EMBEDDING_MODEL == "nomic-ai/nomic-embed-text-v1.5"
             assert cfg.EMBEDDING_DIM == 768
             assert cfg.CHUNK_SIZE == 512
             assert cfg.CHUNK_OVERLAP == 100
             assert cfg.MAX_EMBED_CHARS == 2000
             assert cfg.TOP_K == 10
-            assert cfg.MAX_DISTANCE == 1.5
+            assert cfg.MAX_DISTANCE == 0.7
             assert cfg.CHUNKS_TABLE == "chunks"
             assert cfg.SOURCES_TABLE == "_sources"
 

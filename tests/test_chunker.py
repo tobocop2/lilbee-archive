@@ -133,9 +133,15 @@ class Greeter:
         from lilbee.code_chunker import supported_extensions
 
         exts = supported_extensions()
-        assert ".py" in exts
-        assert ".js" in exts
-        assert ".go" in exts
+        expected = {".py", ".js", ".go", ".rs", ".ts", ".rb"}
+        missing = expected - exts
+        assert not missing, f"Missing extensions: {missing}"
+
+    def test_auto_built_map_has_sufficient_extensions(self):
+        """Sanity check: auto-built map should have at least 100 extensions."""
+        from lilbee._languages import _EXT_TO_LANG
+
+        assert len(_EXT_TO_LANG) >= 100, f"Expected >=100 extensions, got {len(_EXT_TO_LANG)}"
 
     def test_no_definitions_falls_back(self):
         """File with no functions/classes falls back to token chunking."""

@@ -1,177 +1,29 @@
 """Language data for tree-sitter code chunking.
 
-tree-sitter-language-pack provides only ``get_parser(language_name)`` — it has no
-extension-to-language mapping or per-language definition-type metadata. These dicts
-must be maintained manually when adding support for new languages.
+Extension-to-language mapping is auto-built at import time by intersecting pygments
+extension data with the languages tree-sitter-language-pack supports. This avoids
+maintaining a manual dict that drifts as tree-sitter-language-pack adds languages.
+
+_DEFINITION_TYPES stays manual — it encodes domain-specific AST knowledge no library provides.
 """
 
-# Extension -> tree-sitter language name.
-# Languages without _DEFINITION_TYPES entries fall back to token-based chunking.
-_EXT_TO_LANG: dict[str, str] = {
-    # Systems / compiled
-    ".c": "c",
-    ".h": "c",
-    ".cpp": "cpp",
-    ".cxx": "cpp",
-    ".cc": "cpp",
-    ".hpp": "cpp",
-    ".hxx": "cpp",
-    ".cs": "csharp",
-    ".d": "d",
-    ".go": "go",
-    ".java": "java",
-    ".kt": "kotlin",
-    ".kts": "kotlin",
-    ".m": "objc",
-    ".rs": "rust",
-    ".scala": "scala",
-    ".swift": "swift",
-    ".zig": "zig",
-    ".v": "v",
-    ".odin": "odin",
-    ".hare": "hare",
-    ".nim": "nim",
-    ".ada": "ada",
-    ".adb": "ada",
-    ".ads": "ada",
-    ".f90": "fortran",
-    ".f95": "fortran",
-    ".f03": "fortran",
-    ".f": "fortran",
-    ".pas": "pascal",
-    ".cobol": "cobol",
-    ".cob": "cobol",
-    ".cbl": "cobol",
-    ".vhdl": "vhdl",
-    ".vhd": "vhdl",
-    ".sv": "verilog",
-    ".svh": "verilog",
-    ".verilog": "verilog",
-    # Scripting / dynamic
-    ".py": "python",
-    ".js": "javascript",
-    ".jsx": "javascript",
-    ".mjs": "javascript",
-    ".cjs": "javascript",
-    ".ts": "typescript",
-    ".tsx": "tsx",
-    ".rb": "ruby",
-    ".php": "php",
-    ".lua": "lua",
-    ".luau": "luau",
-    ".pl": "perl",
-    ".pm": "perl",
-    ".r": "r",
-    ".R": "r",
-    ".jl": "julia",
-    ".ex": "elixir",
-    ".exs": "elixir",
-    ".erl": "erlang",
-    ".hrl": "erlang",
-    ".clj": "clojure",
-    ".cljs": "clojure",
-    ".cljc": "clojure",
-    ".ml": "ocaml",
-    ".mli": "ocaml_interface",
-    ".hs": "haskell",
-    ".fs": "fsharp",
-    ".fsi": "fsharp_signature",
-    ".fsx": "fsharp",
-    ".elm": "elm",
-    ".purs": "purescript",
-    ".rkt": "racket",
-    ".scm": "scheme",
-    ".el": "elisp",
-    ".lisp": "commonlisp",
-    ".cl": "commonlisp",
-    ".fnl": "fennel",
-    ".janet": "janet",
-    ".dart": "dart",
-    ".gd": "gdscript",
-    ".groovy": "groovy",
-    ".tcl": "tcl",
-    ".fish": "fish",
-    ".ps1": "powershell",
-    ".psm1": "powershell",
-    ".psd1": "powershell",
-    ".matlab": "matlab",
-    ".pony": "pony",
-    ".hack": "hack",
-    ".hx": "haxe",
-    ".squirrel": "squirrel",
-    ".nut": "squirrel",
-    ".nix": "nix",
-    ".star": "starlark",
-    ".bzl": "starlark",
-    ".smali": "smali",
-    # Shell
-    ".sh": "bash",
-    ".bash": "bash",
-    ".zsh": "bash",
-    # Web / markup
-    ".css": "css",
-    ".scss": "scss",
-    ".vue": "vue",
-    ".svelte": "svelte",
-    ".astro": "astro",
-    ".twig": "twig",
-    # Functional / blockchain / smart contracts
-    ".sol": "solidity",
-    ".cairo": "cairo",
-    ".fc": "func",
-    ".clar": "clarity",
-    ".rego": "rego",
-    # Data / config
-    ".json": "json",
-    ".jsonnet": "jsonnet",
-    ".libsonnet": "jsonnet",
-    ".yaml": "yaml",
-    ".yml": "yaml",
-    ".toml": "toml",
-    ".ini": "ini",
-    ".cfg": "ini",
-    ".properties": "properties",
-    ".ron": "ron",
-    ".kdl": "kdl",
-    ".hcl": "hcl",
-    ".tf": "terraform",
-    ".tfvars": "terraform",
-    ".graphql": "graphql",
-    ".gql": "graphql",
-    ".proto": "proto",
-    ".thrift": "thrift",
-    ".capnp": "capnp",
-    ".smithy": "smithy",
-    ".prisma": "prisma",
-    ".beancount": "beancount",
-    ".sql": "sql",
-    ".sparql": "sparql",
-    # Build / CI
-    ".cmake": "cmake",
-    ".ninja": "ninja",
-    ".meson": "meson",
-    ".gn": "gn",
-    ".pp": "puppet",
-    ".tex": "latex",
-    ".bib": "bibtex",
-    ".typst": "typst",
-    # HDL / embedded
-    ".cuda": "cuda",
-    ".cu": "cuda",
-    ".glsl": "glsl",
-    ".hlsl": "hlsl",
-    ".wgsl": "wgsl",
-    ".ispc": "ispc",
-    ".s": "asm",
-    ".asm": "asm",
-    ".ll": "llvm",
-    ".lds": "linkerscript",
-    ".wat": "wat",
-    ".wast": "wast",
-    # Docker / infra
-    ".dockerfile": "dockerfile",
-    ".bicep": "bicep",
-}
+from typing import get_args
+
+from pygments.lexers import get_all_lexers
+from tree_sitter_language_pack import SupportedLanguage
+
+# Hack: SupportedLanguage is Literal[...] in 0.13; use get_args to extract.
+# Replace with available_languages() when 2.0 ships.
+_TS_LANGS: frozenset[str] = frozenset(get_args(SupportedLanguage))
+
+_EXT_TO_LANG: dict[str, str] = {}
+for _name, _aliases, _patterns, _ in get_all_lexers():
+    for _alias in _aliases:
+        if _alias in _TS_LANGS:
+            for _pat in _patterns:
+                if _pat.startswith("*."):
+                    _EXT_TO_LANG.setdefault(_pat[1:].lower(), _alias)
+            break
 
 # AST node types that represent extractable definitions, per language.
 _DEFINITION_TYPES: dict[str, frozenset[str]] = {

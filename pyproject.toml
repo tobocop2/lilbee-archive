@@ -23,6 +23,7 @@ dependencies = [
     "kreuzberg",
     "tree-sitter>=0.25",
     "tree-sitter-language-pack>=0.7",
+    "pygments>=2.18",
     "typer",
     "tiktoken",
     "prompt-toolkit>=3.0",

@@ -31,20 +31,51 @@
 Index your documents and code into a local knowledge base, then ask questions grounded in what's actually there. Most tools like this only handle code. lilbee handles PDFs, Word docs, epics — and code too, with AST-aware chunking.
 
 - **Documents and code alike** — add anything from a vehicle manual to an entire codebase
-- **Fully offline** — runs on your machine with [Ollama](https://ollama.com) and LanceDB, no cloud APIs or Docker
+- **Fully offline** — runs on your machine with [Ollama] and LanceDB, no cloud APIs or Docker
 - **Works with AI agents** — MCP server and JSON CLI so agents can search your knowledge base too
 
 Add files (`lilbee add`), then ask questions or search. Once indexed, `search` works without Ollama — agents use their own LLM to reason over the retrieved chunks.
 
 ## Demos
 
+### AI agent
+
+[opencode] + [minimax-m2.5-free][opencode], single prompt, no follow-ups. Better results should be easily possible with iteration or [AGENTS.md](demos/godot-with-lilbee/AGENTS.md) refinements.
+
+> [!CAUTION]
+> minimax-m2.5-free is a cloud model — retrieved chunks are sent to an external API. Use a local model if your documents are private.
+
+```
+make a procedural level generator that places wall and floor tiles
+and scatters collectibles using pathfinding. save it as level_generator.gd
+```
+
+In Godot 4.4, "places tiles" means [`TileMapLayer`][tml] — the engine's tile rendering class. "Using pathfinding" means [`AStarGrid2D`][asg2d] or [`NavigationServer2D`][ns2d] — the engine's built-in pathfinding. Without these, tiles don't render and pathfinding doesn't use the engine.
+
+| | Uses TileMapLayer | Uses engine pathfinding |
+|---|---|---|
+| **With lilbee** | ✓ `TileMapLayer` | ✓ `AStarGrid2D` |
+| **Without lilbee** | ✗ missing | ✗ `AStar2D` (manual, no grid) |
+
+Full demos below — expand to see the recordings, generated code, and agent configs.
+
 <details>
-<summary><b>AI agent using lilbee (opencode)</b></summary>
+<summary><b>With lilbee</b> — all APIs correct (12/12) · <a href="demos/godot-with-lilbee/">source</a></summary>
 
-![opencode + lilbee](demos/opencode.gif)
+![With lilbee MCP](demos/godot-with-lilbee.gif)
 
-An AI coding agent shells out to `lilbee --json search` to ground its answers in your documents.
+Uses `TileMapLayer.set_cell()` for tile rendering and `AStarGrid2D` for grid-based pathfinding — all 12 API calls verified against the Godot 4.4 class reference. Generated from a single prompt with no follow-ups.
 </details>
+
+<details>
+<summary><b>Without lilbee</b> — compiles but doesn't place tiles (failed) · <a href="demos/godot-without-lilbee/">source</a></summary>
+
+![Without lilbee](demos/godot-without-lilbee.gif)
+
+Same model, no source indexed. No [`TileMapLayer`][tml] — level is a `Dictionary` in memory with no rendering. Uses `AStar2D` instead of engine pathfinding. Collectibles tracked in an array but never instantiated.
+</details>
+
+### Standalone
 
 <details>
 <summary><b>Interactive local offline chat</b></summary>
@@ -79,7 +110,7 @@ Structured JSON output for agents and scripts.
 ### Prerequisites
 
 - Python 3.11+
-- [Ollama](https://ollama.com) — the embedding model (`nomic-embed-text`) is auto-pulled on first sync. If no chat model is installed, lilbee prompts you to pick and download one.
+- [Ollama] — the embedding model (`nomic-embed-text`) is auto-pulled on first sync. If no chat model is installed, lilbee prompts you to pick and download one.
 - **Optional** (for image OCR): `brew install tesseract` / `apt install tesseract-ocr`
 
 > **First-time download:** If you're new to Ollama, expect the first run to take a while — models are large files that need to be downloaded once. For example, `qwen3:8b` is ~5 GB and the embedding model `nomic-embed-text` is ~274 MB. After the initial download, models are cached locally and load in seconds. You can check what you have installed with `ollama list`.
@@ -179,7 +210,7 @@ CLI also accepts `--model` / `-m`, `--data-dir` / `-d`, and `--version` / `-V` f
 
 ## How it works
 
-Documents are hashed and synced automatically — new files get ingested, modified files re-ingested, deleted files removed. [Kreuzberg](https://github.com/Goldziher/kreuzberg) handles extraction and chunking across all document formats (PDF, Office, images via OCR, etc.), while [tree-sitter](https://tree-sitter.github.io/tree-sitter/) provides AST-aware chunking for code. Chunks are embedded via [Ollama](https://ollama.com) and stored in [LanceDB](https://lancedb.com). Ollama uses llama.cpp with native Metal support, which is significantly faster than in-process alternatives like ONNX Runtime — CoreML can't accelerate nomic-embed-text's rotary embeddings, making CPU the only ONNX path on macOS (~170ms/chunk vs near-instant with Ollama's GPU inference). Queries embed the question, find the most relevant chunks by vector similarity, and pass them as context to the LLM.
+Documents are hashed and synced automatically — add, change, or delete files and lilbee keeps the index current. [Kreuzberg] extracts text from PDFs, Office docs, images (OCR), etc. [tree-sitter] chunks code by AST. Chunks are embedded via [Ollama] and stored in [LanceDB]. Queries embed the question, find the closest chunks by vector similarity, and pass them as context to the LLM.
 
 ### Data location
 
@@ -194,3 +225,13 @@ Override with `LILBEE_DATA=/path` or `--data-dir`.
 ## License
 
 MIT
+
+[Ollama]: https://ollama.com
+[opencode]: https://opencode.ai
+[Kreuzberg]: https://github.com/Goldziher/kreuzberg
+[tree-sitter]: https://tree-sitter.github.io/tree-sitter/
+[LanceDB]: https://lancedb.com
+[tml]: https://github.com/godotengine/godot/blob/4.4-stable/doc/classes/TileMapLayer.xml
+[asg2d]: https://github.com/godotengine/godot/blob/4.4-stable/doc/classes/AStarGrid2D.xml
+[nr2d]: https://github.com/godotengine/godot/blob/4.4-stable/doc/classes/NavigationRegion2D.xml
+[ns2d]: https://github.com/godotengine/godot/blob/4.4-stable/doc/classes/NavigationServer2D.xml

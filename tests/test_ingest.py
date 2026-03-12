@@ -554,3 +554,77 @@ class TestKreuzbergConfig:
 
         config = kreuzberg_config("text")
         assert config.chunking is not None
+
+
+class TestClassifyStructuredFormats:
+    def test_xml_classified_as_xml(self):
+        from lilbee.ingest import classify_file
+
+        assert classify_file(Path("data.xml")) == "xml"
+
+    def test_json_classified_as_json(self):
+        from lilbee.ingest import classify_file
+
+        assert classify_file(Path("data.json")) == "json"
+
+    def test_jsonl_classified_as_json(self):
+        from lilbee.ingest import classify_file
+
+        assert classify_file(Path("data.jsonl")) == "json"
+
+    def test_yaml_classified_as_text(self):
+        from lilbee.ingest import classify_file
+
+        assert classify_file(Path("config.yaml")) == "text"
+
+    def test_yml_classified_as_text(self):
+        from lilbee.ingest import classify_file
+
+        assert classify_file(Path("config.yml")) == "text"
+
+    def test_csv_still_classified_as_data(self):
+        from lilbee.ingest import classify_file
+
+        assert classify_file(Path("data.csv")) == "data"
+
+
+def _fake_preprocess(path: Path) -> str:
+    return f"Preprocessed content from {path.name}. " * 20
+
+
+@mock.patch("lilbee.embedder.validate_model")
+@mock.patch("lilbee.embedder.embed", side_effect=_fake_embed)
+@mock.patch("lilbee.embedder.embed_batch", side_effect=_fake_embed_batch)
+@mock.patch("kreuzberg.extract_file", new_callable=AsyncMock, return_value=_make_kreuzberg_result())
+class TestSyncStructuredFormats:
+    @mock.patch("lilbee.preprocessors.preprocess_xml", side_effect=_fake_preprocess)
+    async def test_xml_file_ingested(self, _px, _kf, _eb, _e, _vm, isolated_env):
+        (isolated_env / "data.xml").write_text("<root><item>value</item></root>")
+        from lilbee.ingest import sync
+
+        result = await sync()
+        assert "data.xml" in result.added
+
+    @mock.patch("lilbee.preprocessors.preprocess_json", side_effect=_fake_preprocess)
+    async def test_json_file_ingested(self, _pj, _kf, _eb, _e, _vm, isolated_env):
+        (isolated_env / "data.json").write_text('{"key": "value"}')
+        from lilbee.ingest import sync
+
+        result = await sync()
+        assert "data.json" in result.added
+
+    @mock.patch("lilbee.preprocessors.preprocess_json", side_effect=_fake_preprocess)
+    async def test_jsonl_file_ingested(self, _pj, _kf, _eb, _e, _vm, isolated_env):
+        (isolated_env / "data.jsonl").write_text('{"key": "value"}\n{"key2": "value2"}')
+        from lilbee.ingest import sync
+
+        result = await sync()
+        assert "data.jsonl" in result.added
+
+    @mock.patch("lilbee.preprocessors.preprocess_csv", side_effect=_fake_preprocess)
+    async def test_csv_file_ingested_via_preprocessor(self, _pc, _kf, _eb, _e, _vm, isolated_env):
+        (isolated_env / "data.csv").write_text("name,age\nAlice,30\nBob,25")
+        from lilbee.ingest import sync
+
+        result = await sync()
+        assert "data.csv" in result.added

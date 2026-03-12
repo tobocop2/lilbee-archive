@@ -543,6 +543,12 @@ class TestKreuzbergConfig:
         config = kreuzberg_config("pdf")
         assert config.pages is not None
 
+    def test_pdf_no_markdown_output(self):
+        from lilbee.ingest import kreuzberg_config
+
+        config = kreuzberg_config("pdf")
+        assert getattr(config, "output_format", None) != "markdown"
+
     def test_non_pdf_no_page_config(self):
         from lilbee.ingest import kreuzberg_config
 
@@ -554,6 +560,13 @@ class TestKreuzbergConfig:
 
         config = kreuzberg_config("text")
         assert config.chunking is not None
+
+    @pytest.mark.parametrize("content_type", ["text", "docx", "xlsx", "pptx", "epub", "image"])
+    def test_non_pdf_gets_markdown_output(self, content_type):
+        from lilbee.ingest import kreuzberg_config
+
+        config = kreuzberg_config(content_type)
+        assert config.output_format == "markdown"
 
 
 class TestClassifyStructuredFormats:

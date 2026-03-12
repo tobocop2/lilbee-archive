@@ -176,7 +176,7 @@ def kreuzberg_config(content_type: str) -> object:
             chunking=chunking,
             pages=PageConfig(extract_pages=True, insert_page_markers=False),
         )
-    return ExtractionConfig(chunking=chunking)
+    return ExtractionConfig(chunking=chunking, output_format="markdown")
 
 
 async def ingest_document(path: Path, source_name: str, content_type: str) -> list[ChunkRecord]:

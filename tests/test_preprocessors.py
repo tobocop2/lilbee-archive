@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from lilbee.preprocessors import _flatten_tree, preprocess_json, preprocess_xml
+from lilbee.preprocessors import _flatten_tree, preprocess_csv, preprocess_json, preprocess_xml
 
 
 class TestPreprocessXml:
@@ -111,3 +111,43 @@ class TestPreprocessJson:
         f.write_text("{not valid json")
         result = preprocess_json(f)
         assert "{not valid json" in result
+
+
+class TestPreprocessCsv:
+    def test_standard_csv(self, tmp_path: Path) -> None:
+        f = tmp_path / "test.csv"
+        f.write_text("Name,Role,Department\nAlice,Engineer,Platform\nBob,Manager,Sales\n")
+        result = preprocess_csv(f)
+        assert "Name: Alice" in result
+        assert "Role: Engineer" in result
+        assert "Department: Platform" in result
+        assert "Name: Bob" in result
+        assert "Row 1" in result
+        assert "Row 2" in result
+
+    def test_tsv(self, tmp_path: Path) -> None:
+        f = tmp_path / "test.tsv"
+        f.write_text("Name\tAge\nAlice\t30\n")
+        result = preprocess_csv(f)
+        assert "Name: Alice" in result
+        assert "Age: 30" in result
+
+    def test_empty_cells(self, tmp_path: Path) -> None:
+        f = tmp_path / "test.csv"
+        f.write_text("A,B\n1,\n,2\n")
+        result = preprocess_csv(f)
+        assert "A: 1" in result
+        assert "B: 2" in result
+
+    def test_empty_file(self, tmp_path: Path) -> None:
+        f = tmp_path / "empty.csv"
+        f.write_text("")
+        result = preprocess_csv(f)
+        assert result.strip() == ""
+
+    def test_single_column(self, tmp_path: Path) -> None:
+        f = tmp_path / "test.csv"
+        f.write_text("Name\nAlice\nBob\n")
+        result = preprocess_csv(f)
+        assert "Name: Alice" in result
+        assert "Name: Bob" in result

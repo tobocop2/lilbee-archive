@@ -5,6 +5,7 @@ that embeds well for vector search. Each preprocessor takes a Path
 and returns a string of human-readable text.
 """
 
+import csv
 import json
 import logging
 import xml.etree.ElementTree as ET
@@ -70,6 +71,24 @@ def _flatten_tree(data: Any, prefix: str = "", _top: bool = True) -> Iterator[st
             yield from _flatten_tree(val, path, _top=False)
     else:
         yield f"{prefix}: {data}"
+
+
+def preprocess_csv(path: Path) -> str:
+    """Convert CSV/TSV to readable 'Header: Value' per row."""
+    delimiter = "\t" if path.suffix == ".tsv" else ","
+    text = path.read_text(encoding="utf-8", errors="replace")
+    if not text.strip():
+        return ""
+    reader = csv.DictReader(text.splitlines(), delimiter=delimiter)
+    sections: list[str] = []
+    for i, row in enumerate(reader, 1):
+        lines = [f"Row {i}:"]
+        for header, value in row.items():
+            if header and value and value.strip():
+                lines.append(f"  {header}: {value}")
+        if len(lines) > 1:
+            sections.append("\n".join(lines))
+    return "\n\n".join(sections)
 
 
 def preprocess_json(path: Path) -> str:

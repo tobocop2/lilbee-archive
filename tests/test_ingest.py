@@ -641,3 +641,22 @@ class TestSyncStructuredFormats:
 
         result = await sync()
         assert "data.csv" in result.added
+
+
+class TestIngestStructuredEdgeCases:
+    async def test_empty_preprocessed_text_returns_empty(self, isolated_env):
+        from lilbee.ingest import _PREPROCESSORS, ingest_structured
+
+        with mock.patch.dict(_PREPROCESSORS, {"xml": lambda _: "   "}):
+            result = await ingest_structured(isolated_env / "e.xml", "e.xml", "xml")
+        assert result == []
+
+    async def test_no_chunks_returns_empty(self, isolated_env):
+        from lilbee.ingest import _PREPROCESSORS, ingest_structured
+
+        with (
+            mock.patch.dict(_PREPROCESSORS, {"xml": lambda _: "some content here"}),
+            mock.patch("lilbee.ingest.chunk_text", return_value=[]),
+        ):
+            result = await ingest_structured(isolated_env / "s.xml", "s.xml", "xml")
+        assert result == []

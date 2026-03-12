@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from lilbee.preprocessors import preprocess_xml
+from lilbee.preprocessors import _flatten_tree, preprocess_json, preprocess_xml
 
 
 class TestPreprocessXml:
@@ -56,3 +56,58 @@ class TestPreprocessXml:
         result = preprocess_xml(xml)
         assert "First paragraph" in result
         assert "Second paragraph" in result
+
+
+class TestFlattenTree:
+    def test_nested_dict(self) -> None:
+        data = {"a": {"b": {"c": "deep"}}}
+        lines = list(_flatten_tree(data))
+        assert "a.b.c: deep" in lines
+
+    def test_list_indexing(self) -> None:
+        data = {"items": [{"name": "first"}, {"name": "second"}]}
+        lines = list(_flatten_tree(data))
+        assert "items[0].name: first" in lines
+        assert "items[1].name: second" in lines
+
+    def test_scalar_types(self) -> None:
+        data = {"s": "text", "i": 42, "f": 3.14, "b": True, "n": None}
+        lines = list(_flatten_tree(data))
+        assert "s: text" in lines
+        assert "i: 42" in lines
+        assert "f: 3.14" in lines
+        assert "b: True" in lines
+        assert "n: None" in lines
+
+    def test_top_level_separation(self) -> None:
+        data = {"first": "a", "second": "b"}
+        lines = list(_flatten_tree(data))
+        assert "" in lines
+
+
+class TestPreprocessJson:
+    def test_nested_object(self, tmp_path: Path) -> None:
+        f = tmp_path / "test.json"
+        f.write_text('{"name": "AStarGrid2D", "methods": [{"name": "get_path"}]}')
+        result = preprocess_json(f)
+        assert "name: AStarGrid2D" in result
+        assert "methods[0].name: get_path" in result
+
+    def test_jsonl(self, tmp_path: Path) -> None:
+        f = tmp_path / "test.jsonl"
+        f.write_text('{"a": 1}\n{"b": 2}\n')
+        result = preprocess_json(f)
+        assert "a: 1" in result
+        assert "b: 2" in result
+
+    def test_empty_json(self, tmp_path: Path) -> None:
+        f = tmp_path / "empty.json"
+        f.write_text("{}")
+        result = preprocess_json(f)
+        assert result.strip() == ""
+
+    def test_malformed_json(self, tmp_path: Path) -> None:
+        f = tmp_path / "bad.json"
+        f.write_text("{not valid json")
+        result = preprocess_json(f)
+        assert "{not valid json" in result

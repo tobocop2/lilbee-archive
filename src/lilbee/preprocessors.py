@@ -5,9 +5,12 @@ that embeds well for vector search. Each preprocessor takes a Path
 and returns a string of human-readable text.
 """
 
+import json
 import logging
 import xml.etree.ElementTree as ET
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -51,3 +54,45 @@ def _walk_element(elem: ET.Element, depth: int) -> str:
         parts.append(f"{indent}{tail}\n")
 
     return "".join(parts)
+
+
+def _flatten_tree(data: Any, prefix: str = "", _top: bool = True) -> Iterator[str]:
+    """Walk nested dicts/lists, yielding 'dotted.path: value' lines."""
+    if isinstance(data, dict):
+        for i, (key, val) in enumerate(data.items()):
+            path = f"{prefix}.{key}" if prefix else key
+            if _top and i > 0:
+                yield ""
+            yield from _flatten_tree(val, path, _top=False)
+    elif isinstance(data, list):
+        for i, val in enumerate(data):
+            path = f"{prefix}[{i}]"
+            yield from _flatten_tree(val, path, _top=False)
+    else:
+        yield f"{prefix}: {data}"
+
+
+def preprocess_json(path: Path) -> str:
+    """Convert JSON/JSONL to readable 'dotted.path: value' lines."""
+    text = path.read_text(encoding="utf-8", errors="replace")
+
+    if path.suffix == ".jsonl":
+        sections: list[str] = []
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                sections.append(line)
+                continue
+            sections.append("\n".join(_flatten_tree(obj)))
+        return "\n\n".join(sections)
+
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        log.warning("Malformed JSON, falling back to raw text: %s", path)
+        return text
+    return "\n".join(_flatten_tree(data))

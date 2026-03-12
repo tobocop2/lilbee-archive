@@ -721,9 +721,9 @@ class TestVisionFallback:
         f = isolated_env / "scanned.pdf"
         f.write_bytes(b"fake pdf")
 
-        vision_text = "Vision extracted text. " * 10
+        vision_pages = [(1, "Vision extracted text. " * 10)]
         with mock.patch(
-            "lilbee.vision.extract_pdf_vision", return_value=vision_text
+            "lilbee.vision.extract_pdf_vision", return_value=vision_pages
         ) as mock_vision:
             from lilbee.ingest import ingest_document
 
@@ -731,6 +731,7 @@ class TestVisionFallback:
         mock_vision.assert_called_once_with(f, "test-vision")
         assert len(result) > 0
         assert result[0]["content_type"] == "pdf"
+        assert result[0]["page_start"] == 1
 
     @mock.patch("lilbee.embedder.embed_batch", side_effect=_fake_embed_batch)
     @mock.patch("kreuzberg.extract_file", new_callable=AsyncMock, return_value=_make_empty_result())
@@ -771,7 +772,7 @@ class TestVisionFallback:
         f = isolated_env / "blank.pdf"
         f.write_bytes(b"fake pdf")
 
-        with mock.patch("lilbee.vision.extract_pdf_vision", return_value="   "):
+        with mock.patch("lilbee.vision.extract_pdf_vision", return_value=[]):
             from lilbee.ingest import ingest_document
 
             result = await ingest_document(f, "blank.pdf", "pdf")
@@ -804,7 +805,7 @@ class TestVisionFallback:
         f.write_bytes(b"fake pdf")
 
         with (
-            mock.patch("lilbee.vision.extract_pdf_vision", return_value="Some text"),
+            mock.patch("lilbee.vision.extract_pdf_vision", return_value=[(1, "Some text")]),
             mock.patch("lilbee.ingest.chunk_text", return_value=[]),
         ):
             from lilbee.ingest import ingest_document

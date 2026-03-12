@@ -55,15 +55,19 @@ def extract_page_text(png_bytes: bytes, model: str) -> str:
         return ""
 
 
-def extract_pdf_vision(path: Path, model: str) -> str:
-    """Extract text from a PDF using vision model OCR."""
+def extract_pdf_vision(path: Path, model: str) -> list[tuple[int, str]]:
+    """Extract text from a PDF using vision model OCR.
+
+    Returns a list of (1-based page number, text) tuples for pages that
+    produced non-empty text.
+    """
     pages = rasterize_pdf(path)
     if not pages:
-        return ""
-    texts: list[str] = []
+        return []
+    result: list[tuple[int, str]] = []
     for i, png in enumerate(pages):
         log.debug("Vision OCR page %d/%d with %s", i + 1, len(pages), model)
         text = extract_page_text(png, model)
         if text.strip():
-            texts.append(text)
-    return "\n\n".join(texts)
+            result.append((i + 1, text))
+    return result

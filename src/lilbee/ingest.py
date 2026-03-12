@@ -209,27 +209,32 @@ async def ingest_document(path: Path, source_name: str, content_type: str) -> li
         from lilbee.vision import extract_pdf_vision
 
         log.info("PDF text extraction empty, falling back to vision OCR: %s", source_name)
-        vision_text = await asyncio.to_thread(extract_pdf_vision, path, cfg.vision_model)
-        if vision_text.strip():
-            texts = chunk_text(vision_text)
-            if not texts:
-                return []
-            vectors = await asyncio.to_thread(embedder.embed_batch, texts)
-            return [
-                ChunkRecord(
-                    source=source_name,
-                    content_type=content_type,
-                    page_start=0,
-                    page_end=0,
-                    line_start=0,
-                    line_end=0,
-                    chunk=text,
-                    chunk_index=i,
-                    vector=vec,
-                )
-                for i, (text, vec) in enumerate(zip(texts, vectors, strict=True))
-            ]
-        return []
+        page_texts = await asyncio.to_thread(extract_pdf_vision, path, cfg.vision_model)
+        if not page_texts:
+            return []
+        # Chunk each page separately to preserve page numbers
+        all_chunks: list[tuple[int, str]] = []  # (page_num, chunk_text)
+        for page_num, text in page_texts:
+            for chunk in chunk_text(text):
+                all_chunks.append((page_num, chunk))
+        if not all_chunks:
+            return []
+        texts = [c for _, c in all_chunks]
+        vectors = await asyncio.to_thread(embedder.embed_batch, texts)
+        return [
+            ChunkRecord(
+                source=source_name,
+                content_type=content_type,
+                page_start=page_num,
+                page_end=page_num,
+                line_start=0,
+                line_end=0,
+                chunk=text,
+                chunk_index=i,
+                vector=vec,
+            )
+            for i, ((page_num, text), vec) in enumerate(zip(all_chunks, vectors, strict=True))
+        ]
 
     if not result.chunks:
         return []

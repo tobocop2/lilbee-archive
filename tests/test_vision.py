@@ -132,11 +132,11 @@ class TestExtractPageText:
 class TestExtractPdfVision:
     @mock.patch("lilbee.vision.extract_page_text", return_value="Page text here.")
     @mock.patch("lilbee.vision.rasterize_pdf", return_value=[b"png1", b"png2"])
-    def test_concatenates_pages(self, _rast: mock.MagicMock, _ext: mock.MagicMock) -> None:
+    def test_returns_page_tagged_tuples(self, _rast: mock.MagicMock, _ext: mock.MagicMock) -> None:
         from lilbee.vision import extract_pdf_vision
 
         result = extract_pdf_vision(Path("test.pdf"), "test-model")
-        assert result == "Page text here.\n\nPage text here."
+        assert result == [(1, "Page text here."), (2, "Page text here.")]
         assert _ext.call_count == 2
 
     @mock.patch("lilbee.vision.rasterize_pdf", return_value=[])
@@ -144,7 +144,7 @@ class TestExtractPdfVision:
         from lilbee.vision import extract_pdf_vision
 
         result = extract_pdf_vision(Path("test.pdf"), "test-model")
-        assert result == ""
+        assert result == []
 
     @mock.patch("lilbee.vision.extract_page_text", return_value="   ")
     @mock.patch("lilbee.vision.rasterize_pdf", return_value=[b"png1"])
@@ -154,7 +154,7 @@ class TestExtractPdfVision:
         from lilbee.vision import extract_pdf_vision
 
         result = extract_pdf_vision(Path("test.pdf"), "test-model")
-        assert result == ""
+        assert result == []
 
     @mock.patch("lilbee.vision.extract_page_text", side_effect=["Hello", "  ", "World"])
     @mock.patch("lilbee.vision.rasterize_pdf", return_value=[b"p1", b"p2", b"p3"])
@@ -162,4 +162,4 @@ class TestExtractPdfVision:
         from lilbee.vision import extract_pdf_vision
 
         result = extract_pdf_vision(Path("test.pdf"), "model")
-        assert result == "Hello\n\nWorld"
+        assert result == [(1, "Hello"), (3, "World")]

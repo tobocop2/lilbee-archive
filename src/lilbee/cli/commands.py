@@ -42,11 +42,13 @@ def _ensure_vision_model() -> None:
     )
 
     try:
-        installed = set(list_ollama_models())
+        raw_installed = list_ollama_models()
     except Exception:
         console.print("[yellow]Warning: Cannot connect to Ollama. Vision OCR disabled.[/yellow]")
         cfg.vision_model = ""
         return
+
+    installed = set(raw_installed)
 
     # Already configured (via env var or config.toml)
     if cfg.vision_model:

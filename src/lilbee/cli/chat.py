@@ -247,14 +247,23 @@ def dispatch_slash(raw_input: str, con: Console) -> bool:
 
 
 def list_ollama_models() -> list[str]:
-    """Return installed Ollama chat model names, excluding embedding models."""
+    """Return installed Ollama model names, excluding embedding models.
+
+    Names are normalized by stripping the ``:latest`` tag that Ollama appends
+    by default, so callers can compare against catalog/config names directly.
+    """
     try:
         import ollama
 
         embed_base = cfg.embedding_model.split(":")[0]
-        return [
-            m.model for m in ollama.list().models if m.model and m.model.split(":")[0] != embed_base
-        ]
+        names: list[str] = []
+        for m in ollama.list().models:
+            if not m.model or m.model.split(":")[0] == embed_base:
+                continue
+            # Ollama returns "model:latest" — strip the implicit tag
+            name = m.model.removesuffix(":latest")
+            names.append(name)
+        return names
     except Exception:
         return []
 

@@ -1031,21 +1031,21 @@ class TestLilbeeCompleter:
 
     @mock.patch(
         "lilbee.cli.chat.list_ollama_models",
-        return_value=["llama3:latest", "mistral:latest", "phi3:latest"],
+        return_value=["llama3", "mistral", "phi3"],
     )
     def test_model_prefix_completes(self, _models):
         results = self._complete("/model ")
-        assert "llama3:latest" in results
-        assert "mistral:latest" in results
-        assert "phi3:latest" in results
+        assert "llama3" in results
+        assert "mistral" in results
+        assert "phi3" in results
 
     @mock.patch(
         "lilbee.cli.chat.list_ollama_models",
-        return_value=["llama3:latest", "mistral:latest"],
+        return_value=["llama3", "mistral"],
     )
     def test_model_prefix_filters(self, _models):
         results = self._complete("/model ll")
-        assert results == ["llama3:latest"]
+        assert results == ["llama3"]
 
     @mock.patch("lilbee.cli.chat.list_ollama_models", return_value=[])
     def test_model_prefix_no_models(self, _models):
@@ -1080,7 +1080,7 @@ class TestListOllamaModels:
         mock_response = mock.MagicMock()
         mock_response.models = [mock_model]
         with mock.patch("ollama.list", return_value=mock_response):
-            assert list_ollama_models() == ["llama3:latest"]
+            assert list_ollama_models() == ["llama3"]
 
     def test_returns_empty_on_error(self):
         with mock.patch("ollama.list", side_effect=Exception("not running")):
@@ -1095,8 +1095,21 @@ class TestListOllamaModels:
         mock_response.models = [chat, embed]
         with mock.patch("ollama.list", return_value=mock_response):
             result = list_ollama_models()
-            assert result == ["llama3:latest"]
-            assert "nomic-embed-text:latest" not in result
+            assert result == ["llama3"]
+            assert "nomic-embed-text" not in result
+
+    def test_strips_latest_suffix(self):
+        m1 = mock.MagicMock()
+        m1.model = "llama3:latest"
+        m2 = mock.MagicMock()
+        m2.model = "qwen3:8b"  # explicit tag preserved
+        mock_response = mock.MagicMock()
+        mock_response.models = [m1, m2]
+        with mock.patch("ollama.list", return_value=mock_response):
+            result = list_ollama_models()
+            assert "llama3" in result
+            assert "qwen3:8b" in result
+            assert "llama3:latest" not in result
 
 
 class TestQuitChat:

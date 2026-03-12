@@ -105,14 +105,16 @@ class TestPersistedChatModel:
     def test_env_var_overrides_config_toml(self):
         # When LILBEE_CHAT_MODEL is set, settings.get must NOT be called for chat_model.
         # We also set LILBEE_VISION_MODEL to avoid any settings.get call in this test.
-        with mock.patch.dict(
-            os.environ,
-            {"LILBEE_CHAT_MODEL": "env-model", "LILBEE_VISION_MODEL": "noop"},
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"LILBEE_CHAT_MODEL": "env-model", "LILBEE_VISION_MODEL": "noop"},
+            ),
+            mock.patch("lilbee.settings.get") as mock_get,
         ):
-            with mock.patch("lilbee.settings.get") as mock_get:
-                c = Config.from_env()
-                mock_get.assert_not_called()
-                assert c.chat_model == "env-model"
+            c = Config.from_env()
+            mock_get.assert_not_called()
+            assert c.chat_model == "env-model"
 
     def test_no_persisted_value_keeps_default(self):
         env = {k: v for k, v in os.environ.items() if k != "LILBEE_CHAT_MODEL"}

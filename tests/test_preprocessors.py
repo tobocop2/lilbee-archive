@@ -2,8 +2,6 @@
 
 from pathlib import Path
 
-import pytest
-
 from lilbee.preprocessors import _flatten_tree, preprocess_csv, preprocess_json, preprocess_xml
 
 
@@ -56,6 +54,13 @@ class TestPreprocessXml:
         result = preprocess_xml(xml)
         assert "First paragraph" in result
         assert "Second paragraph" in result
+
+    def test_tail_text(self, tmp_path: Path) -> None:
+        xml = tmp_path / "tail.xml"
+        xml.write_text("<doc><b>bold</b> and normal text</doc>")
+        result = preprocess_xml(xml)
+        assert "bold" in result
+        assert "normal text" in result
 
 
 class TestFlattenTree:
@@ -111,6 +116,21 @@ class TestPreprocessJson:
         f.write_text("{not valid json")
         result = preprocess_json(f)
         assert "{not valid json" in result
+
+    def test_jsonl_empty_lines_skipped(self, tmp_path: Path) -> None:
+        f = tmp_path / "test.jsonl"
+        f.write_text('{"a": 1}\n\n{"b": 2}\n')
+        result = preprocess_json(f)
+        assert "a: 1" in result
+        assert "b: 2" in result
+
+    def test_jsonl_malformed_line(self, tmp_path: Path) -> None:
+        f = tmp_path / "test.jsonl"
+        f.write_text('{"a": 1}\nnot json\n{"b": 2}\n')
+        result = preprocess_json(f)
+        assert "a: 1" in result
+        assert "not json" in result
+        assert "b: 2" in result
 
 
 class TestPreprocessCsv:

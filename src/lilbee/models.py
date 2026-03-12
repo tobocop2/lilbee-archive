@@ -157,12 +157,15 @@ def display_model_picker(ram_gb: float, free_disk_gb: float) -> ModelInfo:
 
 
 def pick_default_vision_model(ram_gb: float) -> ModelInfo:
-    """Choose the largest vision catalog model that fits in *ram_gb*."""
-    best = VISION_CATALOG[0]
+    """Choose the best-quality vision model that fits in *ram_gb*.
+
+    The catalog is ordered best-quality-first, so we return the first
+    model whose RAM requirement is satisfied.
+    """
     for model in VISION_CATALOG:
         if model.min_ram_gb <= ram_gb:
-            best = model
-    return best
+            return model
+    return VISION_CATALOG[0]
 
 
 def display_vision_picker(ram_gb: float, free_disk_gb: float) -> ModelInfo:

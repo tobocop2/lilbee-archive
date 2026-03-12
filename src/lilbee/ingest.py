@@ -7,7 +7,7 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import Any, TypedDict, cast
 
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
@@ -20,8 +20,19 @@ from lilbee.preprocessors import preprocess_csv, preprocess_json, preprocess_xml
 
 log = logging.getLogger(__name__)
 
+# Minimum total chars for kreuzberg text to be considered meaningful
+_MIN_MEANINGFUL_CHARS = 50
+
 # Approximate chars-per-token ratio (kreuzberg uses chars, not tokens)
 _CHARS_PER_TOKEN = 4
+
+
+def _has_meaningful_text(result: Any) -> bool:
+    """Check if kreuzberg extraction produced meaningful text."""
+    if hasattr(result, "chunks") and result.chunks:
+        total = sum(len(c.content.strip()) for c in result.chunks)
+        return total > _MIN_MEANINGFUL_CHARS
+    return False
 
 
 class ChunkRecord(TypedDict):
@@ -185,6 +196,40 @@ async def ingest_document(path: Path, source_name: str, content_type: str) -> li
 
     config = kreuzberg_config(content_type)
     result = await extract_file(str(path), config=config)
+
+    # Vision fallback for scanned PDFs
+    if content_type == "pdf" and not _has_meaningful_text(result):
+        if not cfg.vision_model:
+            log.warning(
+                "Skipped %s: no extractable text (scanned PDF?). "
+                "Set a vision model with /vision or LILBEE_VISION_MODEL for OCR.",
+                source_name,
+            )
+            return []
+        from lilbee.vision import extract_pdf_vision
+
+        log.info("PDF text extraction empty, falling back to vision OCR: %s", source_name)
+        vision_text = await asyncio.to_thread(extract_pdf_vision, path, cfg.vision_model)
+        if vision_text.strip():
+            texts = chunk_text(vision_text)
+            if not texts:
+                return []
+            vectors = await asyncio.to_thread(embedder.embed_batch, texts)
+            return [
+                ChunkRecord(
+                    source=source_name,
+                    content_type=content_type,
+                    page_start=0,
+                    page_end=0,
+                    line_start=0,
+                    line_end=0,
+                    chunk=text,
+                    chunk_index=i,
+                    vector=vec,
+                )
+                for i, (text, vec) in enumerate(zip(texts, vectors, strict=True))
+            ]
+        return []
 
     if not result.chunks:
         return []

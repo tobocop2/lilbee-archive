@@ -643,6 +643,137 @@ class TestSyncStructuredFormats:
         assert "data.csv" in result.added
 
 
+class TestHasMeaningfulText:
+    def test_empty_chunks_returns_false(self):
+        from lilbee.ingest import _has_meaningful_text
+
+        result = mock.MagicMock(chunks=[])
+        assert _has_meaningful_text(result) is False
+
+    def test_no_chunks_attr_returns_false(self):
+        from lilbee.ingest import _has_meaningful_text
+
+        result = object()
+        assert _has_meaningful_text(result) is False
+
+    def test_short_text_returns_false(self):
+        from lilbee.ingest import _has_meaningful_text
+
+        chunk = mock.MagicMock()
+        chunk.content = "short"
+        result = mock.MagicMock(chunks=[chunk])
+        assert _has_meaningful_text(result) is False
+
+    def test_meaningful_text_returns_true(self):
+        from lilbee.ingest import _has_meaningful_text
+
+        chunk = mock.MagicMock()
+        chunk.content = "A" * 100
+        result = mock.MagicMock(chunks=[chunk])
+        assert _has_meaningful_text(result) is True
+
+
+class TestVisionFallback:
+    @mock.patch("lilbee.embedder.embed_batch", side_effect=_fake_embed_batch)
+    @mock.patch("kreuzberg.extract_file", new_callable=AsyncMock, return_value=_make_empty_result())
+    async def test_vision_fallback_called_for_empty_pdf(self, _kf, _eb, isolated_env):
+        """When PDF extraction is empty and vision_model is set, fall back to vision."""
+        cfg.vision_model = "test-vision"
+        f = isolated_env / "scanned.pdf"
+        f.write_bytes(b"fake pdf")
+
+        vision_text = "Vision extracted text. " * 10
+        with mock.patch(
+            "lilbee.vision.extract_pdf_vision", return_value=vision_text
+        ) as mock_vision:
+            from lilbee.ingest import ingest_document
+
+            result = await ingest_document(f, "scanned.pdf", "pdf")
+        mock_vision.assert_called_once_with(f, "test-vision")
+        assert len(result) > 0
+        assert result[0]["content_type"] == "pdf"
+
+    @mock.patch("lilbee.embedder.embed_batch", side_effect=_fake_embed_batch)
+    @mock.patch("kreuzberg.extract_file", new_callable=AsyncMock, return_value=_make_empty_result())
+    async def test_vision_fallback_not_called_without_model(self, _kf, _eb, isolated_env):
+        """When vision_model is empty, no fallback occurs."""
+        cfg.vision_model = ""
+        f = isolated_env / "scanned.pdf"
+        f.write_bytes(b"fake pdf")
+
+        with mock.patch("lilbee.vision.extract_pdf_vision") as mock_vision:
+            from lilbee.ingest import ingest_document
+
+            result = await ingest_document(f, "scanned.pdf", "pdf")
+        mock_vision.assert_not_called()
+        assert result == []
+
+    @mock.patch("lilbee.embedder.embed_batch", side_effect=_fake_embed_batch)
+    @mock.patch("kreuzberg.extract_file", new_callable=AsyncMock)
+    async def test_vision_fallback_not_called_for_non_pdf(self, mock_kf, _eb, isolated_env):
+        """Vision fallback only triggers for PDF content type."""
+        mock_kf.return_value = _make_empty_result()
+        cfg.vision_model = "test-vision"
+        f = isolated_env / "doc.txt"
+        f.write_text("")
+
+        with mock.patch("lilbee.vision.extract_pdf_vision") as mock_vision:
+            from lilbee.ingest import ingest_document
+
+            result = await ingest_document(f, "doc.txt", "text")
+        mock_vision.assert_not_called()
+        assert result == []
+
+    @mock.patch("lilbee.embedder.embed_batch", side_effect=_fake_embed_batch)
+    @mock.patch("kreuzberg.extract_file", new_callable=AsyncMock, return_value=_make_empty_result())
+    async def test_vision_fallback_empty_vision_text_returns_empty(self, _kf, _eb, isolated_env):
+        """When vision also returns empty text, return empty list."""
+        cfg.vision_model = "test-vision"
+        f = isolated_env / "blank.pdf"
+        f.write_bytes(b"fake pdf")
+
+        with mock.patch("lilbee.vision.extract_pdf_vision", return_value="   "):
+            from lilbee.ingest import ingest_document
+
+            result = await ingest_document(f, "blank.pdf", "pdf")
+        assert result == []
+
+    @mock.patch("lilbee.embedder.embed_batch", side_effect=_fake_embed_batch)
+    @mock.patch("kreuzberg.extract_file", new_callable=AsyncMock)
+    async def test_no_vision_fallback_when_text_meaningful(self, mock_kf, _eb, isolated_env):
+        """When kreuzberg produces meaningful text, no vision fallback."""
+        mock_kf.return_value = _make_kreuzberg_result(
+            text="Meaningful PDF content. " * 20, num_chunks=1, has_pages=True
+        )
+        cfg.vision_model = "test-vision"
+        f = isolated_env / "good.pdf"
+        f.write_bytes(b"fake pdf")
+
+        with mock.patch("lilbee.vision.extract_pdf_vision") as mock_vision:
+            from lilbee.ingest import ingest_document
+
+            result = await ingest_document(f, "good.pdf", "pdf")
+        mock_vision.assert_not_called()
+        assert len(result) > 0
+
+    @mock.patch("lilbee.embedder.embed_batch", side_effect=_fake_embed_batch)
+    @mock.patch("kreuzberg.extract_file", new_callable=AsyncMock, return_value=_make_empty_result())
+    async def test_vision_fallback_no_chunks_returns_empty(self, _kf, _eb, isolated_env):
+        """When vision text produces no chunks, return empty list."""
+        cfg.vision_model = "test-vision"
+        f = isolated_env / "nochunks.pdf"
+        f.write_bytes(b"fake pdf")
+
+        with (
+            mock.patch("lilbee.vision.extract_pdf_vision", return_value="Some text"),
+            mock.patch("lilbee.ingest.chunk_text", return_value=[]),
+        ):
+            from lilbee.ingest import ingest_document
+
+            result = await ingest_document(f, "nochunks.pdf", "pdf")
+        assert result == []
+
+
 class TestIngestStructuredEdgeCases:
     async def test_empty_preprocessed_text_returns_empty(self, isolated_env):
         from lilbee.ingest import _PREPROCESSORS, ingest_structured

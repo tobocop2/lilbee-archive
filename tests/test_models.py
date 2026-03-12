@@ -323,9 +323,9 @@ class TestVisionCatalog:
         for m in VISION_CATALOG:
             assert isinstance(m, ModelInfo)
 
-    def test_catalog_is_sorted_by_size(self) -> None:
-        sizes = [m.size_gb for m in VISION_CATALOG]
-        assert sizes == sorted(sizes)
+    def test_catalog_is_ordered_by_quality(self) -> None:
+        """First entry should be the best quality (LightOnOCR-2)."""
+        assert "LightOnOCR" in VISION_CATALOG[0].name
 
     def test_frozen(self) -> None:
         with pytest.raises(AttributeError):

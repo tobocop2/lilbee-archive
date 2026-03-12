@@ -53,9 +53,9 @@ VISION_CATALOG: tuple[ModelInfo, ...] = (
     ModelInfo(
         "maternion/LightOnOCR-2:latest", 1.5, 4, "Best quality/speed — clean markdown OCR output"
     ),
-    ModelInfo("glm-ocr:latest", 2.2, 4, "Good accuracy — #1 on OmniDocBench benchmarks"),
-    ModelInfo("minicpm-v:latest", 5.5, 8, "General vision model — decent OCR, slower"),
     ModelInfo("deepseek-ocr:latest", 6.7, 8, "Excellent accuracy — plain text, no markdown"),
+    ModelInfo("minicpm-v:latest", 5.5, 8, "Good — some transcription errors, slower"),
+    ModelInfo("glm-ocr:latest", 2.2, 4, "Good accuracy — surprisingly slow despite small size"),
 )
 
 

@@ -45,7 +45,9 @@ def apply_overrides(
         cfg.lancedb_dir = data_dir / "data" / "lancedb"
 
     if model is not None:
-        cfg.chat_model = model
+        from lilbee.models import ensure_tag
+
+        cfg.chat_model = ensure_tag(model)
 
 
 @app.callback()

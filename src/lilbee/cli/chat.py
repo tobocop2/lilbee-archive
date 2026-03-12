@@ -104,6 +104,9 @@ def handle_slash_model(args: str, con: Console) -> None:
             validate_disk_and_pull(model_info, free_disk_gb)
             con.print(f"Switched to model [bold]{model_info.name}[/bold] (saved)")
         return
+    from lilbee.models import ensure_tag
+
+    name = ensure_tag(name)
     available = list_ollama_models()
     if available and name not in available:
         con.print(f"[red]Unknown model:[/red] {name}")
@@ -118,6 +121,7 @@ def handle_slash_vision(args: str, con: Console) -> None:
     from lilbee.models import (
         VISION_CATALOG,
         display_vision_picker,
+        ensure_tag,
         get_free_disk_gb,
         get_system_ram_gb,
         pull_with_progress,
@@ -134,6 +138,7 @@ def handle_slash_vision(args: str, con: Console) -> None:
 
     # /vision <name> — switch directly
     if name:
+        name = ensure_tag(name)
         available = list_ollama_models()
         if available and name not in available:
             con.print(f"[red]Unknown model:[/red] {name}")
@@ -247,23 +252,14 @@ def dispatch_slash(raw_input: str, con: Console) -> bool:
 
 
 def list_ollama_models() -> list[str]:
-    """Return installed Ollama model names, excluding embedding models.
-
-    Names are normalized by stripping the ``:latest`` tag that Ollama appends
-    by default, so callers can compare against catalog/config names directly.
-    """
+    """Return installed Ollama model names with explicit tags, excluding embedding models."""
     try:
         import ollama
 
         embed_base = cfg.embedding_model.split(":")[0]
-        names: list[str] = []
-        for m in ollama.list().models:
-            if not m.model or m.model.split(":")[0] == embed_base:
-                continue
-            # Ollama returns "model:latest" — strip the implicit tag
-            name = m.model.removesuffix(":latest")
-            names.append(name)
-        return names
+        return [
+            m.model for m in ollama.list().models if m.model and m.model.split(":")[0] != embed_base
+        ]
     except Exception:
         return []
 

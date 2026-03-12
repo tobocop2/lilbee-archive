@@ -35,6 +35,7 @@ def _ensure_vision_model() -> None:
     from lilbee.models import (
         VISION_CATALOG,
         display_vision_picker,
+        ensure_tag,
         get_free_disk_gb,
         get_system_ram_gb,
         pick_default_vision_model,
@@ -52,14 +53,17 @@ def _ensure_vision_model() -> None:
 
     # Already configured (via env var or config.toml)
     if cfg.vision_model:
-        if cfg.vision_model in installed:
+        tagged = ensure_tag(cfg.vision_model)
+        if tagged in installed:
+            cfg.vision_model = tagged
             return
         # Not installed — try to pull
-        console.print(f"Vision model '{cfg.vision_model}' not installed. Pulling...")
+        cfg.vision_model = tagged
+        console.print(f"Vision model '{tagged}' not installed. Pulling...")
         try:
-            pull_with_progress(cfg.vision_model)
+            pull_with_progress(tagged)
         except Exception as exc:
-            console.print(f"[yellow]Warning: Failed to pull '{cfg.vision_model}': {exc}[/yellow]")
+            console.print(f"[yellow]Warning: Failed to pull '{tagged}': {exc}[/yellow]")
             console.print("[yellow]Continuing without vision OCR.[/yellow]")
             cfg.vision_model = ""
         return

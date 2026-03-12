@@ -331,6 +331,10 @@ class TestVisionCatalog:
         with pytest.raises(AttributeError):
             VISION_CATALOG[0].name = "nope"  # type: ignore[misc]
 
+    def test_all_names_have_explicit_tags(self) -> None:
+        for m in VISION_CATALOG:
+            assert ":" in m.name, f"Vision catalog entry '{m.name}' missing explicit tag"
+
 
 class TestPickDefaultVisionModel:
     def test_4gb_ram_picks_smallest(self) -> None:
@@ -379,3 +383,23 @@ class TestDisplayVisionPicker:
         models.display_vision_picker(8.0, 50.0)
         captured = capsys.readouterr()
         assert models.OLLAMA_MODELS_URL in captured.err
+
+
+class TestEnsureTag:
+    def test_appends_latest_when_no_tag(self) -> None:
+        assert models.ensure_tag("llama3") == "llama3:latest"
+
+    def test_preserves_explicit_tag(self) -> None:
+        assert models.ensure_tag("qwen3:8b") == "qwen3:8b"
+
+    def test_preserves_latest_tag(self) -> None:
+        assert models.ensure_tag("llama3:latest") == "llama3:latest"
+
+    def test_empty_string_returns_empty(self) -> None:
+        assert models.ensure_tag("") == ""
+
+    def test_namespaced_model_without_tag(self) -> None:
+        assert models.ensure_tag("maternion/LightOnOCR-2") == "maternion/LightOnOCR-2:latest"
+
+    def test_namespaced_model_with_tag(self) -> None:
+        assert models.ensure_tag("maternion/LightOnOCR-2:latest") == "maternion/LightOnOCR-2:latest"

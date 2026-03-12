@@ -347,7 +347,7 @@ class TestApplyOverrides:
         from lilbee.cli import apply_overrides
 
         apply_overrides(model="phi3")
-        assert cfg.chat_model == "phi3"
+        assert cfg.chat_model == "phi3:latest"
 
     def test_none_values_are_noop(self):
         from lilbee.cli import apply_overrides
@@ -631,7 +631,9 @@ class TestSlashModel:
             handle_slash_model("", con)
         # Should not raise
 
-    @mock.patch("lilbee.cli.chat.list_ollama_models", return_value=["llama3", "mistral"])
+    @mock.patch(
+        "lilbee.cli.chat.list_ollama_models", return_value=["llama3:latest", "mistral:latest"]
+    )
     def test_model_switches(self, _models):
         from io import StringIO
 
@@ -645,15 +647,17 @@ class TestSlashModel:
         try:
             with mock.patch("lilbee.settings.set_value") as mock_set:
                 handle_slash_model("llama3", con)
-                assert cfg.chat_model == "llama3"
+                assert cfg.chat_model == "llama3:latest"
                 output = buf.getvalue()
                 assert "Switched to model" in output
                 assert "(saved)" in output
-                mock_set.assert_called_once_with(cfg.data_root, "chat_model", "llama3")
+                mock_set.assert_called_once_with(cfg.data_root, "chat_model", "llama3:latest")
         finally:
             cfg.chat_model = original
 
-    @mock.patch("lilbee.cli.chat.list_ollama_models", return_value=["llama3", "mistral"])
+    @mock.patch(
+        "lilbee.cli.chat.list_ollama_models", return_value=["llama3:latest", "mistral:latest"]
+    )
     def test_model_rejects_unknown(self, _models):
         from io import StringIO
 
@@ -673,7 +677,9 @@ class TestSlashModel:
         finally:
             cfg.chat_model = original
 
-    @mock.patch("lilbee.cli.chat.list_ollama_models", return_value=["phi3", "mistral"])
+    @mock.patch(
+        "lilbee.cli.chat.list_ollama_models", return_value=["phi3:latest", "mistral:latest"]
+    )
     @mock.patch("lilbee.ingest.sync", new_callable=AsyncMock, return_value=_SYNC_NOOP)
     def test_model_switch_inchat_loop(self, _sync, _models):
 
@@ -756,7 +762,7 @@ class TestSlashVision:
         finally:
             cfg.vision_model = original
 
-    @mock.patch("lilbee.cli.chat.list_ollama_models", return_value=["test-vision"])
+    @mock.patch("lilbee.cli.chat.list_ollama_models", return_value=["test-vision:latest"])
     def test_vision_set_named_model(self, _models):
         """Test /vision <name> sets the model directly."""
         from io import StringIO
@@ -771,15 +777,17 @@ class TestSlashVision:
         try:
             with mock.patch("lilbee.settings.set_value") as mock_set:
                 handle_slash_vision("test-vision", con)
-            assert cfg.vision_model == "test-vision"
+            assert cfg.vision_model == "test-vision:latest"
             output = buf.getvalue()
             assert "Vision model set to" in output
             assert "(saved)" in output
-            mock_set.assert_called_once_with(cfg.data_root, "vision_model", "test-vision")
+            mock_set.assert_called_once_with(cfg.data_root, "vision_model", "test-vision:latest")
         finally:
             cfg.vision_model = original
 
-    @mock.patch("lilbee.cli.chat.list_ollama_models", return_value=["model-a", "model-b"])
+    @mock.patch(
+        "lilbee.cli.chat.list_ollama_models", return_value=["model-a:latest", "model-b:latest"]
+    )
     def test_vision_rejects_unknown(self, _models):
         """Test /vision <name> rejects unknown models."""
         from io import StringIO
@@ -802,7 +810,7 @@ class TestSlashVision:
 
     @mock.patch(
         "lilbee.cli.chat.list_ollama_models",
-        return_value=["maternion/LightOnOCR-2"],
+        return_value=["maternion/LightOnOCR-2:latest"],
     )
     @mock.patch("lilbee.models.get_free_disk_gb", return_value=50.0)
     @mock.patch("lilbee.models.get_system_ram_gb", return_value=8.0)
@@ -823,11 +831,11 @@ class TestSlashVision:
                 mock.patch("lilbee.settings.set_value") as mock_set,
             ):
                 handle_slash_vision("", con)
-            assert cfg.vision_model == "maternion/LightOnOCR-2"
+            assert cfg.vision_model == "maternion/LightOnOCR-2:latest"
             output = buf.getvalue()
             assert "Vision model set to" in output
             mock_set.assert_called_once_with(
-                cfg.data_root, "vision_model", "maternion/LightOnOCR-2"
+                cfg.data_root, "vision_model", "maternion/LightOnOCR-2:latest"
             )
         finally:
             cfg.vision_model = original
@@ -851,7 +859,7 @@ class TestSlashVision:
         try:
             with mock.patch("builtins.input", return_value="1"):
                 handle_slash_vision("", con)
-            mock_pull.assert_called_once_with("maternion/LightOnOCR-2")
+            mock_pull.assert_called_once_with("maternion/LightOnOCR-2:latest")
             output = buf.getvalue()
             assert "Vision model set to" in output
         finally:
@@ -921,7 +929,9 @@ class TestSlashVision:
         output = buf.getvalue()
         assert "/vision" in output
 
-    @mock.patch("lilbee.cli.chat.list_ollama_models", return_value=["phi3", "mistral"])
+    @mock.patch(
+        "lilbee.cli.chat.list_ollama_models", return_value=["phi3:latest", "mistral:latest"]
+    )
     @mock.patch("lilbee.ingest.sync", new_callable=AsyncMock, return_value=_SYNC_NOOP)
     def test_vision_switch_inchat_loop(self, _sync, _models):
         """Test /vision <name> works in the chat loop."""
@@ -1031,21 +1041,21 @@ class TestLilbeeCompleter:
 
     @mock.patch(
         "lilbee.cli.chat.list_ollama_models",
-        return_value=["llama3", "mistral", "phi3"],
+        return_value=["llama3:latest", "mistral:latest", "phi3:latest"],
     )
     def test_model_prefix_completes(self, _models):
         results = self._complete("/model ")
-        assert "llama3" in results
-        assert "mistral" in results
-        assert "phi3" in results
+        assert "llama3:latest" in results
+        assert "mistral:latest" in results
+        assert "phi3:latest" in results
 
     @mock.patch(
         "lilbee.cli.chat.list_ollama_models",
-        return_value=["llama3", "mistral"],
+        return_value=["llama3:latest", "mistral:latest"],
     )
     def test_model_prefix_filters(self, _models):
         results = self._complete("/model ll")
-        assert results == ["llama3"]
+        assert results == ["llama3:latest"]
 
     @mock.patch("lilbee.cli.chat.list_ollama_models", return_value=[])
     def test_model_prefix_no_models(self, _models):
@@ -1056,11 +1066,11 @@ class TestLilbeeCompleter:
         results = self._complete("/vision ")
         # Should include all VISION_CATALOG models plus "off"
         assert "off" in results
-        assert "maternion/LightOnOCR-2" in results
+        assert "maternion/LightOnOCR-2:latest" in results
 
     def test_vision_prefix_filters(self):
         results = self._complete("/vision gl")
-        assert results == ["glm-ocr"]
+        assert results == ["glm-ocr:latest"]
 
     def test_vision_off_completes(self):
         results = self._complete("/vision o")
@@ -1074,13 +1084,13 @@ class TestLilbeeCompleter:
 class TestListOllamaModels:
     """Test list_ollama_models helper."""
 
-    def test_returns_model_names(self):
+    def test_returns_model_names_with_tags(self):
         mock_model = mock.MagicMock()
         mock_model.model = "llama3:latest"
         mock_response = mock.MagicMock()
         mock_response.models = [mock_model]
         with mock.patch("ollama.list", return_value=mock_response):
-            assert list_ollama_models() == ["llama3"]
+            assert list_ollama_models() == ["llama3:latest"]
 
     def test_returns_empty_on_error(self):
         with mock.patch("ollama.list", side_effect=Exception("not running")):
@@ -1095,21 +1105,8 @@ class TestListOllamaModels:
         mock_response.models = [chat, embed]
         with mock.patch("ollama.list", return_value=mock_response):
             result = list_ollama_models()
-            assert result == ["llama3"]
-            assert "nomic-embed-text" not in result
-
-    def test_strips_latest_suffix(self):
-        m1 = mock.MagicMock()
-        m1.model = "llama3:latest"
-        m2 = mock.MagicMock()
-        m2.model = "qwen3:8b"  # explicit tag preserved
-        mock_response = mock.MagicMock()
-        mock_response.models = [m1, m2]
-        with mock.patch("ollama.list", return_value=mock_response):
-            result = list_ollama_models()
-            assert "llama3" in result
-            assert "qwen3:8b" in result
-            assert "llama3:latest" not in result
+            assert result == ["llama3:latest"]
+            assert "nomic-embed-text:latest" not in result
 
 
 class TestQuitChat:
@@ -1854,9 +1851,9 @@ class TestEnsureVisionModel:
         from lilbee.cli.commands import _ensure_vision_model
 
         cfg.vision_model = "test-vision"
-        with mock.patch("lilbee.cli.chat.list_ollama_models", return_value=["test-vision"]):
+        with mock.patch("lilbee.cli.chat.list_ollama_models", return_value=["test-vision:latest"]):
             _ensure_vision_model()
-        assert cfg.vision_model == "test-vision"
+        assert cfg.vision_model == "test-vision:latest"
 
     def test_configured_but_not_installed_pulls(self):
         """Pulls the model when configured but not installed."""
@@ -1868,8 +1865,8 @@ class TestEnsureVisionModel:
             mock.patch("lilbee.models.pull_with_progress") as mock_pull,
         ):
             _ensure_vision_model()
-        mock_pull.assert_called_once_with("test-vision")
-        assert cfg.vision_model == "test-vision"
+        mock_pull.assert_called_once_with("test-vision:latest")
+        assert cfg.vision_model == "test-vision:latest"
 
     def test_configured_pull_fails_gracefully(self):
         """Continues without vision when pull fails."""
@@ -2036,7 +2033,7 @@ class TestEnsureVisionModel:
         """Continues without vision when Ollama is down."""
         from lilbee.cli.commands import _ensure_vision_model
 
-        cfg.vision_model = "test-vision"
+        cfg.vision_model = "test-vision:latest"
         with mock.patch(
             "lilbee.cli.chat.list_ollama_models", side_effect=Exception("conn refused")
         ):

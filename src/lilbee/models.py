@@ -23,6 +23,13 @@ _DISK_HEADROOM_GB = 2
 OLLAMA_MODELS_URL = "https://ollama.com/library"
 
 
+def ensure_tag(name: str) -> str:
+    """Ensure a model name has an explicit tag (e.g. ``llama3`` → ``llama3:latest``)."""
+    if not name or ":" in name:
+        return name
+    return f"{name}:latest"
+
+
 @dataclass(frozen=True)
 class ModelInfo:
     """A curated chat model with metadata for the picker UI."""
@@ -43,10 +50,12 @@ MODEL_CATALOG: tuple[ModelInfo, ...] = (
 
 
 VISION_CATALOG: tuple[ModelInfo, ...] = (
-    ModelInfo("maternion/LightOnOCR-2", 1.5, 4, "Best quality/speed — clean markdown OCR output"),
-    ModelInfo("glm-ocr", 2.2, 4, "Good accuracy — #1 on OmniDocBench benchmarks"),
-    ModelInfo("minicpm-v", 5.5, 8, "General vision model — decent OCR, slower"),
-    ModelInfo("deepseek-ocr", 6.7, 8, "Excellent accuracy — plain text, no markdown"),
+    ModelInfo(
+        "maternion/LightOnOCR-2:latest", 1.5, 4, "Best quality/speed — clean markdown OCR output"
+    ),
+    ModelInfo("glm-ocr:latest", 2.2, 4, "Good accuracy — #1 on OmniDocBench benchmarks"),
+    ModelInfo("minicpm-v:latest", 5.5, 8, "General vision model — decent OCR, slower"),
+    ModelInfo("deepseek-ocr:latest", 6.7, 8, "Excellent accuracy — plain text, no markdown"),
 )
 
 

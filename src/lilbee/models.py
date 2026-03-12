@@ -42,6 +42,14 @@ MODEL_CATALOG: tuple[ModelInfo, ...] = (
 )
 
 
+VISION_CATALOG: tuple[ModelInfo, ...] = (
+    ModelInfo("maternion/LightOnOCR-2", 1.5, 4, "Best quality/speed — clean markdown OCR output"),
+    ModelInfo("glm-ocr", 2.2, 4, "Good accuracy — #1 on OmniDocBench benchmarks"),
+    ModelInfo("minicpm-v", 5.5, 8, "General vision model — decent OCR, slower"),
+    ModelInfo("deepseek-ocr", 6.7, 8, "Excellent accuracy — plain text, no markdown"),
+)
+
+
 def get_system_ram_gb() -> float:
     """Return total system RAM in GB. Falls back to 8.0 if detection fails."""
     try:
@@ -131,6 +139,55 @@ def display_model_picker(ram_gb: float, free_disk_gb: float) -> ModelInfo:
 
     console.print()
     console.print("[bold]No chat model found.[/bold] Pick one to download:\n")
+    console.print(table)
+    console.print(f"\n  System: {ram_gb:.0f} GB RAM, {free_disk_gb:.1f} GB free disk")
+    console.print("  \u2605 = recommended for your system")
+    console.print(f"  Browse more models at {OLLAMA_MODELS_URL}\n")
+
+    return recommended
+
+
+def pick_default_vision_model(ram_gb: float) -> ModelInfo:
+    """Choose the largest vision catalog model that fits in *ram_gb*."""
+    best = VISION_CATALOG[0]
+    for model in VISION_CATALOG:
+        if model.min_ram_gb <= ram_gb:
+            best = model
+    return best
+
+
+def display_vision_picker(ram_gb: float, free_disk_gb: float) -> ModelInfo:
+    """Show a Rich table of vision models on stderr and return the recommended model."""
+    console = Console(stderr=True)
+    recommended = pick_default_vision_model(ram_gb)
+
+    table = Table(title="Vision OCR Models", show_lines=False)
+    table.add_column("#", justify="right", style="bold")
+    table.add_column("Model", style="cyan")
+    table.add_column("Size", justify="right")
+    table.add_column("Description")
+
+    for idx, model in enumerate(VISION_CATALOG, 1):
+        num_str = str(idx)
+        name = model.name
+        size_str = f"{model.size_gb:.1f} GB"
+        desc = model.description
+
+        is_recommended = model == recommended
+        disk_too_small = free_disk_gb < model.size_gb + _DISK_HEADROOM_GB
+
+        if is_recommended:
+            name = f"[bold]{name} \u2605[/bold]"
+            desc = f"[bold]{desc}[/bold]"
+            num_str = f"[bold]{num_str}[/bold]"
+
+        if disk_too_small:
+            size_str = f"[red]{model.size_gb:.1f} GB[/red]"
+
+        table.add_row(num_str, name, size_str, desc)
+
+    console.print()
+    console.print("[bold]Select a vision OCR model for scanned PDF extraction:[/bold]\n")
     console.print(table)
     console.print(f"\n  System: {ram_gb:.0f} GB RAM, {free_disk_gb:.1f} GB free disk")
     console.print("  \u2605 = recommended for your system")

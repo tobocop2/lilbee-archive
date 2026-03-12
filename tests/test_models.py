@@ -7,7 +7,7 @@ import pytest
 
 from lilbee import models
 from lilbee.config import cfg
-from lilbee.models import MODEL_CATALOG, ModelInfo
+from lilbee.models import MODEL_CATALOG, VISION_CATALOG, ModelInfo
 
 
 class TestModelCatalog:
@@ -313,3 +313,69 @@ class TestEnsureChatModel:
             mock.patch.object(models.sys.stdin, "isatty", return_value=False),
         ):
             models.ensure_chat_model()
+
+
+class TestVisionCatalog:
+    def test_catalog_not_empty(self) -> None:
+        assert len(VISION_CATALOG) > 0
+
+    def test_all_entries_are_model_info(self) -> None:
+        for m in VISION_CATALOG:
+            assert isinstance(m, ModelInfo)
+
+    def test_catalog_is_sorted_by_size(self) -> None:
+        sizes = [m.size_gb for m in VISION_CATALOG]
+        assert sizes == sorted(sizes)
+
+    def test_frozen(self) -> None:
+        with pytest.raises(AttributeError):
+            VISION_CATALOG[0].name = "nope"  # type: ignore[misc]
+
+
+class TestPickDefaultVisionModel:
+    def test_4gb_ram_picks_smallest(self) -> None:
+        m = models.pick_default_vision_model(4)
+        assert m.min_ram_gb <= 4
+
+    def test_8gb_ram_picks_larger(self) -> None:
+        m = models.pick_default_vision_model(8)
+        assert m.min_ram_gb <= 8
+
+    def test_32gb_ram_picks_largest_fitting(self) -> None:
+        m = models.pick_default_vision_model(32)
+        assert m.min_ram_gb <= 32
+
+    def test_tiny_ram_picks_first(self) -> None:
+        m = models.pick_default_vision_model(2)
+        assert m == VISION_CATALOG[0]
+
+
+class TestDisplayVisionPicker:
+    def test_renders_table(self, capsys: pytest.CaptureFixture[str]) -> None:
+        m = models.display_vision_picker(32, 50.0)
+        captured = capsys.readouterr()
+        assert "Vision OCR Models" in captured.err
+        assert isinstance(m, ModelInfo)
+
+    def test_recommended_highlighted(self, capsys: pytest.CaptureFixture[str]) -> None:
+        recommended = models.display_vision_picker(32.0, 100.0)
+        assert isinstance(recommended, ModelInfo)
+        captured = capsys.readouterr()
+        assert "\u2605" in captured.err
+
+    def test_disk_warning_with_low_space(self, capsys: pytest.CaptureFixture[str]) -> None:
+        models.display_vision_picker(32.0, 3.0)
+        captured = capsys.readouterr()
+        assert "3.0 GB free disk" in captured.err
+        assert "Vision OCR Models" in captured.err
+
+    def test_shows_system_stats(self, capsys: pytest.CaptureFixture[str]) -> None:
+        models.display_vision_picker(16.0, 42.5)
+        captured = capsys.readouterr()
+        assert "16 GB RAM" in captured.err
+        assert "42.5 GB free disk" in captured.err
+
+    def test_shows_browse_link(self, capsys: pytest.CaptureFixture[str]) -> None:
+        models.display_vision_picker(8.0, 50.0)
+        captured = capsys.readouterr()
+        assert models.OLLAMA_MODELS_URL in captured.err

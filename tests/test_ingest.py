@@ -463,6 +463,45 @@ class TestFileHash:
         assert file_hash(f1) != file_hash(f2)
 
 
+class TestApplyResultZeroChunks:
+    def test_zero_chunks_not_recorded_as_added(self):
+        from lilbee.ingest import _apply_result, _IngestResult
+
+        added = ["scanned.pdf"]
+        updated: list[str] = []
+        failed: list[str] = []
+        result = _IngestResult("scanned.pdf", Path("scanned.pdf"), chunk_count=0, error=None)
+        _apply_result(result, added, updated, failed)
+        assert "scanned.pdf" not in added
+        assert "scanned.pdf" not in failed
+
+    def test_zero_chunks_not_recorded_as_updated(self):
+        from lilbee.ingest import _apply_result, _IngestResult
+
+        added: list[str] = []
+        updated = ["scanned.pdf"]
+        failed: list[str] = []
+        result = _IngestResult("scanned.pdf", Path("scanned.pdf"), chunk_count=0, error=None)
+        _apply_result(result, added, updated, failed)
+        assert "scanned.pdf" not in updated
+        assert "scanned.pdf" not in failed
+
+    def test_nonzero_chunks_recorded(self):
+        from lilbee.ingest import _apply_result, _IngestResult
+
+        added = ["doc.pdf"]
+        updated: list[str] = []
+        failed: list[str] = []
+        result = _IngestResult("doc.pdf", Path("doc.pdf"), chunk_count=5, error=None)
+        with (
+            mock.patch("lilbee.ingest.store") as mock_store,
+            mock.patch("lilbee.ingest.file_hash", return_value="abc123"),
+        ):
+            _apply_result(result, added, updated, failed)
+        mock_store.upsert_source.assert_called_once()
+        assert "doc.pdf" in added
+
+
 class TestSyncResultStr:
     def test_str_no_failures(self):
         from lilbee.ingest import SyncResult

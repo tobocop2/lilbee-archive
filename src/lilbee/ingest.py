@@ -464,4 +464,12 @@ def _apply_result(
             updated.remove(result.name)
         failed.append(result.name)
         return
+    if result.chunk_count == 0:
+        # No chunks produced (e.g. scanned PDF without vision model).
+        # Don't record as a source so it gets retried on next sync.
+        if result.name in added:
+            added.remove(result.name)
+        if result.name in updated:
+            updated.remove(result.name)
+        return
     store.upsert_source(result.name, file_hash(result.path), result.chunk_count)

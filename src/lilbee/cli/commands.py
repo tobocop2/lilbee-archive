@@ -93,11 +93,8 @@ def _ensure_vision_model() -> None:
                 return
             model_info = VISION_CATALOG[choice - 1]
     else:
-        model_info = pick_default_vision_model(ram_gb)
-        sys.stderr.write(
-            f"No vision model configured. Auto-selecting '{model_info.name}' "
-            f"(detected {ram_gb:.0f} GB RAM)...\n"
-        )
+        model_info = pick_default_vision_model()
+        sys.stderr.write(f"No vision model configured. Auto-selecting '{model_info.name}'...\n")
 
     if model_info.name not in installed:
         try:

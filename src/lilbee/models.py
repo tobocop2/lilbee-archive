@@ -156,22 +156,15 @@ def display_model_picker(ram_gb: float, free_disk_gb: float) -> ModelInfo:
     return recommended
 
 
-def pick_default_vision_model(ram_gb: float) -> ModelInfo:
-    """Choose the best-quality vision model that fits in *ram_gb*.
-
-    The catalog is ordered best-quality-first, so we return the first
-    model whose RAM requirement is satisfied.
-    """
-    for model in VISION_CATALOG:
-        if model.min_ram_gb <= ram_gb:
-            return model
+def pick_default_vision_model() -> ModelInfo:
+    """Return the recommended vision model (first catalog entry, best quality)."""
     return VISION_CATALOG[0]
 
 
 def display_vision_picker(ram_gb: float, free_disk_gb: float) -> ModelInfo:
     """Show a Rich table of vision models on stderr and return the recommended model."""
     console = Console(stderr=True)
-    recommended = pick_default_vision_model(ram_gb)
+    recommended = pick_default_vision_model()
 
     table = Table(title="Vision OCR Models", show_lines=False)
     table.add_column("#", justify="right", style="bold")

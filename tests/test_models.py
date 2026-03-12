@@ -337,23 +337,9 @@ class TestVisionCatalog:
 
 
 class TestPickDefaultVisionModel:
-    def test_picks_best_quality_first(self) -> None:
-        """With enough RAM, always picks the first (best quality) model."""
-        m = models.pick_default_vision_model(4)
-        assert m == VISION_CATALOG[0]
-
-    def test_8gb_still_picks_first(self) -> None:
-        """More RAM doesn't change the pick — quality is prioritized over size."""
-        m = models.pick_default_vision_model(8)
-        assert m == VISION_CATALOG[0]
-
-    def test_32gb_still_picks_first(self) -> None:
-        m = models.pick_default_vision_model(32)
-        assert m == VISION_CATALOG[0]
-
-    def test_tiny_ram_falls_back_to_first(self) -> None:
-        m = models.pick_default_vision_model(2)
-        assert m == VISION_CATALOG[0]
+    def test_returns_first_catalog_entry(self) -> None:
+        """Always returns the best-quality model (first in catalog)."""
+        assert models.pick_default_vision_model() == VISION_CATALOG[0]
 
 
 class TestDisplayVisionPicker:

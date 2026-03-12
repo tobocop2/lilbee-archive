@@ -21,6 +21,7 @@
 - [Interactive chat](#interactive-chat)
 - [Agent integration](#agent-integration)
 - [Supported formats](#supported-formats)
+- [Vision OCR (optional)](#vision-ocr-optional)
 - [Configuration](#configuration)
 - [How it works](#how-it-works)
 
@@ -187,8 +188,38 @@ lilbee can serve as a local retrieval backend for AI coding agents via MCP or JS
 | eBook | `.epub` | — |
 | Images (OCR) | `.png`, `.jpg`, `.jpeg`, `.tiff`, `.bmp`, `.webp` | [Tesseract](https://github.com/tesseract-ocr/tesseract) |
 | Data | `.csv`, `.tsv` | — |
+| Structured | `.xml`, `.json`, `.jsonl`, `.yaml`, `.yml` | — |
 | Text | `.md`, `.txt`, `.html`, `.rst` | — |
 | Code | `.py`, `.js`, `.ts`, `.go`, `.rs`, `.java` and [150+ more](https://github.com/Goldziher/tree-sitter-language-pack) via tree-sitter (AST-aware chunking) | — |
+
+### Vision OCR (optional)
+
+Scanned PDFs that produce no extractable text can be processed using a local vision model via Ollama. During `sync`, lilbee detects empty PDFs and:
+- **Without a vision model configured:** skips the file and warns you to set one up
+- **With a vision model configured:** rasterizes each page and sends it to the vision model for OCR
+
+**Setup:**
+```bash
+# In chat, use the interactive picker:
+/vision
+
+# Or set directly:
+/vision maternion/LightOnOCR-2
+
+# Or via environment variable:
+export LILBEE_VISION_MODEL=maternion/LightOnOCR-2
+```
+
+**Recommended models:**
+
+| Model | Size | Speed | Quality |
+|-------|------|-------|---------|
+| maternion/LightOnOCR-2 | 1.5 GB | 11.9s/page | Best — clean markdown output |
+| deepseek-ocr | 6.7 GB | 17.4s/page | Excellent accuracy, plain text |
+| glm-ocr | 2.2 GB | 51.7s/page | Good accuracy |
+| minicpm-v | 5.5 GB | 35.6s/page | Decent, slower |
+
+> Benchmarks: Apple M1 Pro, 32 GB RAM, Ollama 0.17.7. See [full results](docs/benchmarks/vision-ocr.md).
 
 ## Configuration
 

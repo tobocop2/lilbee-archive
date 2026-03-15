@@ -33,8 +33,7 @@ export function buildModelOptions(
     }
 
     const catalogNames = new Set(catalog.catalog.map((m) => m.name));
-    const sortedCatalog = [...catalog.catalog].sort((a, b) => a.name.localeCompare(b.name));
-    for (const model of sortedCatalog) {
+    for (const model of catalog.catalog) {
         const suffix = model.installed ? "" : " (not installed)";
         options[model.name] = `${model.name}${suffix}`;
     }

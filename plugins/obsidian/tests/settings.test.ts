@@ -1528,7 +1528,7 @@ describe("buildModelOptions()", () => {
         expect(SEPARATOR_KEY in options).toBe(false);
     });
 
-    it("sorts catalog models alphabetically", () => {
+    it("preserves server catalog order (no alphabetical sort)", () => {
         const catalog: ModelCatalog = {
             active: "zeta",
             catalog: [
@@ -1539,8 +1539,8 @@ describe("buildModelOptions()", () => {
         };
         const options = buildModelOptions(catalog, "chat");
         const keys = Object.keys(options);
-        expect(keys[0]).toBe("alpha");
-        expect(keys[1]).toBe("zeta");
+        expect(keys[0]).toBe("zeta");
+        expect(keys[1]).toBe("alpha");
     });
 
     it("sorts other installed models alphabetically", () => {

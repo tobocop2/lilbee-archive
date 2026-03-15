@@ -186,6 +186,24 @@ describe("askStream()", () => {
         const body = JSON.parse(fetchMock.mock.calls[0][1].body);
         expect(body.top_k).toBe(0);
     });
+
+    it("includes options in request body when provided", async () => {
+        fetchMock.mockResolvedValue(sseResponse([]));
+
+        await collect(client.askStream("q", 5, undefined, { temperature: 0.5 }));
+
+        const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+        expect(body.options).toEqual({ temperature: 0.5 });
+    });
+
+    it("omits options when empty object provided", async () => {
+        fetchMock.mockResolvedValue(sseResponse([]));
+
+        await collect(client.askStream("q", 5, undefined, {}));
+
+        const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+        expect(body.options).toBeUndefined();
+    });
 });
 
 describe("chat()", () => {
@@ -249,6 +267,33 @@ describe("chatStream()", () => {
 
         const body = JSON.parse(fetchMock.mock.calls[0][1].body);
         expect(body.top_k).toBe(0);
+    });
+
+    it("includes options in request body when provided", async () => {
+        fetchMock.mockResolvedValue(sseResponse([]));
+
+        await collect(client.chatStream("q", [], 5, undefined, { temperature: 0.7, top_k: 40 }));
+
+        const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+        expect(body.options).toEqual({ temperature: 0.7, top_k: 40 });
+    });
+
+    it("omits options when empty object provided", async () => {
+        fetchMock.mockResolvedValue(sseResponse([]));
+
+        await collect(client.chatStream("q", [], 5, undefined, {}));
+
+        const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+        expect(body.options).toBeUndefined();
+    });
+
+    it("omits options when not provided", async () => {
+        fetchMock.mockResolvedValue(sseResponse([]));
+
+        await collect(client.chatStream("q", [], 5));
+
+        const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+        expect(body.options).toBeUndefined();
     });
 });
 

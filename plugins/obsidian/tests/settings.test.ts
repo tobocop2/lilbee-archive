@@ -204,8 +204,8 @@ describe("LilbeeSettingTab", () => {
             (plugin.api.listModels as ReturnType<typeof vi.fn>).mockResolvedValue(makeModelsResponse());
             const tab = makeTab(plugin);
             const { textOnChanges } = captureSettingCallbacks(() => tab.display());
-            // serverUrl + ollamaUrl + syncDebounce = 3
-            expect(textOnChanges.length).toBe(3);
+            // serverUrl + ollamaUrl + 6 generation + syncDebounce = 9
+            expect(textOnChanges.length).toBe(9);
         });
 
         it("does NOT show sync-debounce when syncMode is 'manual'", () => {
@@ -213,8 +213,8 @@ describe("LilbeeSettingTab", () => {
             (plugin.api.listModels as ReturnType<typeof vi.fn>).mockResolvedValue(makeModelsResponse());
             const tab = makeTab(plugin);
             const { textOnChanges } = captureSettingCallbacks(() => tab.display());
-            // serverUrl + ollamaUrl = 2
-            expect(textOnChanges.length).toBe(2);
+            // serverUrl + ollamaUrl + 6 generation settings = 8
+            expect(textOnChanges.length).toBe(8);
         });
     });
 
@@ -264,7 +264,7 @@ describe("LilbeeSettingTab", () => {
     describe("syncDebounce text onChange", () => {
         // With syncMode=auto, text fields are:
         // [0] serverUrl, [1] ollamaUrl, [2] syncDebounce
-        const DEBOUNCE_IDX = 2;
+        const DEBOUNCE_IDX = 8;
 
         it("updates syncDebounceMs for valid positive number", async () => {
             const plugin = makePlugin({ syncMode: "auto" });
@@ -325,6 +325,88 @@ describe("LilbeeSettingTab", () => {
             await textOnChanges[1]("http://remote:11434");
             expect(plugin.settings.ollamaUrl).toBe("http://remote:11434");
             expect(plugin.saveSettings).toHaveBeenCalled();
+        });
+    });
+
+    describe("generation settings", () => {
+        const GEN_FIELDS = [
+            { idx: 2, key: "temperature", value: "0.7", expected: 0.7 },
+            { idx: 3, key: "top_p", value: "0.9", expected: 0.9 },
+            { idx: 4, key: "top_k_sampling", value: "40", expected: 40 },
+            { idx: 5, key: "repeat_penalty", value: "1.1", expected: 1.1 },
+            { idx: 6, key: "num_ctx", value: "4096", expected: 4096 },
+            { idx: 7, key: "seed", value: "42", expected: 42 },
+        ] as const;
+
+        for (const { idx, key, value, expected } of GEN_FIELDS) {
+            it(`sets ${key} to parsed number`, async () => {
+                const plugin = makePlugin();
+                (plugin.api.listModels as ReturnType<typeof vi.fn>).mockResolvedValue(makeModelsResponse());
+                const tab = makeTab(plugin);
+                const { textOnChanges } = captureSettingCallbacks(() => tab.display());
+
+                await textOnChanges[idx](value);
+                expect((plugin.settings as any)[key]).toBe(expected);
+                expect(plugin.saveSettings).toHaveBeenCalled();
+            });
+
+            it(`sets ${key} to null when cleared`, async () => {
+                const plugin = makePlugin();
+                (plugin.api.listModels as ReturnType<typeof vi.fn>).mockResolvedValue(makeModelsResponse());
+                const tab = makeTab(plugin);
+                const { textOnChanges } = captureSettingCallbacks(() => tab.display());
+
+                await textOnChanges[idx](value);
+                (plugin.saveSettings as ReturnType<typeof vi.fn>).mockClear();
+                await textOnChanges[idx]("");
+                expect((plugin.settings as any)[key]).toBeNull();
+                expect(plugin.saveSettings).toHaveBeenCalled();
+            });
+        }
+
+        it("ignores NaN input for integer field", async () => {
+            const plugin = makePlugin();
+            (plugin.api.listModels as ReturnType<typeof vi.fn>).mockResolvedValue(makeModelsResponse());
+            const tab = makeTab(plugin);
+            const { textOnChanges } = captureSettingCallbacks(() => tab.display());
+
+            await textOnChanges[4]("not-a-number");
+            expect(plugin.settings.top_k_sampling).toBeNull();
+        });
+
+        it("ignores NaN input for float field", async () => {
+            const plugin = makePlugin();
+            (plugin.api.listModels as ReturnType<typeof vi.fn>).mockResolvedValue(makeModelsResponse());
+            const tab = makeTab(plugin);
+            const { textOnChanges } = captureSettingCallbacks(() => tab.display());
+
+            await textOnChanges[2]("abc");
+            expect(plugin.settings.temperature).toBeNull();
+        });
+
+        it("displays existing non-null value", () => {
+            const plugin = makePlugin();
+            plugin.settings.temperature = 0.5;
+            (plugin.api.listModels as ReturnType<typeof vi.fn>).mockResolvedValue(makeModelsResponse());
+            const tab = makeTab(plugin);
+
+            const setValues: string[] = [];
+            const origAddText = Setting.prototype.addText;
+            Setting.prototype.addText = function (cb: (text: any) => void) {
+                const fakeText = {
+                    setPlaceholder: () => fakeText,
+                    setValue: (v: string) => { setValues.push(v); return fakeText; },
+                    onChange: () => fakeText,
+                };
+                cb(fakeText);
+                return this;
+            };
+
+            tab.display();
+            Setting.prototype.addText = origAddText;
+
+            // Index 2 is temperature — should show "0.5"
+            expect(setValues[2]).toBe("0.5");
         });
     });
 

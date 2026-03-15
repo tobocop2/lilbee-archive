@@ -70,6 +70,7 @@ export class LilbeeSettingTab extends PluginSettingTab {
         this.renderConnectionSettings(containerEl);
         this.renderModelsSection(containerEl);
         this.renderGeneralSettings(containerEl);
+        this.renderGenerationSettings(containerEl);
         this.renderSyncSettings(containerEl);
     }
 
@@ -153,6 +154,42 @@ export class LilbeeSettingTab extends PluginSettingTab {
                         await this.plugin.saveSettings();
                     }),
             );
+    }
+
+    private renderGenerationSettings(containerEl: HTMLElement): void {
+        containerEl.createEl("h3", { text: "Generation" });
+
+        const fields: { key: keyof Pick<import("./types").LilbeeSettings, "temperature" | "top_p" | "top_k_sampling" | "repeat_penalty" | "num_ctx" | "seed">; name: string; desc: string; integer: boolean }[] = [
+            { key: "temperature", name: "Temperature", desc: "Controls randomness (0.0–2.0)", integer: false },
+            { key: "top_p", name: "Top P", desc: "Nucleus sampling threshold (0.0–1.0)", integer: false },
+            { key: "top_k_sampling", name: "Top K (sampling)", desc: "Limits token choices per step", integer: true },
+            { key: "repeat_penalty", name: "Repeat penalty", desc: "Penalizes repeated tokens (1.0+)", integer: false },
+            { key: "num_ctx", name: "Context length", desc: "Max context window in tokens", integer: true },
+            { key: "seed", name: "Seed", desc: "Fixed seed for reproducible output", integer: true },
+        ];
+
+        for (const field of fields) {
+            new Setting(containerEl)
+                .setName(field.name)
+                .setDesc(field.desc)
+                .addText((text) =>
+                    text
+                        .setPlaceholder("Model default")
+                        .setValue(this.plugin.settings[field.key] !== null ? String(this.plugin.settings[field.key]) : "")
+                        .onChange(async (value) => {
+                            const trimmed = value.trim();
+                            if (trimmed === "") {
+                                this.plugin.settings[field.key] = null;
+                            } else {
+                                const num = field.integer ? parseInt(trimmed, 10) : parseFloat(trimmed);
+                                if (!isNaN(num)) {
+                                    this.plugin.settings[field.key] = num;
+                                }
+                            }
+                            await this.plugin.saveSettings();
+                        }),
+                );
+        }
     }
 
     private renderSyncSettings(containerEl: HTMLElement): void {

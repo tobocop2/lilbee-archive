@@ -2,6 +2,7 @@ import { JSON_HEADERS, SSE_EVENT } from "./types";
 import type {
     AskResponse,
     DocumentResult,
+    GenerationOptions,
     Message,
     ModelsResponse,
     OllamaPullProgress,
@@ -90,13 +91,20 @@ export class LilbeeClient {
         return res.json();
     }
 
-    async *askStream(question: string, topK?: number, signal?: AbortSignal): AsyncGenerator<SSEEvent> {
+    async *askStream(
+        question: string,
+        topK?: number,
+        signal?: AbortSignal,
+        options?: GenerationOptions,
+    ): AsyncGenerator<SSEEvent> {
+        const body: Record<string, unknown> = { question, top_k: topK ?? 0 };
+        if (options && Object.keys(options).length > 0) body.options = options;
         const res = await this.fetchWithRetry(
             `${this.baseUrl}/api/ask/stream`,
             {
                 method: "POST",
                 headers: JSON_HEADERS,
-                body: JSON.stringify({ question, top_k: topK ?? 0 }),
+                body: JSON.stringify(body),
             },
             { stream: true, signal },
         );
@@ -117,13 +125,16 @@ export class LilbeeClient {
         history: Message[],
         topK?: number,
         signal?: AbortSignal,
+        options?: GenerationOptions,
     ): AsyncGenerator<SSEEvent> {
+        const body: Record<string, unknown> = { question, history, top_k: topK ?? 0 };
+        if (options && Object.keys(options).length > 0) body.options = options;
         const res = await this.fetchWithRetry(
             `${this.baseUrl}/api/chat/stream`,
             {
                 method: "POST",
                 headers: JSON_HEADERS,
-                body: JSON.stringify({ question, history, top_k: topK ?? 0 }),
+                body: JSON.stringify(body),
             },
             { stream: true, signal },
         );

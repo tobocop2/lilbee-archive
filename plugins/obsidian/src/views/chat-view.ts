@@ -1,7 +1,7 @@
 import { FuzzySuggestModal, ItemView, MarkdownRenderer, Menu, Notice, setIcon, type TFile, WorkspaceLeaf } from "obsidian";
 import type LilbeePlugin from "../main";
 import { SSE_EVENT } from "../types";
-import type { Message, ModelCatalog, OllamaPullProgress, Source, SSEEvent } from "../types";
+import type { GenerationOptions, Message, ModelCatalog, OllamaPullProgress, Source, SSEEvent } from "../types";
 import { renderSourceChip } from "./results";
 import { buildModelOptions, SEPARATOR_KEY } from "../settings";
 
@@ -58,6 +58,24 @@ const PROGRESS_EXTRACTORS: Record<string, (data: any) => ProgressInfo> = {
         total: d.total,
     }),
 };
+
+export function buildGenerationOptions(settings: {
+    temperature: number | null;
+    top_p: number | null;
+    top_k_sampling: number | null;
+    repeat_penalty: number | null;
+    num_ctx: number | null;
+    seed: number | null;
+}): GenerationOptions {
+    const opts: GenerationOptions = {};
+    if (settings.temperature != null) opts.temperature = settings.temperature;
+    if (settings.top_p != null) opts.top_p = settings.top_p;
+    if (settings.top_k_sampling != null) opts.top_k = settings.top_k_sampling;
+    if (settings.repeat_penalty != null) opts.repeat_penalty = settings.repeat_penalty;
+    if (settings.num_ctx != null) opts.num_ctx = settings.num_ctx;
+    if (settings.seed != null) opts.seed = settings.seed;
+    return opts;
+}
 
 function extractString(data: unknown, field: string): string {
     if (typeof data === "object" && data !== null && field in data) {
@@ -128,10 +146,16 @@ export class ChatView extends ItemView {
         this.connectionDot = toolbar.createDiv({ cls: "lilbee-connection-dot" });
         this.pingHealth();
 
+        const chatIcon = toolbar.createDiv({ cls: "lilbee-toolbar-icon" });
+        setIcon(chatIcon, "message-circle");
+
         this.chatSelectEl = toolbar.createEl("select", {
             cls: "lilbee-chat-model-select",
         }) as HTMLSelectElement;
         this.attachChatListener(this.chatSelectEl);
+
+        const visionIcon = toolbar.createDiv({ cls: "lilbee-toolbar-icon" });
+        setIcon(visionIcon, "eye");
 
         this.visionSelectEl = toolbar.createEl("select", {
             cls: "lilbee-chat-vision-select",
@@ -385,12 +409,15 @@ export class ChatView extends ItemView {
             });
         };
 
+        const genOpts = buildGenerationOptions(this.plugin.settings);
+
         try {
             for await (const event of this.plugin.api.chatStream(
                 text,
                 this.history.slice(0, -1),
                 this.plugin.settings.topK,
                 this.streamController.signal,
+                genOpts,
             )) {
                 this.setConnectionStatus(true);
                 this.handleStreamEvent(event, textEl, assistantBubble, state, revealContent, scheduleRender);

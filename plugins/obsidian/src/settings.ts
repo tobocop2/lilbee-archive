@@ -363,6 +363,7 @@ export class LilbeeSettingTab extends PluginSettingTab {
             }
         } catch (err) {
             if (err instanceof Error && err.name === "AbortError") {
+                await this.cleanupPartialPull(model.name);
                 new Notice("Pull cancelled");
             } else {
                 new Notice(`Failed to pull ${model.name}`);
@@ -407,8 +408,8 @@ export class LilbeeSettingTab extends PluginSettingTab {
         const controller = new AbortController();
         btn.textContent = "Cancel";
         btn.addEventListener("click", () => controller.abort(), { once: true });
+        const progress = actionCell.createDiv("lilbee-pull-progress");
         try {
-            const progress = actionCell.createDiv("lilbee-pull-progress");
             for await (const p of this.plugin.ollama.pull(
                 model.name,
                 controller.signal,
@@ -434,6 +435,7 @@ export class LilbeeSettingTab extends PluginSettingTab {
             }
         } catch (err) {
             if (err instanceof Error && err.name === "AbortError") {
+                await this.cleanupPartialPull(model.name);
                 new Notice("Pull cancelled");
             } else {
                 new Notice(`Failed to pull ${model.name}`);
@@ -441,7 +443,16 @@ export class LilbeeSettingTab extends PluginSettingTab {
             (btn as HTMLButtonElement).disabled = false;
             btn.textContent = "Pull";
         } finally {
+            progress.remove();
             this.pulling = false;
+        }
+    }
+
+    private async cleanupPartialPull(modelName: string): Promise<void> {
+        try {
+            await this.plugin.ollama.delete(modelName);
+        } catch {
+            // Best-effort — partial blob may not exist yet
         }
     }
 

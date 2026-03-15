@@ -842,8 +842,9 @@ describe("LilbeeSettingTab", () => {
             await pullPromise;
         });
 
-        it("clicking Cancel during pull aborts and shows 'Pull cancelled' notice", async () => {
+        it("clicking Cancel during pull aborts, deletes partial model, and shows notice", async () => {
             const plugin = makePlugin();
+            (plugin.ollama.delete as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
 
             let resolveWait!: () => void;
             const waitPromise = new Promise<void>((r) => { resolveWait = r; });
@@ -861,7 +862,7 @@ describe("LilbeeSettingTab", () => {
                 (name: string, signal: AbortSignal) => slowPull(name, signal),
             );
 
-            const { tab, btn, clickHandlers } = setupPullCancelButton(plugin);
+            const { tab, btn, actionCell, clickHandlers } = setupPullCancelButton(plugin);
 
             // Start the pull
             const pullPromise = clickHandlers[0]();
@@ -873,8 +874,14 @@ describe("LilbeeSettingTab", () => {
             await pullPromise;
 
             expect(Notice.instances.some((n) => n.message === "Pull cancelled")).toBe(true);
+            expect(plugin.ollama.delete).toHaveBeenCalledWith("phi3");
             expect(btn.textContent).toBe("Pull");
             expect(btn.disabled).toBe(false);
+            // Progress div should be cleaned up
+            const progressDiv = actionCell.children.find(
+                (c: any) => c.classList?.contains("lilbee-pull-progress"),
+            );
+            expect(progressDiv).toBeUndefined();
         });
     });
 
@@ -971,8 +978,9 @@ describe("LilbeeSettingTab", () => {
             expect(banner).toBeUndefined();
         });
 
-        it("clicking cancel on auto-pull banner aborts and shows notice", async () => {
+        it("clicking cancel on auto-pull banner aborts, deletes partial model, and shows notice", async () => {
             const plugin = makePlugin();
+            (plugin.ollama.delete as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
             let resolveWait!: () => void;
             const waitPromise = new Promise<void>((r) => { resolveWait = r; });
             async function* slowPull(_name: string, signal: AbortSignal) {
@@ -1011,6 +1019,7 @@ describe("LilbeeSettingTab", () => {
             await pullPromise;
 
             expect(Notice.instances.some((n) => n.message === "Pull cancelled")).toBe(true);
+            expect(plugin.ollama.delete).toHaveBeenCalledWith("phi3");
         });
 
         it("auto-pull banner label updates with progress percentage", async () => {
@@ -1048,8 +1057,9 @@ describe("LilbeeSettingTab", () => {
     });
 
     describe("Auto-pull AbortError", () => {
-        it("auto-pull AbortError shows 'Pull cancelled' notice", async () => {
+        it("auto-pull AbortError shows 'Pull cancelled' notice and deletes partial model", async () => {
             const plugin = makePlugin();
+            (plugin.ollama.delete as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
 
             async function* abortingPull(): AsyncGenerator<never> {
                 const err = new Error("The operation was aborted");
@@ -1067,6 +1077,30 @@ describe("LilbeeSettingTab", () => {
 
             // phi3 is uninstalled in catalog — triggers autoPullAndSet
             await dropdownOnChanges[0]("phi3");
+            expect(Notice.instances.some((n) => n.message === "Pull cancelled")).toBe(true);
+            expect(plugin.ollama.delete).toHaveBeenCalledWith("phi3");
+        });
+
+        it("cleanup delete failure is silently ignored", async () => {
+            const plugin = makePlugin();
+            (plugin.ollama.delete as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("not found"));
+
+            async function* abortingPull(): AsyncGenerator<never> {
+                const err = new Error("The operation was aborted");
+                err.name = "AbortError";
+                throw err;
+            }
+            (plugin.ollama.pull as ReturnType<typeof vi.fn>).mockReturnValue(abortingPull());
+
+            const tab = makeTab(plugin);
+            const container = new MockElement("div") as unknown as HTMLElement;
+
+            const { dropdownOnChanges } = captureSettingCallbacks(() => {
+                (tab as any).renderModelSection(container, "Chat Model", makeModelsResponse().chat, "chat");
+            });
+
+            await dropdownOnChanges[0]("phi3");
+            // Should not throw, notice still shown
             expect(Notice.instances.some((n) => n.message === "Pull cancelled")).toBe(true);
         });
     });
@@ -1107,9 +1141,12 @@ describe("LilbeeSettingTab", () => {
 
         it("successful pull: shows progress percentage and success Notice, sets model", async () => {
             const plugin = makePlugin();
+            let capturedProgressText = "";
 
             async function* fakePull() {
                 yield { status: "pulling", completed: 75, total: 100 };
+                // Capture progress text mid-pull (before finally removes it)
+                capturedProgressText = actionCell.find("lilbee-pull-progress")?.textContent ?? "";
                 yield { status: "success" };
             }
             (plugin.ollama.pull as ReturnType<typeof vi.fn>).mockReturnValue(fakePull());
@@ -1123,17 +1160,20 @@ describe("LilbeeSettingTab", () => {
 
             await clickHandler();
 
-            const progressDiv = actionCell.find("lilbee-pull-progress");
-            expect(progressDiv?.textContent).toBe("75%");
+            expect(capturedProgressText).toBe("75%");
+            // Progress div cleaned up after completion
+            expect(actionCell.find("lilbee-pull-progress")).toBeNull();
             expect(Notice.instances.some((n) => n.message.includes("phi3") && n.message.includes("pulled"))).toBe(true);
             expect(plugin.api.setChatModel).toHaveBeenCalledWith("phi3");
         });
 
         it("progress event with total=0: does not set percentage text", async () => {
             const plugin = makePlugin();
+            let capturedProgressText = "";
 
             async function* fakePull() {
                 yield { status: "pulling", completed: 0, total: 0 };
+                capturedProgressText = actionCell.find("lilbee-pull-progress")?.textContent ?? "";
                 yield { status: "success" };
             }
             (plugin.ollama.pull as ReturnType<typeof vi.fn>).mockReturnValue(fakePull());
@@ -1147,8 +1187,7 @@ describe("LilbeeSettingTab", () => {
 
             await clickHandler();
 
-            const progressDiv = actionCell.find("lilbee-pull-progress");
-            expect(progressDiv?.textContent).not.toMatch(/\d+%/);
+            expect(capturedProgressText).not.toMatch(/\d+%/);
         });
 
         it("pull with vision type calls setVisionModel", async () => {

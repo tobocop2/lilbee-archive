@@ -240,17 +240,20 @@
 .lilbee-chat-input textarea {
     flex: 1;
     resize: vertical;
+    overflow: auto;
     background-color: var(--background-secondary);
     color: var(--text-normal);
     border: 1px solid var(--background-modifier-border);
     border-radius: var(--radius-m, 6px);
-    padding: var(--size-4-2, 8px);
+    padding: 6px var(--size-4-2, 8px);
     font-family: var(--font-interface);
     font-size: var(--font-text-size, 15px);
-    line-height: var(--line-height-normal, 1.5);
-    min-height: 38px;
+    line-height: 1.4;
+    min-height: 36px;
     max-height: 160px;
     outline: none;
+    box-sizing: border-box;
+    field-sizing: content;
 }
 
 .lilbee-chat-input textarea:focus {

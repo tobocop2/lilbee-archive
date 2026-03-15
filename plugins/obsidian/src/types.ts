@@ -70,6 +70,13 @@ export interface PullProgress {
     total: number;
 }
 
+export interface OllamaPullProgress {
+    status: string;
+    completed?: number;
+    total?: number;
+    digest?: string;
+}
+
 export interface SSEEvent {
     event: string;
     data: unknown;

@@ -185,7 +185,7 @@ describe("LilbeeSettingTab", () => {
             const h3 = tab.containerEl.children.find((c) => c.tagName === "H3");
             expect(h3?.textContent).toBe("Models");
             const p = tab.containerEl.children.find(
-                (c) => c.tagName === "P" && c.textContent.includes("Manage chat"),
+                (c) => c.tagName === "P" && c.textContent.includes("Curated catalog"),
             );
             expect(p).toBeDefined();
         });
@@ -407,6 +407,48 @@ describe("LilbeeSettingTab", () => {
 
             // Index 2 is temperature — should show "0.5"
             expect(setValues[2]).toBe("0.5");
+        });
+
+        it("renders inside a <details> element", () => {
+            const plugin = makePlugin();
+            (plugin.api.listModels as ReturnType<typeof vi.fn>).mockResolvedValue(makeModelsResponse());
+            const tab = makeTab(plugin);
+            tab.display();
+            const details = tab.containerEl.children.find(
+                (c) => c.tagName === "DETAILS" && c.classList.contains("lilbee-generation-details"),
+            );
+            expect(details).toBeDefined();
+            const summary = details!.children.find((c) => c.tagName === "SUMMARY");
+            expect(summary?.textContent).toBe("Generation settings");
+        });
+
+        it("uses specific placeholder defaults instead of 'Model default'", () => {
+            const plugin = makePlugin();
+            (plugin.api.listModels as ReturnType<typeof vi.fn>).mockResolvedValue(makeModelsResponse());
+            const tab = makeTab(plugin);
+
+            const placeholders: string[] = [];
+            const origAddText = Setting.prototype.addText;
+            Setting.prototype.addText = function (cb: (text: any) => void) {
+                const fakeText = {
+                    setPlaceholder: (v: string) => { placeholders.push(v); return fakeText; },
+                    setValue: () => fakeText,
+                    onChange: () => fakeText,
+                };
+                cb(fakeText);
+                return this;
+            };
+
+            tab.display();
+            Setting.prototype.addText = origAddText;
+
+            // Indices 2-7 are generation fields (0=serverUrl, 1=ollamaUrl)
+            expect(placeholders[2]).toBe("0.8");       // temperature
+            expect(placeholders[3]).toBe("0.9");       // top_p
+            expect(placeholders[4]).toBe("40");        // top_k_sampling
+            expect(placeholders[5]).toBe("1.1");       // repeat_penalty
+            expect(placeholders[6]).toBe("2048");      // num_ctx
+            expect(placeholders[7]).toBe("Random");    // seed
         });
     });
 
@@ -833,6 +875,175 @@ describe("LilbeeSettingTab", () => {
             expect(Notice.instances.some((n) => n.message === "Pull cancelled")).toBe(true);
             expect(btn.textContent).toBe("Pull");
             expect(btn.disabled).toBe(false);
+        });
+    });
+
+    describe("Pulling guard", () => {
+        it("pullModel ignores re-entry while pulling", async () => {
+            const plugin = makePlugin();
+            let resolve!: () => void;
+            const blockingPromise = new Promise<void>((r) => { resolve = r; });
+            async function* slowPull() {
+                await blockingPromise;
+                yield { status: "success" };
+            }
+            (plugin.ollama.pull as ReturnType<typeof vi.fn>).mockReturnValue(slowPull());
+            (plugin.api.setChatModel as ReturnType<typeof vi.fn>).mockResolvedValue({ model: "phi3" });
+            (plugin.api.listModels as ReturnType<typeof vi.fn>).mockResolvedValue(makeModelsResponse());
+
+            const tab = makeTab(plugin);
+            const table = new MockElement("table") as unknown as HTMLTableElement;
+            const model = makeModelsResponse().chat.catalog[1]; // phi3 — uninstalled
+
+            (tab as any).renderCatalogRow(table, model, "chat");
+            const row = (table as unknown as MockElement).children[0];
+            const actionCell = row.children[3];
+            const btn = actionCell.children[0];
+
+            const modelsContainer = new MockElement("div");
+            modelsContainer.classList.add("lilbee-models-container");
+            tab.containerEl.children.push(modelsContainer);
+
+            // Start pull
+            const pullPromise = btn.trigger("click");
+            // Second click should be ignored
+            await btn.trigger("click");
+
+            expect(plugin.ollama.pull).toHaveBeenCalledTimes(1);
+            resolve();
+            await pullPromise;
+        });
+
+        it("autoPullAndSet ignores re-entry while pulling", async () => {
+            const plugin = makePlugin();
+            let resolve!: () => void;
+            const blockingPromise = new Promise<void>((r) => { resolve = r; });
+            async function* slowPull() {
+                await blockingPromise;
+                yield { status: "success" };
+            }
+            (plugin.ollama.pull as ReturnType<typeof vi.fn>).mockReturnValue(slowPull());
+            (plugin.api.setChatModel as ReturnType<typeof vi.fn>).mockResolvedValue({ model: "phi3" });
+            (plugin.api.listModels as ReturnType<typeof vi.fn>).mockResolvedValue(makeModelsResponse());
+
+            const tab = makeTab(plugin);
+            const container = new MockElement("div") as unknown as HTMLElement;
+
+            const { dropdownOnChanges } = captureSettingCallbacks(() => {
+                (tab as any).renderModelSection(container, "Chat Model", makeModelsResponse().chat, "chat");
+            });
+
+            // Start auto-pull (phi3 is uninstalled)
+            const pullPromise = dropdownOnChanges[0]("phi3");
+            // Second attempt should be ignored
+            await dropdownOnChanges[0]("phi3");
+
+            expect(plugin.ollama.pull).toHaveBeenCalledTimes(1);
+            resolve();
+            await pullPromise;
+        });
+    });
+
+    describe("Auto-pull cancel banner", () => {
+        it("shows cancel banner during auto-pull and removes it after", async () => {
+            const plugin = makePlugin();
+            async function* fakePull() {
+                yield { status: "pulling", completed: 50, total: 100 };
+                yield { status: "success" };
+            }
+            (plugin.ollama.pull as ReturnType<typeof vi.fn>).mockReturnValue(fakePull());
+            (plugin.api.setChatModel as ReturnType<typeof vi.fn>).mockResolvedValue({ model: "phi3" });
+            (plugin.api.listModels as ReturnType<typeof vi.fn>).mockResolvedValue(makeModelsResponse());
+
+            const tab = makeTab(plugin);
+            const container = new MockElement("div") as unknown as HTMLElement;
+
+            const { dropdownOnChanges } = captureSettingCallbacks(() => {
+                (tab as any).renderModelSection(container, "Chat Model", makeModelsResponse().chat, "chat");
+            });
+
+            await dropdownOnChanges[0]("phi3");
+
+            // Banner should be removed after pull completes
+            const banner = (container as unknown as MockElement).children.find(
+                (c) => c.classList.contains("lilbee-pull-banner"),
+            );
+            expect(banner).toBeUndefined();
+        });
+
+        it("clicking cancel on auto-pull banner aborts and shows notice", async () => {
+            const plugin = makePlugin();
+            let resolveWait!: () => void;
+            const waitPromise = new Promise<void>((r) => { resolveWait = r; });
+            async function* slowPull(_name: string, signal: AbortSignal) {
+                yield { status: "pulling", completed: 10, total: 100 };
+                await waitPromise;
+                if (signal.aborted) {
+                    const err = new Error("The operation was aborted");
+                    err.name = "AbortError";
+                    throw err;
+                }
+                yield { status: "success" };
+            }
+            (plugin.ollama.pull as ReturnType<typeof vi.fn>).mockImplementation(
+                (name: string, signal: AbortSignal) => slowPull(name, signal),
+            );
+
+            const tab = makeTab(plugin);
+            const container = new MockElement("div") as unknown as HTMLElement;
+
+            const { dropdownOnChanges } = captureSettingCallbacks(() => {
+                (tab as any).renderModelSection(container, "Chat Model", makeModelsResponse().chat, "chat");
+            });
+
+            const pullPromise = dropdownOnChanges[0]("phi3");
+            await new Promise((r) => setTimeout(r, 0));
+
+            // Find the cancel button in the banner
+            const banner = (container as unknown as MockElement).children.find(
+                (c) => c.classList.contains("lilbee-pull-banner"),
+            );
+            expect(banner).toBeDefined();
+            const cancelBtn = banner!.children.find((c) => c.textContent === "Cancel");
+            expect(cancelBtn).toBeDefined();
+            cancelBtn!.trigger("click");
+            resolveWait();
+            await pullPromise;
+
+            expect(Notice.instances.some((n) => n.message === "Pull cancelled")).toBe(true);
+        });
+
+        it("auto-pull banner label updates with progress percentage", async () => {
+            const plugin = makePlugin();
+            let resolveWait!: () => void;
+            const waitPromise = new Promise<void>((r) => { resolveWait = r; });
+            let bannerLabel: MockElement | undefined;
+            async function* slowPull() {
+                yield { status: "pulling", completed: 75, total: 100 };
+                // Capture the label text at this point
+                bannerLabel = (container as unknown as MockElement).children
+                    .find((c) => c.classList.contains("lilbee-pull-banner"))
+                    ?.children.find((c) => c.tagName === "SPAN");
+                await waitPromise;
+                yield { status: "success" };
+            }
+            (plugin.ollama.pull as ReturnType<typeof vi.fn>).mockReturnValue(slowPull());
+            (plugin.api.setChatModel as ReturnType<typeof vi.fn>).mockResolvedValue({ model: "phi3" });
+            (plugin.api.listModels as ReturnType<typeof vi.fn>).mockResolvedValue(makeModelsResponse());
+
+            const tab = makeTab(plugin);
+            const container = new MockElement("div") as unknown as HTMLElement;
+
+            const { dropdownOnChanges } = captureSettingCallbacks(() => {
+                (tab as any).renderModelSection(container, "Chat Model", makeModelsResponse().chat, "chat");
+            });
+
+            const pullPromise = dropdownOnChanges[0]("phi3");
+            await new Promise((r) => setTimeout(r, 0));
+
+            expect(bannerLabel?.textContent).toContain("75%");
+            resolveWait();
+            await pullPromise;
         });
     });
 

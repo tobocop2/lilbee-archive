@@ -56,6 +56,7 @@ export { SEPARATOR_KEY, SEPARATOR_LABEL };
 
 export class LilbeeSettingTab extends PluginSettingTab {
     plugin: LilbeePlugin;
+    private pulling = false;
 
     constructor(app: App, plugin: LilbeePlugin) {
         super(app, plugin);
@@ -122,7 +123,7 @@ export class LilbeeSettingTab extends PluginSettingTab {
     private renderModelsSection(containerEl: HTMLElement): void {
         containerEl.createEl("h3", { text: "Models" });
         containerEl.createEl("p", {
-            text: "Manage chat and vision models. Requires the lilbee server to be running.",
+            text: "Curated catalog — see ollama.com/library for the full model list. Requires the lilbee server.",
             cls: "setting-item-description",
         });
 
@@ -156,24 +157,25 @@ export class LilbeeSettingTab extends PluginSettingTab {
     }
 
     private renderGenerationSettings(containerEl: HTMLElement): void {
-        containerEl.createEl("h3", { text: "Generation" });
+        const details = containerEl.createEl("details", { cls: "lilbee-generation-details" });
+        details.createEl("summary", { text: "Generation settings" });
 
-        const fields: { key: keyof Pick<import("./types").LilbeeSettings, "temperature" | "top_p" | "top_k_sampling" | "repeat_penalty" | "num_ctx" | "seed">; name: string; desc: string; integer: boolean }[] = [
-            { key: "temperature", name: "Temperature", desc: "Controls randomness (0.0–2.0)", integer: false },
-            { key: "top_p", name: "Top P", desc: "Nucleus sampling threshold (0.0–1.0)", integer: false },
-            { key: "top_k_sampling", name: "Top K (sampling)", desc: "Limits token choices per step", integer: true },
-            { key: "repeat_penalty", name: "Repeat penalty", desc: "Penalizes repeated tokens (1.0+)", integer: false },
-            { key: "num_ctx", name: "Context length", desc: "Max context window in tokens", integer: true },
-            { key: "seed", name: "Seed", desc: "Fixed seed for reproducible output", integer: true },
+        const fields: { key: keyof Pick<import("./types").LilbeeSettings, "temperature" | "top_p" | "top_k_sampling" | "repeat_penalty" | "num_ctx" | "seed">; name: string; desc: string; integer: boolean; placeholder: string }[] = [
+            { key: "temperature", name: "Temperature", desc: "Controls randomness (0.0–2.0)", integer: false, placeholder: "0.8" },
+            { key: "top_p", name: "Top P", desc: "Nucleus sampling threshold (0.0–1.0)", integer: false, placeholder: "0.9" },
+            { key: "top_k_sampling", name: "Top K (sampling)", desc: "Limits token choices per step", integer: true, placeholder: "40" },
+            { key: "repeat_penalty", name: "Repeat penalty", desc: "Penalizes repeated tokens (1.0+)", integer: false, placeholder: "1.1" },
+            { key: "num_ctx", name: "Context length", desc: "Max context window in tokens", integer: true, placeholder: "2048" },
+            { key: "seed", name: "Seed", desc: "Fixed seed for reproducible output", integer: true, placeholder: "Random" },
         ];
 
         for (const field of fields) {
-            new Setting(containerEl)
+            new Setting(details)
                 .setName(field.name)
                 .setDesc(field.desc)
                 .addText((text) =>
                     text
-                        .setPlaceholder("Model default")
+                        .setPlaceholder(field.placeholder)
                         .setValue(this.plugin.settings[field.key] !== null ? String(this.plugin.settings[field.key]) : "")
                         .onChange(async (value) => {
                             const trimmed = value.trim();
@@ -325,8 +327,14 @@ export class LilbeeSettingTab extends PluginSettingTab {
         type: "chat" | "vision",
         container: HTMLElement,
     ): Promise<void> {
+        if (this.pulling) return;
+        this.pulling = true;
         new Notice(`Pulling ${model.name}...`);
         const controller = new AbortController();
+        const banner = container.createDiv("lilbee-pull-banner");
+        const label = banner.createEl("span", { text: `Pulling ${model.name}...` });
+        const cancelBtn = banner.createEl("button", { text: "Cancel", cls: "lilbee-pull-banner-cancel" });
+        cancelBtn.addEventListener("click", () => controller.abort(), { once: true });
         try {
             for await (const progress of this.plugin.ollama.pull(
                 model.name,
@@ -334,6 +342,7 @@ export class LilbeeSettingTab extends PluginSettingTab {
             )) {
                 if (progress.total && progress.completed !== undefined) {
                     const pct = Math.round((progress.completed / progress.total) * 100);
+                    label.textContent = `Pulling ${model.name} — ${pct}%`;
                     if (this.plugin.statusBarEl) {
                         this.plugin.statusBarEl.setText(
                             `lilbee: pulling ${model.name} — ${pct}%`,
@@ -358,6 +367,9 @@ export class LilbeeSettingTab extends PluginSettingTab {
             } else {
                 new Notice(`Failed to pull ${model.name}`);
             }
+        } finally {
+            banner.remove();
+            this.pulling = false;
         }
     }
 
@@ -390,10 +402,10 @@ export class LilbeeSettingTab extends PluginSettingTab {
         model: ModelInfo,
         type: "chat" | "vision",
     ): Promise<void> {
+        if (this.pulling) return;
+        this.pulling = true;
         const controller = new AbortController();
-        (btn as HTMLButtonElement).disabled = true;
         btn.textContent = "Cancel";
-        (btn as HTMLButtonElement).disabled = false;
         btn.addEventListener("click", () => controller.abort(), { once: true });
         try {
             const progress = actionCell.createDiv("lilbee-pull-progress");
@@ -428,6 +440,8 @@ export class LilbeeSettingTab extends PluginSettingTab {
             }
             (btn as HTMLButtonElement).disabled = false;
             btn.textContent = "Pull";
+        } finally {
+            this.pulling = false;
         }
     }
 

@@ -591,13 +591,9 @@ def serve(
     if port is not None:
         cfg.server_port = port
 
-    import logging
-
     import uvicorn
 
     from lilbee.server import create_app
-
-    logging.getLogger("asyncio").setLevel(logging.ERROR)
 
     uvicorn.run(
         create_app(),

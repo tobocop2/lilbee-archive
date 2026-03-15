@@ -1,6 +1,6 @@
 import { App, Notice, PluginSettingTab, setIcon, Setting } from "obsidian";
 import type LilbeePlugin from "./main";
-import type { ModelCatalog, ModelInfo, ModelsResponse } from "./types";
+import type { ModelCatalog, ModelInfo, ModelsResponse, OllamaModelDefaults } from "./types";
 
 const CHECK_TIMEOUT_MS = 5000;
 const CLS_MODELS_CONTAINER = "lilbee-models-container";
@@ -54,9 +54,20 @@ export function buildModelOptions(
 
 export { SEPARATOR_KEY, SEPARATOR_LABEL };
 
+type GenKey = "temperature" | "top_p" | "top_k_sampling" | "repeat_penalty" | "num_ctx" | "seed";
+const GEN_DEFAULTS_MAP: Record<GenKey, keyof OllamaModelDefaults> = {
+    temperature: "temperature",
+    top_p: "top_p",
+    top_k_sampling: "top_k",
+    repeat_penalty: "repeat_penalty",
+    num_ctx: "num_ctx",
+    seed: "seed",
+};
+
 export class LilbeeSettingTab extends PluginSettingTab {
     plugin: LilbeePlugin;
     private pulling = false;
+    private genInputs: Map<GenKey, HTMLInputElement> = new Map();
 
     constructor(app: App, plugin: LilbeePlugin) {
         super(app, plugin);
@@ -72,6 +83,7 @@ export class LilbeeSettingTab extends PluginSettingTab {
         this.renderGeneralSettings(containerEl);
         this.renderGenerationSettings(containerEl);
         this.renderSyncSettings(containerEl);
+        this.loadModelDefaults();
     }
 
     private renderConnectionSettings(containerEl: HTMLElement): void {
@@ -158,24 +170,26 @@ export class LilbeeSettingTab extends PluginSettingTab {
 
     private renderGenerationSettings(containerEl: HTMLElement): void {
         const details = containerEl.createEl("details", { cls: "lilbee-generation-details" });
-        details.createEl("summary", { text: "Generation settings" });
+        const modelLabel = this.plugin.activeModel || "no model selected";
+        details.createEl("summary", { text: `Advanced settings (${modelLabel})` });
 
-        const fields: { key: keyof Pick<import("./types").LilbeeSettings, "temperature" | "top_p" | "top_k_sampling" | "repeat_penalty" | "num_ctx" | "seed">; name: string; desc: string; integer: boolean; placeholder: string }[] = [
-            { key: "temperature", name: "Temperature", desc: "Controls randomness (0.0–2.0)", integer: false, placeholder: "0.8" },
-            { key: "top_p", name: "Top P", desc: "Nucleus sampling threshold (0.0–1.0)", integer: false, placeholder: "0.9" },
-            { key: "top_k_sampling", name: "Top K (sampling)", desc: "Limits token choices per step", integer: true, placeholder: "40" },
-            { key: "repeat_penalty", name: "Repeat penalty", desc: "Penalizes repeated tokens (1.0+)", integer: false, placeholder: "1.1" },
-            { key: "num_ctx", name: "Context length", desc: "Max context window in tokens", integer: true, placeholder: "2048" },
-            { key: "seed", name: "Seed", desc: "Fixed seed for reproducible output", integer: true, placeholder: "Random" },
+        this.genInputs.clear();
+        const fields: { key: GenKey; name: string; desc: string; integer: boolean }[] = [
+            { key: "temperature", name: "Temperature", desc: "Controls randomness (0.0–2.0)", integer: false },
+            { key: "top_p", name: "Top P", desc: "Nucleus sampling threshold (0.0–1.0)", integer: false },
+            { key: "top_k_sampling", name: "Top K (sampling)", desc: "Limits token choices per step", integer: true },
+            { key: "repeat_penalty", name: "Repeat penalty", desc: "Penalizes repeated tokens (1.0+)", integer: false },
+            { key: "num_ctx", name: "Context length", desc: "Max context window in tokens", integer: true },
+            { key: "seed", name: "Seed", desc: "Fixed seed for reproducible output", integer: true },
         ];
 
         for (const field of fields) {
             new Setting(details)
                 .setName(field.name)
                 .setDesc(field.desc)
-                .addText((text) =>
+                .addText((text) => {
                     text
-                        .setPlaceholder(field.placeholder)
+                        .setPlaceholder("Not set")
                         .setValue(this.plugin.settings[field.key] !== null ? String(this.plugin.settings[field.key]) : "")
                         .onChange(async (value) => {
                             const trimmed = value.trim();
@@ -188,9 +202,26 @@ export class LilbeeSettingTab extends PluginSettingTab {
                                 }
                             }
                             await this.plugin.saveSettings();
-                        }),
-                );
+                        });
+                    this.genInputs.set(field.key, text.inputEl);
+                });
         }
+    }
+
+    private loadModelDefaults(): void {
+        const model = this.plugin.activeModel;
+        if (!model) return;
+        this.plugin.ollama.show(model).then((defaults) => {
+            for (const [key, inputEl] of this.genInputs) {
+                const ollamaKey = GEN_DEFAULTS_MAP[key];
+                const val = defaults[ollamaKey];
+                if (val !== undefined) {
+                    inputEl.placeholder = String(val);
+                }
+            }
+        }).catch(() => {
+            // Ollama unreachable — leave "Not set" placeholders
+        });
     }
 
     private renderSyncSettings(containerEl: HTMLElement): void {

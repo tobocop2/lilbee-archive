@@ -16,6 +16,7 @@ function makePlugin(overrides: Partial<LilbeeSettings> = {}) {
     const ollama = {
         pull: vi.fn(),
         delete: vi.fn(),
+        show: vi.fn().mockRejectedValue(new Error("no model")),
     };
     const saveSettings = vi.fn().mockResolvedValue(undefined);
     const statusBarEl = { setText: vi.fn(), textContent: "" };
@@ -80,6 +81,7 @@ function captureSettingCallbacks(fn: () => void): Captured {
             setPlaceholder: () => fakeText,
             setValue: () => fakeText,
             onChange: (handler: TextOnChange) => { textOnChanges.push(handler); return fakeText; },
+            inputEl: { placeholder: "" },
         };
         cb(fakeText);
         return this;
@@ -397,6 +399,7 @@ describe("LilbeeSettingTab", () => {
                     setPlaceholder: () => fakeText,
                     setValue: (v: string) => { setValues.push(v); return fakeText; },
                     onChange: () => fakeText,
+                    inputEl: { placeholder: "" },
                 };
                 cb(fakeText);
                 return this;
@@ -419,10 +422,10 @@ describe("LilbeeSettingTab", () => {
             );
             expect(details).toBeDefined();
             const summary = details!.children.find((c) => c.tagName === "SUMMARY");
-            expect(summary?.textContent).toBe("Generation settings");
+            expect(summary?.textContent).toBe("Advanced settings (no model selected)");
         });
 
-        it("uses specific placeholder defaults instead of 'Model default'", () => {
+        it("uses 'Not set' placeholders before model defaults load", () => {
             const plugin = makePlugin();
             (plugin.api.listModels as ReturnType<typeof vi.fn>).mockResolvedValue(makeModelsResponse());
             const tab = makeTab(plugin);
@@ -434,6 +437,7 @@ describe("LilbeeSettingTab", () => {
                     setPlaceholder: (v: string) => { placeholders.push(v); return fakeText; },
                     setValue: () => fakeText,
                     onChange: () => fakeText,
+                    inputEl: { placeholder: "" },
                 };
                 cb(fakeText);
                 return this;
@@ -443,12 +447,43 @@ describe("LilbeeSettingTab", () => {
             Setting.prototype.addText = origAddText;
 
             // Indices 2-7 are generation fields (0=serverUrl, 1=ollamaUrl)
-            expect(placeholders[2]).toBe("0.8");       // temperature
-            expect(placeholders[3]).toBe("0.9");       // top_p
-            expect(placeholders[4]).toBe("40");        // top_k_sampling
-            expect(placeholders[5]).toBe("1.1");       // repeat_penalty
-            expect(placeholders[6]).toBe("2048");      // num_ctx
-            expect(placeholders[7]).toBe("Random");    // seed
+            for (let i = 2; i <= 7; i++) {
+                expect(placeholders[i]).toBe("Not set");
+            }
+        });
+
+        it("populates placeholders from active model defaults", async () => {
+            const plugin = makePlugin();
+            (plugin as any).activeModel = "llama3";
+            (plugin.api.listModels as ReturnType<typeof vi.fn>).mockResolvedValue(makeModelsResponse());
+            (plugin.ollama.show as ReturnType<typeof vi.fn>).mockResolvedValue({
+                temperature: 0.6,
+                top_p: 0.9,
+                top_k: 40,
+                repeat_penalty: 1.1,
+                num_ctx: 8192,
+            });
+
+            const tab = makeTab(plugin);
+            tab.display();
+
+            // Wait for async loadModelDefaults to resolve
+            await new Promise((r) => setTimeout(r, 0));
+
+            expect(plugin.ollama.show).toHaveBeenCalledWith("llama3");
+        });
+
+        it("shows model name in summary when active model is set", () => {
+            const plugin = makePlugin();
+            (plugin as any).activeModel = "llama3";
+            (plugin.api.listModels as ReturnType<typeof vi.fn>).mockResolvedValue(makeModelsResponse());
+            const tab = makeTab(plugin);
+            tab.display();
+            const details = tab.containerEl.children.find(
+                (c) => c.tagName === "DETAILS" && c.classList.contains("lilbee-generation-details"),
+            );
+            const summary = details!.children.find((c) => c.tagName === "SUMMARY");
+            expect(summary?.textContent).toBe("Advanced settings (llama3)");
         });
     });
 

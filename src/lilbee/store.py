@@ -2,6 +2,7 @@
 
 import logging
 from datetime import UTC, datetime
+from typing import Required
 
 import lancedb
 import pyarrow as pa
@@ -17,17 +18,22 @@ _fts_index_ready = False
 
 
 class SearchChunk(TypedDict, total=False):
-    """A search result row from LanceDB — chunk fields plus score/distance."""
+    """A search result row from LanceDB — chunk fields plus score/distance.
 
-    source: str
-    content_type: str
-    page_start: int
-    page_end: int
-    line_start: int
-    line_end: int
-    chunk: str
-    chunk_index: int
-    vector: list[float]
+    Core fields are Required (always present).  Score fields are optional
+    because hybrid results carry ``_relevance_score`` while vector-only
+    results carry ``_distance``.
+    """
+
+    source: Required[str]
+    content_type: Required[str]
+    page_start: Required[int]
+    page_end: Required[int]
+    line_start: Required[int]
+    line_end: Required[int]
+    chunk: Required[str]
+    chunk_index: Required[int]
+    vector: Required[list[float]]
     _distance: float
     _relevance_score: float
 
@@ -168,7 +174,6 @@ def search(
     Results with distance > max_distance are filtered out (vector-only path).
     Pass max_distance=0 to disable filtering.
     """
-    global _fts_index_ready
     if top_k is None:
         top_k = cfg.top_k
     if max_distance is None:

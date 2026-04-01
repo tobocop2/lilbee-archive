@@ -1552,6 +1552,40 @@ async def test_catalog_cycle_sort_in_input_ignored():
             assert screen._current_sort == "downloads"
 
 
+async def test_catalog_sort_label_shows_filter_text():
+    from lilbee.cli.tui.screens.catalog import CatalogScreen
+
+    app = CatalogTestApp()
+    async with app.run_test(size=(120, 40)) as _pilot:
+        with _patch_catalog()[0], _patch_catalog()[1]:
+            screen = CatalogScreen()
+            app.push_screen(screen)
+            await _pilot.pause()
+            from textual.widgets import Input, Static
+
+            filter_input = screen.query_one("#catalog-search", Input)
+            filter_input.display = True
+            filter_input.value = "qwen"
+            await _pilot.pause()
+            label = screen.query_one("#sort-label", Static)
+            assert 'Filter: "qwen"' in label.content
+
+
+async def test_catalog_sort_label_no_filter_when_empty():
+    from lilbee.cli.tui.screens.catalog import CatalogScreen
+
+    app = CatalogTestApp()
+    async with app.run_test(size=(120, 40)) as _pilot:
+        with _patch_catalog()[0], _patch_catalog()[1]:
+            screen = CatalogScreen()
+            app.push_screen(screen)
+            await _pilot.pause()
+            from textual.widgets import Static
+
+            label = screen.query_one("#sort-label", Static)
+            assert "Filter:" not in label.content
+
+
 async def test_catalog_pop_screen():
     from lilbee.cli.tui.screens.catalog import CatalogScreen
 
@@ -3796,3 +3830,19 @@ async def test_app_switch_to_tasks():
         app._switch_view("Tasks")
         await pilot.pause()
         assert isinstance(app.screen, TaskCenter)
+
+
+async def test_catalog_navbar_is_first_child():
+    """NavBar is yielded first (top dock) in CatalogScreen compose."""
+    from lilbee.cli.tui.screens.catalog import CatalogScreen
+
+    app = CatalogTestApp()
+    async with app.run_test(size=(120, 40)) as _pilot:
+        with _patch_catalog()[0], _patch_catalog()[1]:
+            screen = CatalogScreen()
+            app.push_screen(screen)
+            await _pilot.pause()
+            from lilbee.cli.tui.widgets.nav_bar import NavBar
+
+            first = screen.children[0]
+            assert isinstance(first, NavBar)

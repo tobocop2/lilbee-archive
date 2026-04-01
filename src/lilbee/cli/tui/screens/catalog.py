@@ -206,6 +206,7 @@ class CatalogScreen(Screen[None]):
         self._pending_delete: str | None = None
 
     def compose(self) -> ComposeResult:
+        yield NavBar(id="global-nav-bar")
         yield Header()
         yield Static(f"Sort: {_SORT_LABELS[self._current_sort]}", id="sort-label", shrink=True)
         with TabbedContent(*TASK_TABS, id="catalog-tabs"):
@@ -215,7 +216,6 @@ class CatalogScreen(Screen[None]):
         yield Input(placeholder=msg.CATALOG_FILTER_PLACEHOLDER, id="catalog-search")
         yield Static("", id="model-detail")
         yield Footer()
-        yield NavBar(id="global-nav-bar")
 
     def on_mount(self) -> None:
         self.query_one("#catalog-search", Input).display = False
@@ -337,13 +337,18 @@ class CatalogScreen(Screen[None]):
             if not families and not remote and not hf:
                 lv.append(ListItem(Label(msg.CATALOG_NO_MATCH)))
 
+        self._update_sort_label(search)
+
+    def _update_sort_label(self, search: str) -> None:
+        """Update the status line with sort, filter, and model counts."""
         n_featured = sum(len(f.variants) for f in self._families)
         n_hf = len(self._hf_models)
         n_remote = len(self._remote_models)
         total = n_featured + n_hf + n_remote
         more = "+" if self._hf_has_more else ""
+        filter_part = f'  Filter: "{search}"  |' if search else ""
         self.query_one("#sort-label", Static).update(
-            f"Sort: {_SORT_LABELS[self._current_sort]}  |  "
+            f"Sort: {_SORT_LABELS[self._current_sort]}  |{filter_part}  "
             f"Showing {total}{more} models "
             f"({n_featured} featured, {n_hf} HF, {n_remote} remote)"
         )

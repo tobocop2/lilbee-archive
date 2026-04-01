@@ -18,7 +18,7 @@ log = logging.getLogger(__name__)
 _DISABLED = Select.NULL
 
 
-class ModelBar(Widget):
+class ModelBar(Widget, can_focus=True):
     """Compact bar with Select dropdowns for active model assignments."""
 
     DEFAULT_CSS = """

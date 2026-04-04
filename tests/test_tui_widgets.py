@@ -1854,3 +1854,138 @@ class TestEvents:
 
         msg = CatalogViewToggled("grid")
         assert msg.view_mode == "grid"
+
+
+# ---------------------------------------------------------------------------
+# grid_select.py
+# ---------------------------------------------------------------------------
+
+
+class _GridApp(App):
+    def compose(self) -> ComposeResult:
+        from lilbee.cli.tui.widgets.grid_select import GridSelect
+
+        items = [Static(f"Item {i}", classes="grid-item") for i in range(6)]
+        yield GridSelect(*items, id="gs", min_column_width=20)
+
+
+class TestGridSelect:
+    async def test_focus_sets_highlighted_zero(self) -> None:
+        from lilbee.cli.tui.widgets.grid_select import GridSelect
+
+        app = _GridApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            gs = app.query_one("#gs", GridSelect)
+            gs.focus()
+            await pilot.pause()
+            assert gs.highlighted == 0
+
+    async def test_blur_clears_highlighted(self) -> None:
+        from lilbee.cli.tui.widgets.grid_select import GridSelect
+
+        app = _GridApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            gs = app.query_one("#gs", GridSelect)
+            gs.focus()
+            await pilot.pause()
+            gs.blur()
+            await pilot.pause()
+            assert gs.highlighted is None
+
+    async def test_cursor_right_increments(self) -> None:
+        from lilbee.cli.tui.widgets.grid_select import GridSelect
+
+        app = _GridApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            gs = app.query_one("#gs", GridSelect)
+            gs.focus()
+            await pilot.pause()
+            gs.action_cursor_right()
+            assert gs.highlighted == 1
+
+    async def test_validate_clamps(self) -> None:
+        from lilbee.cli.tui.widgets.grid_select import GridSelect
+
+        app = _GridApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            gs = app.query_one("#gs", GridSelect)
+            assert gs.validate_highlighted(-5) == 0
+            assert gs.validate_highlighted(999) == 5
+            assert gs.validate_highlighted(None) is None
+
+    async def test_highlight_class_toggled(self) -> None:
+        from lilbee.cli.tui.widgets.grid_select import GridSelect
+
+        app = _GridApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            gs = app.query_one("#gs", GridSelect)
+            gs.focus()
+            await pilot.pause()
+            assert "-highlight" in gs.children[0].classes
+            gs.action_cursor_right()
+            await pilot.pause()
+            assert "-highlight" not in gs.children[0].classes
+            assert "-highlight" in gs.children[1].classes
+
+
+# ---------------------------------------------------------------------------
+# model_card.py
+# ---------------------------------------------------------------------------
+
+
+class TestModelCard:
+    def test_card_has_row_property(self) -> None:
+        from lilbee.cli.tui.screens.catalog import TableRow
+        from lilbee.cli.tui.widgets.model_card import ModelCard
+
+        row = TableRow(
+            name="Qwen3 8B",
+            task="chat",
+            params="8B",
+            size="4.9 GB",
+            quant="Q4_K_M",
+            downloads="2.1M",
+            featured=True,
+            installed=False,
+            sort_downloads=2_100_000,
+            sort_size=4.9,
+        )
+        card = ModelCard(row)
+        assert card.row is row
+        assert card.row.name == "Qwen3 8B"
+
+    async def test_card_composes_labels(self) -> None:
+        from lilbee.cli.tui.screens.catalog import TableRow
+        from lilbee.cli.tui.widgets.model_card import ModelCard
+
+        row = TableRow(
+            name="TestModel",
+            task="chat",
+            params="7B",
+            size="4.0 GB",
+            quant="Q4_K_M",
+            downloads="100K",
+            featured=False,
+            installed=True,
+            sort_downloads=100_000,
+            sort_size=4.0,
+        )
+
+        class _CardApp(App):
+            def compose(self_app) -> ComposeResult:
+                yield ModelCard(row)
+
+        app = _CardApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            card = app.query_one(ModelCard)
+            assert card.query_one("#card-name") is not None
+            assert card.query_one("#card-task") is not None
+            assert card.query_one("#card-info") is not None
+            # installed → status pill
+            assert card.query_one("#card-status") is not None

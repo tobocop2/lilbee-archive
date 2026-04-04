@@ -14,6 +14,7 @@ from lilbee.cli.tui.screens.catalog import (
     _catalog_to_row,
     _format_downloads,
     _format_size_gb,
+    _group_rows_for_grid,
     _matches_search,
     _parse_param_label,
     _parse_param_size,
@@ -218,6 +219,40 @@ class TestCatalogToRow:
         m = _make_catalog_model(downloads=5000)
         row = _catalog_to_row(m, installed=False)
         assert row.downloads == "5K"
+
+
+class TestGroupRowsForGrid:
+    def _row(
+        self, task: str = "chat", featured: bool = False, installed: bool = False
+    ) -> TableRow:
+        return TableRow(
+            name="test", task=task, params="7B", size="4 GB", quant="Q4",
+            downloads="--", featured=featured, installed=installed,
+            sort_downloads=0, sort_size=4.0,
+        )
+
+    def test_groups_featured_as_recommended(self) -> None:
+        rows = [self._row(featured=True), self._row(featured=False)]
+        groups = dict(_group_rows_for_grid(rows))
+        assert len(groups["Recommended"]) == 1
+        assert len(groups["Chat"]) == 1
+
+    def test_groups_installed_separately(self) -> None:
+        rows = [self._row(installed=True)]
+        groups = dict(_group_rows_for_grid(rows))
+        assert len(groups["Installed"]) == 1
+        assert len(groups["Chat"]) == 0
+
+    def test_groups_by_task(self) -> None:
+        rows = [self._row(task="chat"), self._row(task="embedding"), self._row(task="vision")]
+        groups = dict(_group_rows_for_grid(rows))
+        assert len(groups["Chat"]) == 1
+        assert len(groups["Embedding"]) == 1
+        assert len(groups["Vision"]) == 1
+
+    def test_empty_rows(self) -> None:
+        groups = _group_rows_for_grid([])
+        assert all(len(rows) == 0 for _, rows in groups)
 
 
 class TestMatchesSearch:
@@ -2009,12 +2044,67 @@ async def test_catalog_input_changed_other_input_ignored():
             screen = CatalogScreen()
             app.push_screen(screen)
             await _pilot.pause()
-            with patch.object(screen, "_refresh_table") as mock_refresh:
+            with patch.object(screen, "_refresh_view") as mock_refresh:
                 event = MagicMock()
                 event.input = MagicMock()
                 event.input.id = "other-input"
                 screen.on_input_changed(event)
                 mock_refresh.assert_not_called()
+
+
+async def test_catalog_default_grid_view():
+    from lilbee.cli.tui.screens.catalog import CatalogScreen
+
+    app = CatalogTestApp()
+    async with app.run_test(size=(120, 40)) as _pilot:
+        with _patch_catalog()[0], _patch_catalog()[1], _patch_catalog()[2]:
+            screen = CatalogScreen()
+            app.push_screen(screen)
+            await _pilot.pause()
+            assert screen._grid_view is True
+            assert screen.has_class("-grid-view")
+            assert not screen.has_class("-list-view")
+
+
+async def test_catalog_toggle_to_list_and_back():
+    from lilbee.cli.tui.screens.catalog import CatalogScreen
+
+    app = CatalogTestApp()
+    async with app.run_test(size=(120, 40)) as _pilot:
+        with _patch_catalog()[0], _patch_catalog()[1], _patch_catalog()[2]:
+            screen = CatalogScreen()
+            app.push_screen(screen)
+            await _pilot.pause()
+            # Toggle to list
+            screen.action_toggle_view()
+            await _pilot.pause()
+            assert screen._grid_view is False
+            assert screen.has_class("-list-view")
+            assert not screen.has_class("-grid-view")
+            # Toggle back to grid
+            screen.action_toggle_view()
+            await _pilot.pause()
+            assert screen._grid_view is True
+            assert screen.has_class("-grid-view")
+
+
+async def test_catalog_lazy_hf_fetch():
+    """HF API not called on mount, only on first list view switch."""
+    from lilbee.cli.tui.screens.catalog import CatalogScreen
+
+    app = CatalogTestApp()
+    async with app.run_test(size=(120, 40)) as _pilot:
+        with _patch_catalog()[0] as mock_cat, _patch_catalog()[1], _patch_catalog()[2]:
+            screen = CatalogScreen()
+            app.push_screen(screen)
+            await _pilot.pause()
+            # Grid view on mount — no HF fetch
+            assert not screen._hf_fetched
+            mock_cat.assert_not_called()
+            # Switch to list triggers fetch
+            screen.action_toggle_view()
+            await _pilot.pause()
+            assert screen._hf_fetched
 
 
 async def test_catalog_row_selected_out_of_range():

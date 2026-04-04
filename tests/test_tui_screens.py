@@ -1993,7 +1993,7 @@ async def test_catalog_input_changed_refreshes():
             from textual.widgets import Input
 
             inp = screen.query_one("#catalog-search", Input)
-            with patch.object(screen, "_refresh_table") as mock_refresh:
+            with patch.object(screen, "_refresh_view") as mock_refresh:
                 event = MagicMock()
                 event.input = inp
                 screen.on_input_changed(event)

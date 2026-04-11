@@ -1010,7 +1010,14 @@ class TestCatalogInteractions:
                 assert app.screen.has_class("-grid-view")
 
     async def test_v_toggles_to_list_and_back(self, _mock_resolve):
-        """Press v: grid->list, v again: list->grid."""
+        """Press v: grid->list, v again: list->grid.
+
+        Exercises the actual key binding end-to-end via `pilot.press("v")`
+        so the footer-advertised shortcut is verified, not just the
+        `action_toggle_view` method.
+        """
+        from textual.widgets import DataTable
+
         from lilbee.cli.tui.app import LilbeeApp
 
         with _mock_catalog_deps(), _mock_remote_models():
@@ -1021,16 +1028,57 @@ class TestCatalogInteractions:
                 await pilot.pause()
 
                 assert app.screen.has_class("-grid-view")
+                grid = app.screen.query_one("#catalog-grid")
+                table = app.screen.query_one("#catalog-table", DataTable)
+                assert grid.display is True
+                assert table.display is False
 
-                app.screen.action_toggle_view()
+                await pilot.press("v")
                 await pilot.pause()
                 assert app.screen.has_class("-list-view")
                 assert not app.screen.has_class("-grid-view")
+                assert grid.display is False
+                assert table.display is True
 
-                app.screen.action_toggle_view()
+                await pilot.press("v")
                 await pilot.pause()
                 assert app.screen.has_class("-grid-view")
                 assert not app.screen.has_class("-list-view")
+                assert grid.display is True
+                assert table.display is False
+
+    async def test_v_toggle_after_bracket_nav_from_chat(self, _mock_resolve):
+        """Regression: the footer advertises `v` as the view toggle, and the
+        bead repro walks in via `]` from ChatScreen. Make sure the keystroke
+        dispatched through the real binding path actually flips the view.
+        """
+        from textual.widgets import DataTable
+
+        from lilbee.cli.tui.app import LilbeeApp
+        from lilbee.cli.tui.screens.catalog import CatalogScreen
+
+        with _mock_catalog_deps(), _mock_remote_models():
+            app = LilbeeApp()
+            async with app.run_test(size=(120, 40)) as pilot:
+                await pilot.pause()
+                # ChatScreen auto-focuses the insert-mode input; leave it
+                # before reaching for the screen-level nav keys.
+                await pilot.press("escape")
+                await pilot.press("right_square_bracket")
+                await pilot.pause()
+                assert isinstance(app.screen, CatalogScreen)
+                assert app.screen.has_class("-grid-view")
+
+                grid = app.screen.query_one("#catalog-grid")
+                table = app.screen.query_one("#catalog-table", DataTable)
+                assert grid.display is True
+                assert table.display is False
+
+                await pilot.press("v")
+                await pilot.pause()
+                assert app.screen.has_class("-list-view")
+                assert grid.display is False
+                assert table.display is True
 
     async def test_search_filters_cards_in_grid_view(self, _mock_resolve):
         """Type search text in grid view, verify cards filter by visibility."""
@@ -1205,7 +1253,7 @@ class TestCatalogInteractions:
                 app.switch_view("Catalog")
                 await pilot.pause()
 
-                app.screen.action_toggle_view()
+                await pilot.press("v")
                 await pilot.pause()
 
                 table = app.screen.query_one("#catalog-table", DataTable)
@@ -1232,7 +1280,7 @@ class TestCatalogInteractions:
                 await pilot.pause()
                 await pilot.pause()
 
-                app.screen.action_toggle_view()
+                await pilot.press("v")
                 await pilot.pause()
                 await pilot.pause()
 
@@ -1260,7 +1308,7 @@ class TestCatalogInteractions:
                 app.switch_view("Catalog")
                 await pilot.pause()
 
-                app.screen.action_toggle_view()
+                await pilot.press("v")
                 await pilot.pause()
 
                 app.screen.action_page_down()
@@ -1280,7 +1328,7 @@ class TestCatalogInteractions:
                 app.switch_view("Catalog")
                 await pilot.pause()
 
-                app.screen.action_toggle_view()
+                await pilot.press("v")
                 await pilot.pause()
 
                 assert app.screen._sort_column == "Name"
@@ -1324,7 +1372,7 @@ class TestCatalogInteractions:
                 app.switch_view("Catalog")
                 await pilot.pause()
 
-                app.screen.action_toggle_view()
+                await pilot.press("v")
                 await pilot.pause()
 
                 table = app.screen.query_one("#catalog-table", DataTable)
@@ -1348,7 +1396,7 @@ class TestCatalogInteractions:
                 await pilot.pause()
                 app.switch_view("Catalog")
                 await pilot.pause()
-                app.screen.action_toggle_view()
+                await pilot.press("v")
                 await pilot.pause()
                 app.screen.action_delete_model()
                 await pilot.pause()

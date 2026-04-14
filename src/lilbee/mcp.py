@@ -125,7 +125,7 @@ async def add(
     from lilbee.cli.helpers import temporary_ocr_config
 
     with temporary_ocr_config(enable_ocr, ocr_timeout):
-        sync_result = (await run_sync(quiet=True)).model_dump()
+        sync_result = (await run_sync(quiet=True, force=force)).model_dump()
 
     result: dict[str, Any] = {
         "command": "add",

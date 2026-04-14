@@ -576,6 +576,7 @@ async def _ingest_file(
 async def sync(
     force_rebuild: bool = False,
     quiet: bool = False,
+    force: bool = False,
     *,
     on_progress: DetailedProgressCallback = noop_callback,
     cancel: threading.Event | None = None,
@@ -621,7 +622,7 @@ async def sync(
         current_hash = file_hash(path)
         old_hash = existing_sources.get(name)
 
-        if old_hash == current_hash:
+        if old_hash == current_hash and not force:
             unchanged += 1
             continue
 

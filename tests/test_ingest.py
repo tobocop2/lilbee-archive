@@ -226,6 +226,19 @@ class TestSync:
         result = await sync(force_rebuild=True)
         assert "keep.txt" in result.added
 
+    async def test_force_reprocesses_unchanged_file(self, mock_extract_file, isolated_env):
+        (isolated_env / "stuck.txt").write_text("Same content")
+        from lilbee.ingest import sync
+
+        result1 = await sync()
+        assert "stuck.txt" in result1.added
+
+        mock_extract_file.reset_mock()
+        result2 = await sync(force=True)
+        assert "stuck.txt" in result2.updated
+        assert result2.unchanged == 0
+        mock_extract_file.assert_called()
+
     async def test_ingest_pdf(self, mock_extract_file, isolated_env):
         from reportlab.lib.pagesizes import letter
         from reportlab.pdfgen import canvas

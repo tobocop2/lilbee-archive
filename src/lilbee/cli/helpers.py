@@ -216,7 +216,7 @@ def add_paths(
         run_sync_background(con, chat_mode=chat_mode, sync_status=sync_status)
         return
 
-    result = asyncio.run(sync())
+    result = asyncio.run(sync(force=force))
     con.print(result)
 
 

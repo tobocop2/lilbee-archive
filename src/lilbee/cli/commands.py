@@ -298,7 +298,7 @@ def add(
             copy_result = CopyResult()
             if file_paths:
                 copy_result = copy_files(file_paths, force=force)
-            result = asyncio.run(sync(quiet=True))
+            result = asyncio.run(sync(quiet=True, force=force))
             json_output(
                 {
                     "command": "add",
@@ -316,7 +316,7 @@ def add(
             # URLs already saved; just trigger sync
             from lilbee.ingest import sync
 
-            result = asyncio.run(sync())
+            result = asyncio.run(sync(force=force))
             console.print(result)
     except RuntimeError as exc:
         if cfg.json_mode:

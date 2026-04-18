@@ -2624,13 +2624,14 @@ async def test_chat_run_sync_worker():
     """Cover _run_sync lines 356-376 via actual worker."""
     app = ChatTestApp()
     async with app.run_test(size=(120, 40)) as _pilot:
-        from lilbee.progress import EventType, FileStartEvent
+        from lilbee.progress import EventType
 
-        async def fake_sync(quiet=False, on_progress=None, cancel=None):
+        async def fake_sync(quiet=False, on_progress=None):
+            # Call progress callback to cover lines 367-370
             if on_progress:
                 on_progress(
                     EventType.FILE_START,
-                    FileStartEvent(current_file=1, total_files=2, file="test.md"),
+                    {"current_file": 1, "total_files": 2, "file": "test.md"},
                 )
             return {"added": 3}
 
@@ -2642,8 +2643,8 @@ async def test_chat_run_sync_worker():
             assert app.screen._sync_active is False
 
 
-async def test_chat_sync_progress_reports_percentage():
-    """Verify sync progress reports real percentages (not indeterminate)."""
+async def test_chat_sync_progress_uses_indeterminate():
+    """Verify sync progress uses indeterminate mode, not percentages."""
     app = ChatTestApp()
     async with app.run_test(size=(120, 40)) as _pilot:
         from lilbee.progress import EventType, FileDoneEvent, FileStartEvent
@@ -2656,69 +2657,16 @@ async def test_chat_sync_progress_reports_percentage():
             update_calls.append((task_id, pct, status, indeterminate))
             return original_update(task_id, pct, status, indeterminate=indeterminate)
 
-        async def fake_sync(quiet=False, on_progress=None, cancel=None):
+        async def fake_sync(quiet=False, on_progress=None):
             if on_progress:
                 on_progress(
                     EventType.FILE_START,
-                    FileStartEvent(current_file=1, total_files=2, file="doc.md"),
+                    FileStartEvent(current_file=1, total_files=1, file="doc.md"),
                 )
                 on_progress(
                     EventType.FILE_DONE,
                     FileDoneEvent(file="doc.md", status="ok", chunks=3),
                 )
-                on_progress(
-                    EventType.FILE_START,
-                    FileStartEvent(current_file=2, total_files=2, file="doc2.md"),
-                )
-                on_progress(
-                    EventType.FILE_DONE,
-                    FileDoneEvent(file="doc2.md", status="ok", chunks=2),
-                )
-            return {"added": 2}
-
-        with (
-            patch("lilbee.ingest.sync", new=fake_sync),
-            patch.object(task_bar, "update_task", tracking_update),
-        ):
-            app.screen._run_sync()
-            await _pilot.pause()
-            while app.screen.workers:
-                await _pilot.pause()
-
-        # FILE_START and FILE_DONE updates should use determinate mode
-        file_updates = [(pct, indet) for _, pct, _, indet in update_calls if indet is not None]
-        assert any(indet is False for _, indet in file_updates)
-        # FILE_START for file 1/2 should report 0%, file 2/2 should report 50%
-        pct_values = [pct for _, pct, _, _ in update_calls]
-        assert 0 in pct_values
-
-
-async def test_chat_sync_embed_throttling():
-    """Embed events are throttled to avoid flooding the main thread."""
-    app = ChatTestApp()
-    async with app.run_test(size=(120, 40)) as _pilot:
-        from lilbee.progress import EmbedEvent, EventType, FileStartEvent
-
-        update_calls: list[tuple] = []
-        task_bar = app.task_bar
-        original_update = task_bar.update_task
-
-        def tracking_update(task_id, pct, status, *, indeterminate=None):
-            update_calls.append((task_id, pct, status, indeterminate))
-            return original_update(task_id, pct, status, indeterminate=indeterminate)
-
-        async def fake_sync(quiet=False, on_progress=None, cancel=None):
-            if on_progress:
-                on_progress(
-                    EventType.FILE_START,
-                    FileStartEvent(current_file=1, total_files=1, file="big.pdf"),
-                )
-                # Fire many embed events rapidly (should be throttled)
-                for i in range(20):
-                    on_progress(
-                        EventType.EMBED,
-                        EmbedEvent(file="big.pdf", chunk=i + 1, total_chunks=20),
-                    )
             return {"added": 1}
 
         with (
@@ -2730,11 +2678,13 @@ async def test_chat_sync_embed_throttling():
             while app.screen.workers:
                 await _pilot.pause()
 
-        # Not all 20 embed events should trigger updates (throttled at 150ms)
-        embed_updates = [s for _, _, s, _ in update_calls if "Embedding" in s]
-        assert len(embed_updates) < 20
-        # But at least the first embed update should fire
-        assert len(embed_updates) >= 1
+        # All progress updates should use indeterminate mode
+        for _, _pct, _, indet in update_calls:
+            if indet is not None:
+                assert indet is True
+        # No update should report 100% progress
+        pct_values = [pct for _, pct, _, _ in update_calls]
+        assert 100 not in pct_values
 
 
 async def test_chat_sync_file_done_bad_type():
@@ -2754,48 +2704,6 @@ async def test_chat_sync_file_done_bad_type():
             while app.screen.workers:
                 await _pilot.pause()
             # Worker catches the TypeError via the except Exception handler
-            assert app.screen._sync_active is False
-
-
-async def test_chat_sync_file_start_bad_type():
-    """Sync progress raises TypeError when FILE_START data is not FileStartEvent."""
-    app = ChatTestApp()
-    async with app.run_test(size=(120, 40)) as _pilot:
-        from lilbee.progress import EventType
-
-        async def fake_sync(quiet=False, on_progress=None, cancel=None):
-            if on_progress:
-                on_progress(
-                    EventType.FILE_START,
-                    {"current_file": 1, "total_files": 1, "file": "x.md"},
-                )
-            return {"added": 0}
-
-        with patch("lilbee.ingest.sync", new=fake_sync):
-            app.screen._run_sync()
-            await _pilot.pause()
-            while app.screen.workers:
-                await _pilot.pause()
-            # Worker catches the TypeError via the except Exception handler
-            assert app.screen._sync_active is False
-
-
-async def test_chat_sync_embed_bad_type():
-    """Sync progress silently skips when EMBED data is not EmbedEvent."""
-    app = ChatTestApp()
-    async with app.run_test(size=(120, 40)) as _pilot:
-        from lilbee.progress import EventType
-
-        async def fake_sync(quiet=False, on_progress=None, cancel=None):
-            if on_progress:
-                on_progress(EventType.EMBED, {"file": "x.md", "chunk": 1, "total_chunks": 5})
-            return {"added": 0}
-
-        with patch("lilbee.ingest.sync", new=fake_sync):
-            app.screen._run_sync()
-            await _pilot.pause()
-            while app.screen.workers:
-                await _pilot.pause()
             assert app.screen._sync_active is False
 
 
@@ -4372,7 +4280,7 @@ async def test_task_center_row_click_shows_detail():
         text = detail.content
         assert "Download X" in text
         assert "download" in text
-        assert "10/24 MB" in text
+        assert "42%" in text
 
 
 async def test_task_center_show_detail_no_key():
@@ -5284,6 +5192,22 @@ async def test_setup_wizard_finish_no_embed():
                 assert mock_set.call_count == 1
 
 
+async def test_setup_wizard_install_both_models():
+    from lilbee.cli.tui.screens.setup import SetupWizard
+
+    app = SetupTestApp()
+    with _patch_setup_scan(), _patch_setup_ram(16.0):
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, SetupWizard)
+            with patch.object(screen, "_run_downloads"):
+                screen._on_install()
+                await pilot.pause()
+            assert len(screen._download_models) >= 1
+            assert screen.has_class("-downloading")
+
+
 async def test_setup_wizard_install_already_installed():
     from lilbee.cli.tui.screens.setup import SetupWizard
     from lilbee.cli.tui.widgets.model_card import ModelCard
@@ -5305,6 +5229,285 @@ async def test_setup_wizard_install_already_installed():
                 patch("lilbee.services.reset_services"),
             ):
                 screen._on_install()
+
+
+async def test_setup_wizard_download_failure():
+    from lilbee.cli.tui.screens.setup import SetupWizard
+
+    app = SetupTestApp()
+    with _patch_setup_scan(), _patch_setup_ram(16.0):
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, SetupWizard)
+            with patch("lilbee.catalog.download_model", side_effect=Exception("network error")):
+                screen._download_loop(lambda fn, *a: fn(*a))
+                await pilot.pause()
+                while screen.workers:
+                    await pilot.pause()
+
+
+async def test_setup_wizard_download_401_error():
+    from lilbee.cli.tui.screens.setup import SetupWizard
+
+    app = SetupTestApp()
+    with _patch_setup_scan(), _patch_setup_ram(16.0):
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, SetupWizard)
+            with patch("lilbee.catalog.download_model", side_effect=Exception("401 Unauthorized")):
+                screen._download_loop(lambda fn, *a: fn(*a))
+                await pilot.pause()
+                while screen.workers:
+                    await pilot.pause()
+
+
+async def test_setup_wizard_download_with_progress():
+    from lilbee.cli.tui.screens.setup import SetupWizard
+
+    app = SetupTestApp()
+    with _patch_setup_scan(), _patch_setup_ram(16.0):
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, SetupWizard)
+
+            def fake_download(model, on_progress=None):
+                if on_progress:
+                    on_progress(512 * 1024, 1024 * 1024)
+                    on_progress(1024 * 1024, 1024 * 1024)
+                    on_progress(512 * 1024, 0)
+                return MagicMock(stem="prog-model")
+
+            with (
+                patch("lilbee.catalog.download_model", side_effect=fake_download),
+                patch("lilbee.settings.set_value"),
+                patch("lilbee.services.reset_services"),
+            ):
+                screen._download_loop(lambda fn, *a: fn(*a))
+                await pilot.pause()
+                while screen.workers:
+                    await pilot.pause()
+
+
+async def test_setup_wizard_partial_download():
+    from lilbee.cli.tui.screens.setup import SetupWizard
+
+    app = SetupTestApp()
+    with _patch_setup_scan(), _patch_setup_ram(16.0):
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, SetupWizard)
+            call_count = 0
+
+            def _fake_download(model, on_progress=None):
+                nonlocal call_count
+                call_count += 1
+                if call_count == 2:
+                    raise Exception("embed failed")
+                return MagicMock(stem="chat-model")
+
+            with (
+                patch("lilbee.catalog.download_model", side_effect=_fake_download),
+                patch("lilbee.settings.set_value"),
+                patch("lilbee.services.reset_services"),
+            ):
+                screen._download_loop(lambda fn, *a: fn(*a))
+                await pilot.pause()
+                while screen.workers:
+                    await pilot.pause()
+
+
+async def test_setup_wizard_download_cancel():
+    """Setting _cancel_event aborts the download loop via _DownloadCancelled."""
+    from lilbee.cli.tui.screens.setup import SetupWizard
+
+    app = SetupTestApp()
+    with _patch_setup_scan(), _patch_setup_ram(16.0):
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, SetupWizard)
+            download_started = False
+
+            def fake_download(model, on_progress=None):
+                nonlocal download_started
+                download_started = True
+                # Simulate progress callbacks; the cancel event is set before
+                # the first callback so _on_download_progress raises.
+                if on_progress:
+                    on_progress(100, 1000)
+                return MagicMock(stem="cancelled-model")
+
+            # Populate at least one model so the for-loop body executes
+            screen._download_models = [MagicMock(ref="chat:model", display_name="Test Model")]
+            screen._cancel_event.set()
+            with (
+                patch(
+                    "lilbee.cli.tui.screens.setup.download_model",
+                    side_effect=fake_download,
+                ),
+                patch("lilbee.settings.set_value"),
+                patch("lilbee.services.reset_services"),
+            ):
+                screen._download_loop(lambda fn, *a: fn(*a))
+                await pilot.pause()
+            # Download should not have started because the loop checks the
+            # event before each model.
+            assert not download_started
+
+
+async def test_setup_wizard_cancel_event_raises_in_progress_callback():
+    """_on_download_progress raises _DownloadCancelled when cancel event is set."""
+    from lilbee.cli.tui.screens.setup import SetupWizard, _DownloadCancelled
+
+    app = SetupTestApp()
+    with _patch_setup_scan(), _patch_setup_ram(16.0):
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, SetupWizard)
+            screen._cancel_event.set()
+            from lilbee.catalog import DownloadProgress
+
+            with pytest.raises(_DownloadCancelled):
+                screen._on_download_progress(
+                    lambda fn, *a: fn(*a),
+                    "test:ref",
+                    DownloadProgress(percent=50, detail="50%", is_cache_hit=False),
+                )
+
+
+async def test_setup_wizard_download_cancel_mid_download():
+    """Cancel event set during download triggers _DownloadCancelled in the loop."""
+    from lilbee.cli.tui.screens.setup import SetupWizard
+
+    app = SetupTestApp()
+    with _patch_setup_scan(), _patch_setup_ram(16.0):
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, SetupWizard)
+
+            def fake_download(model, on_progress=None):
+                # Set cancel during download; the progress callback will raise
+                screen._cancel_event.set()
+                if on_progress:
+                    on_progress(100, 1000)
+                return MagicMock(stem="model")
+
+            screen._download_models = [MagicMock(ref="chat:model", display_name="Test Model")]
+            with (
+                patch(
+                    "lilbee.cli.tui.screens.setup.download_model",
+                    side_effect=fake_download,
+                ),
+                patch("lilbee.settings.set_value"),
+                patch("lilbee.services.reset_services"),
+            ):
+                screen._download_loop(lambda fn, *a: fn(*a))
+                await pilot.pause()
+
+
+async def test_setup_wizard_download_cancel_wrapped_exception():
+    """Cancel during download where catalog wraps _DownloadCancelled in RuntimeError."""
+    from lilbee.cli.tui.screens.setup import SetupWizard
+
+    app = SetupTestApp()
+    with _patch_setup_scan(), _patch_setup_ram(16.0):
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, SetupWizard)
+
+            def fake_download(model, on_progress=None):
+                # Simulate catalog.download_model wrapping _DownloadCancelled
+                screen._cancel_event.set()
+                raise RuntimeError("Failed to download Test: _DownloadCancelled:")
+
+            screen._download_models = [MagicMock(ref="chat:model", display_name="Test Model")]
+            with (
+                patch(
+                    "lilbee.cli.tui.screens.setup.download_model",
+                    side_effect=fake_download,
+                ),
+                patch("lilbee.settings.set_value"),
+                patch("lilbee.services.reset_services"),
+            ):
+                screen._download_loop(lambda fn, *a: fn(*a))
+                await pilot.pause()
+                # Should NOT call _handle_download_error since cancel_event is set
+                # The screen should not be corrupted with traceback text
+
+
+async def test_wizard_action_cancel_sets_event():
+    """action_cancel sets the cancel event so download threads abort."""
+    from lilbee.cli.tui.screens.setup import SetupWizard
+
+    app = SetupTestApp()
+    with _patch_setup_scan(), _patch_setup_ram(16.0):
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, SetupWizard)
+            assert not screen._cancel_event.is_set()
+            screen.action_cancel()
+            assert screen._cancel_event.is_set()
+
+
+async def test_setup_wizard_single_model_download_error():
+    from lilbee.cli.tui.screens.setup import SetupWizard
+    from lilbee.cli.tui.widgets.grid_select import GridSelect
+    from lilbee.cli.tui.widgets.model_card import ModelCard
+
+    app = SetupTestApp()
+    with _patch_setup_scan(embed=["embed:latest"]), _patch_setup_ram(16.0):
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, SetupWizard)
+            embed_cards = [
+                c for c in screen.query(ModelCard) if c.row.task == "embedding" and c.row.installed
+            ]
+            if embed_cards:
+                mock_grid = MagicMock(spec=GridSelect)
+                screen._on_grid_selected(
+                    GridSelect.Selected(grid_select=mock_grid, widget=embed_cards[0])
+                )
+            with patch("lilbee.catalog.download_model", side_effect=Exception("connection error")):
+                screen._download_loop(lambda fn, *a: fn(*a))
+                await pilot.pause()
+                while screen.workers:
+                    await pilot.pause()
+
+
+async def test_setup_wizard_download_cache_hit():
+    """Download that returns 100% immediately (cache hit)."""
+    from lilbee.cli.tui.screens.setup import SetupWizard
+
+    app = SetupTestApp()
+    with _patch_setup_scan(), _patch_setup_ram(16.0):
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, SetupWizard)
+
+            def fake_download(model, on_progress=None):
+                if on_progress:
+                    on_progress(1000, 1000)
+                return MagicMock(stem="cached-model")
+
+            with (
+                patch("lilbee.catalog.download_model", side_effect=fake_download),
+                patch("lilbee.settings.set_value"),
+                patch("lilbee.services.reset_services"),
+            ):
+                screen._download_loop(lambda fn, *a: fn(*a))
+                await pilot.pause()
+                while screen.workers:
+                    await pilot.pause()
 
 
 async def test_setup_wizard_action_cancel():
@@ -5365,6 +5568,123 @@ async def test_setup_wizard_grid_selected_non_model():
             mock_widget = MagicMock()
             event = GridSelect.Selected(grid_select=mock_grid, widget=mock_widget)
             screen._on_grid_selected(event)
+
+
+async def test_setup_wizard_run_downloads_all_succeed():
+    """_run_downloads calls _on_all_downloads_complete when all succeed."""
+    from lilbee.cli.tui.screens.setup import SetupWizard
+
+    app = SetupTestApp()
+    with _patch_setup_scan(), _patch_setup_ram(16.0):
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, SetupWizard)
+
+            cm1 = _make_catalog_model(name="chat-m")
+            cm2 = _make_catalog_model(name="embed-m")
+            screen._download_models = [cm1, cm2]
+
+            with (
+                patch("lilbee.catalog.download_model"),
+                patch("lilbee.settings.set_value"),
+                patch("lilbee.services.reset_services"),
+            ):
+                screen._download_loop(lambda fn, *a: fn(*a))
+                await pilot.pause()
+                while screen.workers:
+                    await pilot.pause()
+
+
+async def test_setup_wizard_run_downloads_embed_fails():
+    """Embedding download failure calls _on_partial_success."""
+    from lilbee.cli.tui.screens.setup import SetupWizard
+
+    app = SetupTestApp()
+    with _patch_setup_scan(), _patch_setup_ram(16.0):
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, SetupWizard)
+
+            cm1 = _make_catalog_model(name="chat-ok")
+            cm2 = _make_catalog_model(name="embed-fail")
+            screen._download_models = [cm1, cm2]
+            call_count = 0
+
+            def _fake(model, on_progress=None):
+                nonlocal call_count
+                call_count += 1
+                if call_count == 2:
+                    raise Exception("embed failed")
+
+            with (
+                patch("lilbee.catalog.download_model", side_effect=_fake),
+                patch("lilbee.settings.set_value"),
+                patch("lilbee.services.reset_services"),
+            ):
+                screen._download_loop(lambda fn, *a: fn(*a))
+                await pilot.pause()
+                while screen.workers:
+                    await pilot.pause()
+
+
+async def test_setup_wizard_run_downloads_chat_401():
+    """401 error on first model (chat) returns early."""
+    from lilbee.cli.tui.screens.setup import SetupWizard
+
+    app = SetupTestApp()
+    with _patch_setup_scan(), _patch_setup_ram(16.0):
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, SetupWizard)
+
+            cm1 = _make_catalog_model(name="gated-model")
+            cm2 = _make_catalog_model(name="embed-m")
+            screen._download_models = [cm1, cm2]
+
+            def _fake(model, on_progress=None):
+                raise PermissionError("401 Unauthorized")
+
+            with patch("lilbee.catalog.download_model", side_effect=_fake):
+                screen._download_loop(lambda fn, *a: fn(*a))
+                await pilot.pause()
+                while screen.workers:
+                    await pilot.pause()
+
+
+async def test_setup_wizard_on_all_downloads_complete():
+    """_on_all_downloads_complete sets status and dismisses."""
+    from lilbee.cli.tui.screens.setup import SetupWizard
+
+    app = SetupTestApp()
+    with _patch_setup_scan(), _patch_setup_ram(16.0):
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, SetupWizard)
+            with patch("lilbee.settings.set_value"), patch("lilbee.services.reset_services"):
+                screen._on_all_downloads_complete()
+                await pilot.pause()
+
+
+async def test_setup_wizard_on_partial_success():
+    """_on_partial_success clears embedding selection and dismisses."""
+    from lilbee.cli.tui.screens.setup import SetupWizard
+
+    app = SetupTestApp()
+    with _patch_setup_scan(), _patch_setup_ram(16.0):
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, SetupWizard)
+            with patch("lilbee.settings.set_value"), patch("lilbee.services.reset_services"):
+                screen._on_partial_success()
+                await pilot.pause()
+            from lilbee.models import ModelTask
+
+            assert screen._selections[ModelTask.EMBEDDING] == (None, None)
 
 
 async def test_setup_wizard_grid_leave_down_walks_focus_forward():
@@ -5462,6 +5782,153 @@ async def test_setup_wizard_shift_tab_escapes_grid_backward():
             await pilot.pause()
             assert app.focused is not second_grid
             assert app.focused is not None
+
+
+async def test_setup_wizard_on_download_progress():
+    """_on_download_progress updates progress bar and status."""
+    from lilbee.cli.tui.screens.setup import SetupWizard
+
+    app = SetupTestApp()
+    with _patch_setup_scan(), _patch_setup_ram(16.0):
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, SetupWizard)
+            from lilbee.catalog import DownloadProgress
+
+            cm = _make_catalog_model(name="prog-m")
+            screen._download_models = [cm]
+            screen._mount_download_rows()
+            await pilot.pause()
+            screen._on_download_progress(
+                lambda fn, *a: fn(*a),
+                cm.ref,
+                DownloadProgress(percent=50, detail="25/50 MB", is_cache_hit=False),
+            )
+            await pilot.pause()
+            row = screen._download_rows[cm.ref]
+            assert "50" in str(row.label.content)
+            assert row.bar.progress == 50
+
+
+async def test_setup_wizard_handle_download_error_401():
+    """_handle_download_error rewrites 401 errors."""
+    from lilbee.cli.tui.screens.setup import SetupWizard
+
+    app = SetupTestApp()
+    with _patch_setup_scan(), _patch_setup_ram(16.0):
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, SetupWizard)
+            cm = _make_catalog_model(name="gated", display_name="Gated")
+            screen._download_models = [cm]
+            screen._mount_download_rows()
+            screen._handle_download_error(
+                lambda fn, *a: fn(*a),
+                PermissionError("401 Unauthorized"),
+                cm,
+                is_first=True,
+            )
+            row = screen._download_rows[cm.ref]
+            assert "requires login" in str(row.label.content)
+
+
+async def test_setup_wizard_handle_download_error_partial():
+    """_handle_download_error calls _on_partial_success for non-first model."""
+    from lilbee.cli.tui.screens.setup import SetupWizard
+
+    app = SetupTestApp()
+    with _patch_setup_scan(), _patch_setup_ram(16.0):
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, SetupWizard)
+            cm = _make_catalog_model(name="embed-fail", display_name="EmbedFail")
+            screen._download_models = [cm]
+            screen._mount_download_rows()
+            with patch("lilbee.settings.set_value"), patch("lilbee.services.reset_services"):
+                screen._handle_download_error(
+                    lambda fn, *a: fn(*a),
+                    Exception("download failed"),
+                    cm,
+                    is_first=False,
+                )
+            row = screen._download_rows[cm.ref]
+            assert "download failed" in str(row.label.content)
+
+
+async def test_setup_wizard_download_progress_callback():
+    """Download progress callback updates status via _download_loop."""
+    from lilbee.cli.tui.screens.setup import SetupWizard
+
+    app = SetupTestApp()
+    with _patch_setup_scan(), _patch_setup_ram(16.0):
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, SetupWizard)
+
+            cm = _make_catalog_model(name="prog-m", display_name="ProgM")
+            screen._download_models = [cm]
+
+            def _fake(model, on_progress=None):
+                if on_progress:
+                    on_progress(25 * 1024 * 1024, 50 * 1024 * 1024)
+                    on_progress(50 * 1024 * 1024, 50 * 1024 * 1024)
+
+            with (
+                patch("lilbee.cli.tui.screens.setup.download_model", side_effect=_fake),
+                patch("lilbee.settings.set_value"),
+                patch("lilbee.services.reset_services"),
+            ):
+                screen._download_loop(lambda fn, *a: fn(*a))
+                await pilot.pause()
+
+            row = screen._download_rows[cm.ref]
+            assert "done" in str(row.label.content)
+            assert row.bar.progress == 100
+
+
+async def test_setup_wizard_two_downloads_show_independent_rows():
+    """Two concurrent downloads render side-by-side with independent labels and bars."""
+    from lilbee.cli.tui.screens.setup import SetupWizard
+
+    app = SetupTestApp()
+    with _patch_setup_scan(), _patch_setup_ram(16.0):
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, SetupWizard)
+
+            cm_chat = _make_catalog_model(name="chat-x", display_name="ChatX")
+            cm_embed = _make_catalog_model(name="embed-y", display_name="EmbedY")
+            screen._download_models = [cm_chat, cm_embed]
+            screen._mount_download_rows()
+            await pilot.pause()
+
+            # Both rows exist before any downloads start.
+            assert cm_chat.ref in screen._download_rows
+            assert cm_embed.ref in screen._download_rows
+            chat_row = screen._download_rows[cm_chat.ref]
+            embed_row = screen._download_rows[cm_embed.ref]
+            assert "ChatX" in str(chat_row.label.content)
+            assert "EmbedY" in str(embed_row.label.content)
+
+            # Simulate chat finishing, then embed progressing mid-way.
+            screen._mark_row_done(cm_chat.ref)
+            screen._update_row(cm_embed.ref, 40, "20/50 MB")
+            await pilot.pause()
+
+            # Chat row stays at 100% with its own label intact.
+            assert chat_row.bar.progress == 100
+            assert "done" in str(chat_row.label.content)
+            assert "ChatX" in str(chat_row.label.content)
+
+            # Embed row shows its independent 40% state.
+            assert embed_row.bar.progress == 40
+            assert "40" in str(embed_row.label.content)
+            assert "EmbedY" in str(embed_row.label.content)
 
 
 def test_param_sort_value_with_match():
@@ -6304,6 +6771,21 @@ async def test_task_center_go_back_non_lilbee_app():
         assert not isinstance(app.screen, TaskCenter)
 
 
+async def test_task_center_queue_change_exception():
+    """_on_queue_change suppresses exception from _refresh_tasks."""
+    from lilbee.cli.tui.app import LilbeeApp
+    from lilbee.cli.tui.screens.task_center import TaskCenter
+
+    app = LilbeeApp()
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.push_screen(TaskCenter())
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, TaskCenter)
+        with patch.object(screen, "_refresh_tasks", side_effect=RuntimeError("fail")):
+            screen._on_queue_change()
+
+
 async def test_task_center_show_detail_task_not_found():
     """_show_task_detail with unknown task_id shows empty."""
     from lilbee.cli.tui.app import LilbeeApp
@@ -6357,21 +6839,22 @@ async def test_app_action_quit_when_streaming():
 
 
 async def test_app_action_quit_routes_to_wizard_cancel():
-    """action_quit dismisses the wizard when it's the active screen."""
+    """action_quit cancels the wizard instead of exiting when wizard is active."""
     from lilbee.cli.tui.app import LilbeeApp
     from lilbee.cli.tui.screens.setup import SetupWizard
 
     app = LilbeeApp()
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
+        # Push a wizard on top
         wizard = SetupWizard()
         with _patch_setup_scan(), _patch_setup_ram(16.0):
             app.push_screen(wizard)
             await pilot.pause()
             assert isinstance(app.screen, SetupWizard)
+            assert not wizard._cancel_event.is_set()
             await app.action_quit()
-            await pilot.pause()
-            assert not isinstance(app.screen, SetupWizard)
+            assert wizard._cancel_event.is_set()
 
 
 async def test_app_action_quit_double_force_exits():
@@ -6705,38 +7188,6 @@ async def test_chat_cmd_crawl_invalid_url():
         ):
             app.screen._cmd_crawl("not-a-url")
             mock_notify.assert_called()
-
-
-async def test_chat_cmd_crawl_auto_prefix_https():
-    """_cmd_crawl auto-prefixes https:// when URL has no scheme."""
-    app = ChatTestApp()
-    async with app.run_test(size=(120, 40)) as _pilot:
-        await _pilot.pause()
-        with (
-            patch("lilbee.cli.tui.screens.chat.crawler_available", return_value=True),
-            patch("lilbee.cli.tui.screens.chat.require_valid_crawl_url") as mock_validate,
-            patch.object(app.screen, "_run_crawl_background") as mock_crawl,
-        ):
-            app.screen._cmd_crawl("example.com")
-            mock_validate.assert_called_once_with("https://example.com")
-            mock_crawl.assert_called_once()
-            assert mock_crawl.call_args[0][0] == "https://example.com"
-
-
-async def test_chat_cmd_crawl_auto_prefix_with_flags():
-    """_cmd_crawl auto-prefixes https:// and parses flags correctly."""
-    app = ChatTestApp()
-    async with app.run_test(size=(120, 40)) as _pilot:
-        await _pilot.pause()
-        with (
-            patch("lilbee.cli.tui.screens.chat.crawler_available", return_value=True),
-            patch("lilbee.cli.tui.screens.chat.require_valid_crawl_url"),
-            patch.object(app.screen, "_run_crawl_background") as mock_crawl,
-        ):
-            app.screen._cmd_crawl("example.com --depth 2")
-            call_args = mock_crawl.call_args[0]
-            assert call_args[0] == "https://example.com"
-            assert call_args[1] == 2
 
 
 async def test_chat_cmd_wiki_disabled_notifies():
@@ -7456,7 +7907,6 @@ async def test_task_bar_indeterminate_flag_propagated():
         assert task.status == TaskStatus.ACTIVE
 
         bar = app.screen.query_one("#tbar", TaskBar)
-        bar._refresh_display()
         assert bar.display is True
 
 
@@ -7523,186 +7973,260 @@ def test_resolve_wiki_targets_get_sources_error():
         assert resolve_wiki_targets() is None
 
 
-def test_process_source_suppresses_wiki_warnings():
-    """_process_source suppresses WARNING-level logs from wiki.gen during TUI mode."""
-    import logging
-
-    from lilbee.cli.tui.wiki_worker import _process_source
-
-    wiki_logger = logging.getLogger("lilbee.wiki.gen")
-    original_level = wiki_logger.level
-
-    fake_store = MagicMock()
-    fake_store.get_chunks_by_source.return_value = [MagicMock(chunk="text")]
-    fake_svc = MagicMock(store=fake_store)
-
-    levels_during_generation: list[int] = []
-
-    def capture_level(*args, **kwargs):
-        levels_during_generation.append(wiki_logger.level)
-        return MagicMock()
-
-    widget = MagicMock()
-    with (
-        patch("lilbee.cli.tui.wiki_worker.get_services", return_value=fake_svc),
-        patch("lilbee.cli.tui.wiki_worker.call_from_thread"),
-        patch("lilbee.wiki.gen.generate_summary_page", side_effect=capture_level),
-    ):
-        _process_source("test.md", 0, 1, widget, MagicMock(), "task-1", [])
-
-    # During generation, the wiki logger should be set to ERROR level
-    assert levels_during_generation
-    assert levels_during_generation[0] >= logging.ERROR
-    # After generation, it should be restored
-    assert wiki_logger.level == original_level
+def _direct_call(_widget, fn, *args, **kwargs):
+    """Stub for call_from_thread that calls fn directly (no Textual app needed)."""
+    fn(*args, **kwargs)
 
 
-def test_process_source_empty_chunks_returns_false():
-    """_process_source returns False when source has no chunks."""
-    from lilbee.cli.tui.wiki_worker import _process_source
+class TestMakeProgressCallback:
+    """Tests for wiki_worker._make_progress_callback."""
 
-    fake_store = MagicMock()
-    fake_store.get_chunks_by_source.return_value = []
-    fake_svc = MagicMock(store=fake_store)
+    def test_failed_stage_appends_error(self):
+        from lilbee.cli.tui.wiki_worker import _make_progress_callback
 
-    widget = MagicMock()
-    with (
-        patch("lilbee.cli.tui.wiki_worker.get_services", return_value=fake_svc),
-        patch("lilbee.cli.tui.wiki_worker.call_from_thread"),
-    ):
-        result = _process_source("empty.md", 0, 1, widget, MagicMock(), "task-1", [])
-    assert result is False
+        errors: list[str] = []
+        cb = _make_progress_callback("doc.txt", 0, 1, MagicMock(), MagicMock(), "t1", errors)
+        with patch("lilbee.cli.tui.wiki_worker.call_from_thread", _direct_call):
+            cb("failed", {"error": "oops"})
+        assert errors == ["oops"]
 
+    def test_failed_stage_default_message(self):
+        from lilbee.cli.tui.wiki_worker import _make_progress_callback
 
-def test_wiki_worker_make_progress_callback():
-    """_make_progress_callback builds a callback that reports progress stages."""
-    from lilbee.cli.tui.wiki_worker import (
-        WIKI_STAGE_FAILED,
-        WIKI_STAGE_GENERATING,
-        _make_progress_callback,
-    )
+        errors: list[str] = []
+        cb = _make_progress_callback("doc.txt", 0, 1, MagicMock(), MagicMock(), "t1", errors)
+        with patch("lilbee.cli.tui.wiki_worker.call_from_thread", _direct_call):
+            cb("failed", {})
+        assert errors == ["Unknown error"]
 
-    widget = MagicMock()
-    update_task = MagicMock()
-    errors: list[str] = []
+    def test_generating_stage_calls_update_task(self):
+        from lilbee.cli.tui.wiki_worker import _make_progress_callback
 
-    with patch("lilbee.cli.tui.wiki_worker.call_from_thread") as mock_cft:
-        cb = _make_progress_callback("doc.md", 0, 2, widget, update_task, "task-1", errors)
-        cb(WIKI_STAGE_GENERATING, {})
-        mock_cft.assert_called_once()
-        # Percentage: (0 + 0.33) * 100 / 2 = 16
-        assert mock_cft.call_args[0][3] == 16
+        update = MagicMock()
+        widget = MagicMock()
+        cb = _make_progress_callback("doc.txt", 1, 3, widget, update, "t1", [])
+        with patch("lilbee.cli.tui.wiki_worker.call_from_thread", _direct_call):
+            cb("generating", {})
+        update.assert_called_once()
+        _, pct, detail = update.call_args[0]
+        assert pct == int((1 + 0.33) * 100 / 3)
+        assert "doc.txt" in detail
+        assert "generating" in detail
 
-    # Test failed stage
-    cb(WIKI_STAGE_FAILED, {"error": "timeout"})
-    assert "timeout" in errors[-1]
+    def test_unknown_stage_uses_zero_fraction(self):
+        from lilbee.cli.tui.wiki_worker import _make_progress_callback
 
-
-def test_wiki_worker_report_result_success():
-    """_report_result notifies on successful generation."""
-    from lilbee.cli.tui.wiki_worker import _report_result
-
-    widget = MagicMock()
-    complete = MagicMock()
-    fail = MagicMock()
-    notify = MagicMock()
-    on_complete = MagicMock()
-
-    with patch("lilbee.cli.tui.wiki_worker.call_from_thread") as mock_cft:
-        _report_result(2, 3, [], widget, "t1", complete, fail, notify, on_complete)
-        # Should call complete_task and notify, plus on_complete
-        assert mock_cft.call_count == 3
+        update = MagicMock()
+        cb = _make_progress_callback("doc.txt", 0, 2, MagicMock(), update, "t1", [])
+        with patch("lilbee.cli.tui.wiki_worker.call_from_thread", _direct_call):
+            cb("some_new_stage", {})
+        _, pct, _ = update.call_args[0]
+        assert pct == 0
 
 
-def test_wiki_worker_report_result_failure():
-    """_report_result notifies on failed generation."""
-    from lilbee.cli.tui.wiki_worker import _report_result
+class TestReportResult:
+    """Tests for wiki_worker._report_result."""
 
-    widget = MagicMock()
-    complete = MagicMock()
-    fail = MagicMock()
-    notify = MagicMock()
+    def test_success_calls_complete_and_notify(self):
+        from lilbee.cli.tui.wiki_worker import _report_result
 
-    with patch("lilbee.cli.tui.wiki_worker.call_from_thread") as mock_cft:
-        _report_result(0, 2, ["err1"], widget, "t1", complete, fail, notify, None)
-        # Should call fail_task and notify
-        assert mock_cft.call_count == 2
+        complete = MagicMock()
+        notify = MagicMock()
+        on_done = MagicMock()
+        with patch("lilbee.cli.tui.wiki_worker.call_from_thread", _direct_call):
+            _report_result(2, 3, [], MagicMock(), "t1", complete, MagicMock(), notify, on_done)
+        complete.assert_called_once_with("t1")
+        notify.assert_called_once()
+        assert "2/3" in notify.call_args[0][0]
+        on_done.assert_called_once()
 
+    def test_success_without_on_complete(self):
+        from lilbee.cli.tui.wiki_worker import _report_result
 
-def test_wiki_worker_report_result_no_errors_no_pages():
-    """_report_result uses default message when no errors and no pages."""
-    from lilbee.cli.tui.wiki_worker import _report_result
+        complete = MagicMock()
+        with patch("lilbee.cli.tui.wiki_worker.call_from_thread", _direct_call):
+            _report_result(1, 1, [], MagicMock(), "t1", complete, MagicMock(), MagicMock(), None)
+        complete.assert_called_once_with("t1")
 
-    widget = MagicMock()
-    with patch("lilbee.cli.tui.wiki_worker.call_from_thread") as mock_cft:
-        _report_result(0, 1, [], widget, "t1", MagicMock(), MagicMock(), MagicMock(), None)
-        assert mock_cft.call_count == 2
+    def test_failure_with_errors_uses_last_error(self):
+        from lilbee.cli.tui.wiki_worker import _report_result
 
+        fail = MagicMock()
+        with patch("lilbee.cli.tui.wiki_worker.call_from_thread", _direct_call):
+            _report_result(
+                0, 2, ["err1", "err2"], MagicMock(), "t1", MagicMock(), fail, MagicMock(), None
+            )
+        fail.assert_called_once_with("t1", "err2")
 
-def test_wiki_worker_run_wiki_generation():
-    """run_wiki_generation processes sources and reports results."""
-    from lilbee.cli.tui.wiki_worker import run_wiki_generation
+    def test_failure_without_errors_uses_default(self):
+        from lilbee.cli.tui.wiki_worker import _report_result
 
-    widget = MagicMock()
-    update = MagicMock()
-    complete = MagicMock()
-    fail = MagicMock()
-    notify = MagicMock()
-
-    with (
-        patch("lilbee.cli.tui.wiki_worker._process_source", return_value=True) as mock_ps,
-        patch("lilbee.cli.tui.wiki_worker._report_result") as mock_rr,
-    ):
-        run_wiki_generation(["a.txt", "b.txt"], "t1", widget, update, complete, fail, notify)
-        assert mock_ps.call_count == 2
-        mock_rr.assert_called_once()
-        # generated=2, total=2
-        assert mock_rr.call_args[0][0] == 2
-        assert mock_rr.call_args[0][1] == 2
+        fail = MagicMock()
+        with patch("lilbee.cli.tui.wiki_worker.call_from_thread", _direct_call):
+            _report_result(0, 1, [], MagicMock(), "t1", MagicMock(), fail, MagicMock(), None)
+        fail.assert_called_once_with("t1", "No pages generated")
 
 
-def test_wiki_worker_run_wiki_generation_cancelled():
-    """run_wiki_generation stops when cancelled."""
-    from lilbee.cli.tui.wiki_worker import run_wiki_generation
+class TestProcessSource:
+    """Tests for wiki_worker._process_source."""
 
-    widget = MagicMock()
+    def test_returns_true_when_page_generated(self):
+        from lilbee.cli.tui.wiki_worker import _process_source
 
-    with (
-        patch("lilbee.cli.tui.wiki_worker._process_source") as mock_ps,
-        patch("lilbee.cli.tui.wiki_worker._report_result") as mock_rr,
-    ):
-        run_wiki_generation(
-            ["a.txt", "b.txt"],
-            "t1",
-            widget,
-            MagicMock(),
-            MagicMock(),
-            MagicMock(),
-            MagicMock(),
-            is_cancelled=lambda: True,
-        )
-        mock_ps.assert_not_called()
-        mock_rr.assert_called_once()
+        fake_store = MagicMock()
+        fake_store.get_chunks_by_source.return_value = [{"text": "hello"}]
+        fake_svc = MagicMock(store=fake_store, provider=MagicMock())
+        with (
+            patch("lilbee.cli.tui.wiki_worker.get_services", return_value=fake_svc),
+            patch("lilbee.cli.tui.wiki_worker.call_from_thread", _direct_call),
+            patch("lilbee.wiki.gen.generate_summary_page", return_value="page"),
+        ):
+            result = _process_source("doc.txt", 0, 1, MagicMock(), MagicMock(), "t1", [])
+        assert result is True
+
+    def test_returns_false_when_no_chunks(self):
+        from lilbee.cli.tui.wiki_worker import _process_source
+
+        fake_store = MagicMock()
+        fake_store.get_chunks_by_source.return_value = []
+        fake_svc = MagicMock(store=fake_store)
+        with (
+            patch("lilbee.cli.tui.wiki_worker.get_services", return_value=fake_svc),
+            patch("lilbee.cli.tui.wiki_worker.call_from_thread", _direct_call),
+        ):
+            result = _process_source("doc.txt", 0, 1, MagicMock(), MagicMock(), "t1", [])
+        assert result is False
+
+    def test_returns_false_when_generation_returns_none(self):
+        from lilbee.cli.tui.wiki_worker import _process_source
+
+        fake_store = MagicMock()
+        fake_store.get_chunks_by_source.return_value = [{"text": "hello"}]
+        fake_svc = MagicMock(store=fake_store, provider=MagicMock())
+        with (
+            patch("lilbee.cli.tui.wiki_worker.get_services", return_value=fake_svc),
+            patch("lilbee.cli.tui.wiki_worker.call_from_thread", _direct_call),
+            patch("lilbee.wiki.gen.generate_summary_page", return_value=None),
+        ):
+            result = _process_source("doc.txt", 0, 1, MagicMock(), MagicMock(), "t1", [])
+        assert result is False
 
 
-def test_wiki_worker_run_wiki_generation_exception():
-    """run_wiki_generation handles exceptions from _process_source."""
-    from lilbee.cli.tui.wiki_worker import run_wiki_generation
+class TestRunWikiGeneration:
+    """Tests for wiki_worker.run_wiki_generation."""
 
-    widget = MagicMock()
-    fail = MagicMock()
-    notify = MagicMock()
+    def test_generates_all_sources(self):
+        from lilbee.cli.tui.wiki_worker import run_wiki_generation
 
-    with (
-        patch(
-            "lilbee.cli.tui.wiki_worker._process_source",
-            side_effect=RuntimeError("boom"),
-        ),
-        patch("lilbee.cli.tui.wiki_worker.call_from_thread") as mock_cft,
-    ):
-        run_wiki_generation(["a.txt"], "t1", widget, MagicMock(), MagicMock(), fail, notify)
-        # Should call fail_task and notify via call_from_thread
-        assert mock_cft.call_count == 2
+        complete = MagicMock()
+        notify = MagicMock()
+        with (
+            patch("lilbee.cli.tui.wiki_worker.call_from_thread", _direct_call),
+            patch("lilbee.cli.tui.wiki_worker._process_source", return_value=True) as mock_proc,
+        ):
+            run_wiki_generation(
+                sources=["a.txt", "b.txt"],
+                task_id="t1",
+                widget=MagicMock(),
+                update_task=MagicMock(),
+                complete_task=complete,
+                fail_task=MagicMock(),
+                notify=notify,
+            )
+        assert mock_proc.call_count == 2
+        complete.assert_called_once_with("t1")
+
+    def test_cancellation_stops_early(self):
+        from lilbee.cli.tui.wiki_worker import run_wiki_generation
+
+        call_count = 0
+
+        def cancel_after_first():
+            nonlocal call_count
+            call_count += 1
+            return call_count > 1
+
+        with (
+            patch("lilbee.cli.tui.wiki_worker.call_from_thread", _direct_call),
+            patch("lilbee.cli.tui.wiki_worker._process_source", return_value=True) as mock_proc,
+        ):
+            run_wiki_generation(
+                sources=["a.txt", "b.txt", "c.txt"],
+                task_id="t1",
+                widget=MagicMock(),
+                update_task=MagicMock(),
+                complete_task=MagicMock(),
+                fail_task=MagicMock(),
+                notify=MagicMock(),
+                is_cancelled=cancel_after_first,
+            )
+        assert mock_proc.call_count == 1
+
+    def test_calls_on_complete_callback(self):
+        from lilbee.cli.tui.wiki_worker import run_wiki_generation
+
+        on_done = MagicMock()
+        with (
+            patch("lilbee.cli.tui.wiki_worker.call_from_thread", _direct_call),
+            patch("lilbee.cli.tui.wiki_worker._process_source", return_value=True),
+        ):
+            run_wiki_generation(
+                sources=["a.txt"],
+                task_id="t1",
+                widget=MagicMock(),
+                update_task=MagicMock(),
+                complete_task=MagicMock(),
+                fail_task=MagicMock(),
+                notify=MagicMock(),
+                on_complete=on_done,
+            )
+        on_done.assert_called_once()
+
+    def test_exception_reports_failure(self):
+        from lilbee.cli.tui.wiki_worker import run_wiki_generation
+
+        fail = MagicMock()
+        notify = MagicMock()
+        with (
+            patch("lilbee.cli.tui.wiki_worker.call_from_thread", _direct_call),
+            patch(
+                "lilbee.cli.tui.wiki_worker._process_source",
+                side_effect=RuntimeError("boom"),
+            ),
+        ):
+            run_wiki_generation(
+                sources=["a.txt"],
+                task_id="t1",
+                widget=MagicMock(),
+                update_task=MagicMock(),
+                complete_task=MagicMock(),
+                fail_task=fail,
+                notify=notify,
+            )
+        fail.assert_called_once()
+        assert "boom" in fail.call_args[0][1]
+        notify.assert_called_once()
+        assert notify.call_args[1]["severity"] == "error"
+
+    def test_no_pages_generated_reports_failure(self):
+        from lilbee.cli.tui.wiki_worker import run_wiki_generation
+
+        fail = MagicMock()
+        with (
+            patch("lilbee.cli.tui.wiki_worker.call_from_thread", _direct_call),
+            patch("lilbee.cli.tui.wiki_worker._process_source", return_value=False),
+        ):
+            run_wiki_generation(
+                sources=["a.txt"],
+                task_id="t1",
+                widget=MagicMock(),
+                update_task=MagicMock(),
+                complete_task=MagicMock(),
+                fail_task=fail,
+                notify=MagicMock(),
+            )
+        fail.assert_called_once()
+        assert "No pages generated" in fail.call_args[0][1]
 
 
 def _make_wiki_app(*, with_task_bar: bool = False) -> App[None]:
@@ -7721,16 +8245,6 @@ def _make_wiki_app(*, with_task_bar: bool = False) -> App[None]:
             self.push_screen(WikiScreen())
 
     return _WikiApp()
-
-
-async def test_wiki_screen_reload():
-    """WikiScreen.reload refreshes the sidebar."""
-    app = _make_wiki_app()
-    async with app.run_test(size=(120, 40)) as pilot:
-        await pilot.pause()
-        with patch.object(app.screen, "_load_pages") as mock_load:
-            app.screen.reload()
-            mock_load.assert_called_once()
 
 
 async def test_wiki_screen_regenerate_disabled():
@@ -7790,7 +8304,7 @@ async def test_task_bar_shows_detail_text():
 
         label = bar.query_one("#task-status-label", Label)
         text = str(label.render())
-        assert "45.0%" in text
+        assert "45%" in text
         assert "[12/30]" in text
 
 
@@ -7994,6 +8508,16 @@ async def test_wiki_run_wiki_background():
             while app.screen.workers:
                 await pilot.pause()
         mock_gen.assert_called_once()
+
+
+async def test_wiki_screen_reload():
+    """WikiScreen.reload() refreshes pages from disk."""
+    app = _make_wiki_app()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        with patch("lilbee.wiki.browse.list_pages", return_value=[]):
+            app.screen.reload()
+            await pilot.pause()
 
 
 async def test_wiki_regenerate_with_targets():

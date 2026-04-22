@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import re
 
-_CITATION_COMMENT = "<!-- citations (auto-generated from _citations table -- do not edit) -->"
+from lilbee.wiki.shared import CITATION_BLOCK_COMMENT
+
 _CODE_FENCE_PREFIX = "```"
 
 
@@ -92,7 +93,7 @@ def _classify_lines(lines: list[str]) -> list[tuple[str, bool]]:
 
         # The citation block is terminal: once its comment marker appears
         # every following line is citation, so ``in_citation`` never resets.
-        if stripped == _CITATION_COMMENT:
+        if stripped == CITATION_BLOCK_COMMENT:
             in_citation = True
         if in_citation:
             tagged.append((line, False))

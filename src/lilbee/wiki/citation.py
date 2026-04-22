@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from lilbee.store import CitationRecord
+from lilbee.wiki.shared import CITATION_BLOCK_COMMENT, CITATION_BLOCK_SEP
 
 # Pattern for inline citation anchors: [^src1], [^src2], etc.
 _CITE_RE = re.compile(r"\[\^(src\d+)\]")
@@ -18,10 +19,6 @@ _FOOTNOTE_RE = re.compile(r"^\[\^(src\d+)\]:\s*(.+)$", re.MULTILINE)
 
 # Pattern for inference markers: [*inference*]
 _INFERENCE_RE = re.compile(r"\[\*inference\*\]")
-
-# Separator line that precedes the auto-generated citation block
-_CITATION_BLOCK_SEP = "---"
-_CITATION_BLOCK_COMMENT = "<!-- citations (auto-generated from _citations table -- do not edit) -->"
 
 
 class CitationStatus(Enum):
@@ -76,7 +73,7 @@ def render_citation_block(citations: list[CitationRecord]) -> str:
     """
     if not citations:
         return ""
-    lines = [_CITATION_BLOCK_SEP, _CITATION_BLOCK_COMMENT]
+    lines = [CITATION_BLOCK_SEP, CITATION_BLOCK_COMMENT]
     for rec in citations:
         lines.append(f"[^{rec['citation_key']}]: {_format_source_ref(rec)}")
     return "\n".join(lines) + "\n"
@@ -127,7 +124,7 @@ def _find_citation_block_start(markdown: str) -> int | None:
     """Return the 0-based line index where the citation block begins, or None."""
     lines = markdown.splitlines()
     for i, line in enumerate(lines):
-        if line.strip() == _CITATION_BLOCK_COMMENT:
+        if line.strip() == CITATION_BLOCK_COMMENT:
             return i
     return None
 
@@ -135,7 +132,7 @@ def _find_citation_block_start(markdown: str) -> int | None:
 def _body_end_before_citations(lines: list[str], block_start: int) -> int:
     """Return the line index to truncate at, stripping the --- separator if present."""
     body_end = block_start
-    if body_end > 0 and lines[body_end - 1].strip() == _CITATION_BLOCK_SEP:
+    if body_end > 0 and lines[body_end - 1].strip() == CITATION_BLOCK_SEP:
         body_end -= 1
     return body_end
 
@@ -168,7 +165,7 @@ def _is_content_line(stripped: str) -> bool:
         return False
     if stripped.startswith("#"):
         return False
-    return stripped != _CITATION_BLOCK_SEP
+    return stripped != CITATION_BLOCK_SEP
 
 
 def _format_source_ref(rec: CitationRecord) -> str:

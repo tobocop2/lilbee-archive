@@ -266,6 +266,34 @@ class LiteLLMProvider(LLMProvider):
         caps = info.get("capabilities", [])
         return caps if isinstance(caps, list) else []
 
+    def rerank(self, query: str, candidates: list[str]) -> list[float]:
+        """Rerank *candidates* via ``litellm.rerank`` against ``cfg.reranker_model``.
+
+        Returns relevance scores in candidate order. Hosted reranker
+        providers (Cohere, Voyage, Jina, TEI) can rearrange results, so
+        we sort by ``index`` to restore the input order before returning.
+        """
+        model = cfg.reranker_model
+        if not model:
+            raise ProviderError(
+                "No reranker model configured. Set cfg.reranker_model first.",
+                provider="litellm",
+            )
+        if not candidates:
+            return []
+
+        import litellm
+
+        try:
+            response = litellm.rerank(model=model, query=query, documents=candidates)
+        except Exception as exc:
+            raise ProviderError(f"Rerank failed: {exc}", provider="litellm") from exc
+        return _parse_rerank_response(response, len(candidates))
+
+    def supports_rerank(self) -> bool:
+        """litellm can rerank iff the optional extra is installed."""
+        return litellm_available()
+
     def shutdown(self) -> None:
         """No resources to release for litellm provider."""
 
@@ -305,3 +333,44 @@ def _stream_tokens(response: Any) -> Iterator[str]:
         delta = chunk.choices[0].delta if chunk.choices else None
         if delta and delta.content:
             yield delta.content
+
+
+def _parse_rerank_response(response: Any, count: int) -> list[float]:
+    """Extract an ordered list of relevance scores from a litellm rerank result.
+
+    litellm mirrors Cohere's rerank API: ``{"results": [{"index": i,
+    "relevance_score": f}, ...]}``. The response can be a dict or an
+    object with attribute access (pydantic-style), so we probe both.
+    """
+    results = _rerank_results(response)
+    scores = [0.0] * count
+    for item in results:
+        idx = _get_field(item, "index")
+        score = _get_field(item, "relevance_score")
+        if not isinstance(idx, int) or idx < 0 or idx >= count:
+            raise ProviderError("Rerank response has invalid index", provider="litellm")
+        if not isinstance(score, (int, float)):
+            raise ProviderError("Rerank response missing relevance_score", provider="litellm")
+        scores[idx] = float(score)
+    return scores
+
+
+_RERANK_RESULTS_SENTINEL = object()
+
+
+def _rerank_results(response: Any) -> list[Any]:
+    """Pull the ``results`` sequence out of a dict-or-object response."""
+    if isinstance(response, dict):
+        results = response.get("results", _RERANK_RESULTS_SENTINEL)
+    else:
+        results = getattr(response, "results", _RERANK_RESULTS_SENTINEL)
+    if results is _RERANK_RESULTS_SENTINEL or not isinstance(results, list):
+        raise ProviderError("Rerank response missing results list", provider="litellm")
+    return results
+
+
+def _get_field(item: Any, name: str) -> Any:
+    """Read *name* from a dict or object."""
+    if isinstance(item, dict):
+        return item.get(name)
+    return getattr(item, name, None)

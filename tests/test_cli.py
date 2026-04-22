@@ -2140,9 +2140,9 @@ class TestWikiBuild:
     def test_no_pages_prints_message(self, mock_svc, isolated_env, monkeypatch):
         mock_svc.store.get_sources.return_value = []
         self._stub_extraction(monkeypatch)
-        monkeypatch.setattr("lilbee.wiki.gen.build_wiki", lambda *a, **kw: [])
-        monkeypatch.setattr("lilbee.wiki.index.update_wiki_index", lambda *a, **kw: None)
-        monkeypatch.setattr("lilbee.wiki.index.append_wiki_log", lambda *a, **kw: None)
+        monkeypatch.setattr("lilbee.wiki.build_wiki", lambda *a, **kw: [])
+        monkeypatch.setattr("lilbee.wiki.update_wiki_index", lambda *a, **kw: None)
+        monkeypatch.setattr("lilbee.wiki.append_wiki_log", lambda *a, **kw: None)
         result = runner.invoke(app, ["wiki", "build"])
         assert result.exit_code == 0
         assert "No concept or entity pages" in result.output
@@ -2151,9 +2151,9 @@ class TestWikiBuild:
         mock_svc.store.get_sources.return_value = []
         self._stub_extraction(monkeypatch)
         out = isolated_env / "wiki" / "concepts" / "braking.md"
-        monkeypatch.setattr("lilbee.wiki.gen.build_wiki", lambda *a, **kw: [out])
-        monkeypatch.setattr("lilbee.wiki.index.update_wiki_index", lambda *a, **kw: None)
-        monkeypatch.setattr("lilbee.wiki.index.append_wiki_log", lambda *a, **kw: None)
+        monkeypatch.setattr("lilbee.wiki.build_wiki", lambda *a, **kw: [out])
+        monkeypatch.setattr("lilbee.wiki.update_wiki_index", lambda *a, **kw: None)
+        monkeypatch.setattr("lilbee.wiki.append_wiki_log", lambda *a, **kw: None)
         result = runner.invoke(app, ["wiki", "build"])
         assert result.exit_code == 0
         assert "braking.md" in result.output
@@ -2163,9 +2163,9 @@ class TestWikiBuild:
         mock_svc.store.get_sources.return_value = []
         self._stub_extraction(monkeypatch)
         out = isolated_env / "wiki" / "entities" / "henry-ford.md"
-        monkeypatch.setattr("lilbee.wiki.gen.build_wiki", lambda *a, **kw: [out])
-        monkeypatch.setattr("lilbee.wiki.index.update_wiki_index", lambda *a, **kw: None)
-        monkeypatch.setattr("lilbee.wiki.index.append_wiki_log", lambda *a, **kw: None)
+        monkeypatch.setattr("lilbee.wiki.build_wiki", lambda *a, **kw: [out])
+        monkeypatch.setattr("lilbee.wiki.update_wiki_index", lambda *a, **kw: None)
+        monkeypatch.setattr("lilbee.wiki.append_wiki_log", lambda *a, **kw: None)
         result = runner.invoke(app, ["--json", "wiki", "build"])
         assert result.exit_code == 0
         data = json.loads(result.output)
@@ -2177,9 +2177,9 @@ class TestWikiBuild:
         """wiki update currently delegates to wiki build (see bb-he8o for smarter version)."""
         mock_svc.store.get_sources.return_value = []
         self._stub_extraction(monkeypatch)
-        monkeypatch.setattr("lilbee.wiki.gen.build_wiki", lambda *a, **kw: [])
-        monkeypatch.setattr("lilbee.wiki.index.update_wiki_index", lambda *a, **kw: None)
-        monkeypatch.setattr("lilbee.wiki.index.append_wiki_log", lambda *a, **kw: None)
+        monkeypatch.setattr("lilbee.wiki.build_wiki", lambda *a, **kw: [])
+        monkeypatch.setattr("lilbee.wiki.update_wiki_index", lambda *a, **kw: None)
+        monkeypatch.setattr("lilbee.wiki.append_wiki_log", lambda *a, **kw: None)
         result = runner.invoke(app, ["wiki", "update"])
         assert result.exit_code == 0
         assert "No concept or entity pages" in result.output
@@ -2198,9 +2198,9 @@ class TestWikiBuild:
 
         mock_svc.store.get_chunks_by_source.side_effect = fake_chunks
         self._stub_extraction(monkeypatch)
-        monkeypatch.setattr("lilbee.wiki.gen.build_wiki", lambda *a, **kw: [])
-        monkeypatch.setattr("lilbee.wiki.index.update_wiki_index", lambda *a, **kw: None)
-        monkeypatch.setattr("lilbee.wiki.index.append_wiki_log", lambda *a, **kw: None)
+        monkeypatch.setattr("lilbee.wiki.build_wiki", lambda *a, **kw: [])
+        monkeypatch.setattr("lilbee.wiki.update_wiki_index", lambda *a, **kw: None)
+        monkeypatch.setattr("lilbee.wiki.append_wiki_log", lambda *a, **kw: None)
         result = runner.invoke(app, ["wiki", "build"])
         assert result.exit_code == 0
         assert chunk_calls == ["a.txt", "b.txt"]

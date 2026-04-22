@@ -22,6 +22,8 @@ from lilbee.wiki.entity_extractor import (
 )
 from lilbee.wiki.gen import (
     _apply_per_source_cap,
+    _augment_surface_map_with_existing_pages,
+    _entity_surface_map,
     _gather_chunks_for_label,
     _hash_existing_sources,
     build_wiki,
@@ -344,6 +346,55 @@ class TestGeneratePageProgress:
         stages = [stage for stage, _ in events]
         assert "preparing" in stages
         assert "generating" in stages
+
+
+class TestSurfaceMapHelpers:
+    def test_entity_surface_map_includes_label_and_spaced_slug(self) -> None:
+        entities = [
+            ExtractedEntity(
+                slug="henry-ford",
+                kind=EntityKind.ENTITY,
+                label="Henry Ford",
+                type_hint="PERSON",
+                chunk_refs=(ChunkRef("a.txt", 0),),
+            ),
+        ]
+        result = _entity_surface_map(entities)
+        assert result == {"Henry Ford": "henry-ford", "henry ford": "henry-ford"}
+
+    def test_entity_surface_map_single_word_slug_skips_spaced(self) -> None:
+        entities = [
+            ExtractedEntity(
+                slug="ford",
+                kind=EntityKind.ENTITY,
+                label="ford",
+                type_hint="PERSON",
+                chunk_refs=(ChunkRef("a.txt", 0),),
+            ),
+        ]
+        assert _entity_surface_map(entities) == {"ford": "ford"}
+
+    def test_augment_adds_spaced_slug_for_each_existing_page(self, tmp_path: Path) -> None:
+        wiki_root = tmp_path / "wiki"
+        (wiki_root / "concepts").mkdir(parents=True)
+        (wiki_root / "entities").mkdir()
+        (wiki_root / "concepts" / "tire-pressure.md").write_text("x\n")
+        (wiki_root / "entities" / "henry-ford.md").write_text("x\n")
+        mapping: dict[str, str] = {}
+        _augment_surface_map_with_existing_pages(mapping, wiki_root)
+        assert mapping == {
+            "tire pressure": "tire-pressure",
+            "henry ford": "henry-ford",
+        }
+
+    def test_augment_preserves_existing_entries(self, tmp_path: Path) -> None:
+        """Entity labels from the current build should win over on-disk spaced forms."""
+        wiki_root = tmp_path / "wiki"
+        (wiki_root / "concepts").mkdir(parents=True)
+        (wiki_root / "concepts" / "tire-pressure.md").write_text("x\n")
+        mapping = {"tire pressure": "custom-slug"}
+        _augment_surface_map_with_existing_pages(mapping, wiki_root)
+        assert mapping["tire pressure"] == "custom-slug"
 
 
 class TestBuildWikiRewritesLinks:

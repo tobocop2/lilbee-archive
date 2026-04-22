@@ -57,13 +57,13 @@ class TestIncrementalWikiUpdate:
     @pytest.mark.asyncio
     async def test_noop_when_wiki_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         cfg.wiki = False
-        with patch("lilbee.wiki.gen.build_wiki") as build:
+        with patch("lilbee.wiki.build_wiki") as build:
             await _incremental_wiki_update({"a.txt"})
         build.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_noop_when_changed_sources_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        with patch("lilbee.wiki.gen.build_wiki") as build:
+        with patch("lilbee.wiki.build_wiki") as build:
             await _incremental_wiki_update(set())
         build.assert_not_called()
 
@@ -78,7 +78,7 @@ class TestIncrementalWikiUpdate:
         (wiki_root / "concepts").mkdir(parents=True)
         (wiki_root / "concepts" / "unrelated.md").write_text("existing\n")
         _install_service_stubs(monkeypatch, [touched, untouched])
-        with patch("lilbee.wiki.gen.build_wiki", return_value=[]) as build:
+        with patch("lilbee.wiki.build_wiki", return_value=[]) as build:
             await _incremental_wiki_update({"changed.txt"})
         build.assert_called_once()
         args = build.call_args.args
@@ -90,7 +90,7 @@ class TestIncrementalWikiUpdate:
     ) -> None:
         brand_new = _entity("fresh", EntityKind.CONCEPT, ["untouched.txt"])
         _install_service_stubs(monkeypatch, [brand_new])
-        with patch("lilbee.wiki.gen.build_wiki", return_value=[]) as build:
+        with patch("lilbee.wiki.build_wiki", return_value=[]) as build:
             await _incremental_wiki_update({"untouched.txt"})
         build.assert_called_once()
         assert build.call_args.args[0] == [brand_new]
@@ -105,7 +105,7 @@ class TestIncrementalWikiUpdate:
         (wiki_root / "concepts").mkdir(parents=True)
         (wiki_root / "concepts" / "braking.md").write_text("stale\n")
         _install_service_stubs(monkeypatch, [existing])
-        with patch("lilbee.wiki.gen.build_wiki", return_value=[]) as build:
+        with patch("lilbee.wiki.build_wiki", return_value=[]) as build:
             await _incremental_wiki_update({"changed.txt"})
         build.assert_called_once()
         assert build.call_args.args[0] == [existing]
@@ -119,7 +119,7 @@ class TestIncrementalWikiUpdate:
         touched_b = _entity("b", EntityKind.CONCEPT, ["changed.txt"])
         touched_c = _entity("c", EntityKind.CONCEPT, ["changed.txt"])
         _install_service_stubs(monkeypatch, [touched_a, touched_b, touched_c])
-        with patch("lilbee.wiki.gen.build_wiki") as build:
+        with patch("lilbee.wiki.build_wiki") as build:
             await _incremental_wiki_update({"changed.txt"})
         build.assert_not_called()
         log_path = _isolated_wiki / "wiki" / "log.md"
@@ -136,7 +136,7 @@ class TestIncrementalWikiUpdate:
         touched = _entity("braking", EntityKind.CONCEPT, ["changed.txt"])
         _install_service_stubs(monkeypatch, [touched])
         page = _isolated_wiki / "wiki" / "concepts" / "braking.md"
-        with patch("lilbee.wiki.gen.build_wiki", return_value=[page]):
+        with patch("lilbee.wiki.build_wiki", return_value=[page]):
             await _incremental_wiki_update({"changed.txt"})
         log_path = _isolated_wiki / "wiki" / "log.md"
         assert log_path.exists()

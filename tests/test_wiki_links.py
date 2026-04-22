@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from lilbee.wiki.links import (
-    collect_slugs_from_frontmatter,
-    rewrite_wiki_links,
-)
+from lilbee.wiki.links import rewrite_wiki_links
 
 
 class TestEmptyAndNoop:
@@ -125,20 +122,3 @@ class TestSkipRegions:
         content = "tire pressure above.\n\n---\n\ntire pressure below.\n"
         result = rewrite_wiki_links(content, {"tire pressure": "tire-pressure"})
         assert result.count("[[tire-pressure]]") == 2
-
-
-class TestCollectSlugsFromFrontmatter:
-    def test_label_and_slug_both_exposed(self) -> None:
-        pages = [("Tire Pressure", {"slug": "tire-pressure"})]
-        mapping = collect_slugs_from_frontmatter(pages)
-        assert mapping == {"Tire Pressure": "tire-pressure", "tire pressure": "tire-pressure"}
-
-    def test_missing_slug_derived_from_label(self) -> None:
-        pages = [("tire pressure", {})]
-        mapping = collect_slugs_from_frontmatter(pages)
-        assert mapping == {"tire pressure": "tire-pressure"}
-
-    def test_single_word_slug_does_not_duplicate_label(self) -> None:
-        pages = [("ford", {"slug": "ford"})]
-        mapping = collect_slugs_from_frontmatter(pages)
-        assert mapping == {"ford": "ford"}

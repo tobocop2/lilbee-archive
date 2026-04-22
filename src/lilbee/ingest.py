@@ -559,9 +559,8 @@ async def _incremental_wiki_update(changed_sources: set[str]) -> None:
     if not cfg.wiki or not changed_sources:
         return
     from lilbee.store import SearchChunk
+    from lilbee.wiki import append_wiki_log, build_wiki, update_wiki_index
     from lilbee.wiki.entity_extractor import EntityKind, get_entity_extractor
-    from lilbee.wiki.gen import build_wiki
-    from lilbee.wiki.index import append_wiki_log, update_wiki_index
     from lilbee.wiki.shared import (
         CONCEPTS_SUBDIR,
         ENTITIES_SUBDIR,

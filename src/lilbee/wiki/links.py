@@ -11,8 +11,6 @@ from __future__ import annotations
 
 import re
 
-from lilbee.wiki.shared import make_slug
-
 _CITATION_COMMENT = "<!-- citations (auto-generated from _citations table -- do not edit) -->"
 _CODE_FENCE_PREFIX = "```"
 
@@ -43,27 +41,6 @@ def rewrite_wiki_links(content: str, surface_to_slug: dict[str, str]) -> str:
     if ending_newline:
         result += "\n"
     return result
-
-
-def collect_slugs_from_frontmatter(
-    pages: list[tuple[str, dict[str, object]]],
-) -> dict[str, str]:
-    """Build a ``surface → slug`` map from ``(label, frontmatter)`` pairs.
-
-    Uses the ``label`` text as the primary surface form and also
-    includes the slug-with-hyphens-as-spaces variant so a sentence like
-    *"Henry Ford founded..."* links to a slug ``henry-ford`` whose
-    frontmatter ``label`` happens to be *"Henry Ford"*. The caller owns
-    the frontmatter; this helper just flattens it.
-    """
-    mapping: dict[str, str] = {}
-    for label, frontmatter in pages:
-        slug = str(frontmatter.get("slug") or make_slug(label))
-        mapping[label] = slug
-        spaced = slug.replace("-", " ")
-        if spaced and spaced != label:
-            mapping[spaced] = slug
-    return mapping
 
 
 def _compile_surface_pattern(surface_to_slug: dict[str, str]) -> re.Pattern[str]:

@@ -612,6 +612,10 @@ class Config(BaseSettings):
         default=WikiEntityMode.NER_CONCEPTS, writable=True
     )
 
+    # Minimum distinct chunk mentions before an entity or concept earns
+    # its own wiki page. Filters one-off noise.
+    wiki_entity_min_mentions: int = ConfigField(default=3, ge=1, writable=True)
+
     # Class variable — not a settings field
     _toml_cache: ClassVar[dict[str, Any]] = {}
 

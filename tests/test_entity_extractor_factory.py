@@ -72,11 +72,15 @@ class TestFactoryDispatch:
 
 
 class TestStubsRaiseNotImplemented:
-    """Until their strategy tasks land, stubs signal absence with NotImplementedError."""
+    """The unimplemented strategies still signal absence with NotImplementedError.
+
+    NER_CONCEPTS is live (see ``tests/test_ner_concepts_extractor.py``); the
+    other two remain stubs until their own tasks land.
+    """
 
     @pytest.mark.parametrize(
         "mode",
-        list(WikiEntityMode),
+        [WikiEntityMode.NER_CONCEPTS_PLUS_LLM_TYPES, WikiEntityMode.LLM_TAGGED],
     )
     def test_extract_raises_not_implemented(self, mode: WikiEntityMode) -> None:
         provider = MagicMock()

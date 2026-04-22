@@ -199,6 +199,12 @@ SETTINGS_MAP: dict[str, SettingDef] = {
         ),
         choices=tuple(m.value for m in WikiEntityMode),
     ),
+    "wiki_entity_min_mentions": SettingDef(
+        int,
+        nullable=False,
+        group="Wiki",
+        help_text="Minimum chunk mentions before an entity or concept gets its own page",
+    ),
     "wiki_clusterer_k": SettingDef(
         int,
         nullable=False,

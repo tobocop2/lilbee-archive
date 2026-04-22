@@ -22,7 +22,7 @@ from lilbee.config import Config, cfg
 from lilbee.embedder import Embedder
 from lilbee.providers.base import LLMProvider
 from lilbee.reasoning import strip_reasoning
-from lilbee.store import CitationRecord, SearchChunk, Store, cosine_sim
+from lilbee.store import CitationRecord, SearchChunk, Store, cosine_sim, resolve_source
 
 log = logging.getLogger(__name__)
 
@@ -184,7 +184,7 @@ def display_source_path(source: str) -> str:
     Falls back to the raw source string if the file no longer exists on disk
     (e.g. the user moved the documents directory since ingestion).
     """
-    candidate = cfg.documents_dir / source
+    candidate = resolve_source(cfg, source)
     try:
         resolved = candidate.resolve(strict=False)
     except OSError:

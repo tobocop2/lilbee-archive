@@ -69,7 +69,13 @@ async def _lifespan(app: Litestar) -> AsyncIterator[None]:
     """Pre-load LLM provider and embedding model on server startup."""
     session_manager.generate()
 
+    from lilbee.migrations import run_all as run_migrations
     from lilbee.providers.litellm_provider import inject_provider_keys
+
+    try:
+        run_migrations()
+    except Exception:
+        log.warning("Data migrations failed on startup", exc_info=True)
 
     inject_provider_keys()
 

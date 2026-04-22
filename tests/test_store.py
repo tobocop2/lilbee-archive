@@ -12,6 +12,7 @@ from lilbee.store import (
     cosine_sim,
     escape_sql_string,
     mmr_rerank,
+    resolve_source,
 )
 
 
@@ -448,6 +449,17 @@ class TestEscapeSqlString:
         # No lone single quote remains (all are doubled)
         stripped = escaped.replace("''", "")
         assert "'" not in stripped
+
+
+class TestResolveSource:
+    def test_relative_source_joined_with_documents_dir(self, test_config):
+        result = resolve_source(test_config, "sub/doc.md")
+        assert result == test_config.documents_dir / "sub" / "doc.md"
+
+    def test_absolute_source_passes_through(self, test_config):
+        absolute = "/tmp/already/resolved.md"
+        result = resolve_source(test_config, absolute)
+        assert str(result) == absolute
 
 
 class TestChunkTypeField:

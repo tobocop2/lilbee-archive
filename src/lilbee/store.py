@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -75,6 +76,23 @@ class SearchChunk(BaseModel):
     vector: list[float] = Field(repr=False)
     distance: float | None = Field(None, alias="_distance")
     relevance_score: float | None = Field(None, alias="_relevance_score")
+
+
+def resolve_source(config: Config, source: str) -> Path:
+    """Resolve a stored ``chunks.source`` value to an absolute path.
+
+    Sources are stored relative to ``documents_dir`` so the database is
+    portable across machines. This helper is the single place that joins
+    the configured root back onto the row value. Callers that need to read
+    file bytes or check existence should go through here.
+
+    Legacy absolute paths (from pre-migration databases) pass through
+    unchanged — the migration rewrites them on first server start, but the
+    helper is defensive so an old test fixture still resolves correctly.
+    """
+    if os.path.isabs(source):
+        return Path(source)
+    return config.documents_dir / source
 
 
 def cosine_sim(a: list[float], b: list[float]) -> float:

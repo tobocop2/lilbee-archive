@@ -29,9 +29,12 @@ from lilbee.wiki.citation import (
     render_citation_block,
     strip_citation_block,
 )
+from lilbee.wiki.entity_extractor import EntityKind, ExtractedEntity
 from lilbee.wiki.index import append_wiki_log, update_wiki_index
 from lilbee.wiki.shared import (
+    CONCEPTS_SUBDIR,
     DRAFTS_SUBDIR,
+    ENTITIES_SUBDIR,
     MIN_CLUSTER_SOURCES,
     SUMMARIES_SUBDIR,
     SYNTHESIS_SUBDIR,
@@ -749,4 +752,196 @@ def generate_synthesis_pages(
             pages.append(page)
 
     log.info("Generated %d synthesis pages", len(pages))
+    return pages
+
+
+def _apply_per_source_cap(chunks: list[SearchChunk], cap: int) -> list[SearchChunk]:
+    """Cap how many chunks from any single source survive, preserving order."""
+    if cap <= 0:
+        return chunks
+    seen: dict[str, int] = {}
+    out: list[SearchChunk] = []
+    for chunk in chunks:
+        count = seen.get(chunk.source, 0)
+        if count >= cap:
+            continue
+        seen[chunk.source] = count + 1
+        out.append(chunk)
+    return out
+
+
+def _gather_chunks_for_label(
+    label: str,
+    provider: LLMProvider,
+    store: Store,
+    config: Config,
+) -> list[SearchChunk]:
+    """Retrieve the chunks most relevant to *label* for a concept/entity page.
+
+    Embeds the label, runs the store's hybrid search over the raw chunk
+    table to build a candidate pool, then either scores the pool through
+    the native GGUF reranker (when ``cfg.reranker_model`` is set and
+    supported) or leaves the hybrid-ranked order in place. A per-source
+    diversity cap is applied last so one loud document does not own the
+    page.
+    """
+    if not label.strip():
+        return []
+
+    top_k = config.wiki_concept_max_chunks_per_page
+    pool_size = max(top_k, top_k * config.candidate_multiplier)
+
+    try:
+        vectors = provider.embed([label])
+    except Exception as exc:
+        log.warning("Embedding failed for wiki label %r: %s", label, exc)
+        return []
+    if not vectors:
+        return []
+
+    candidates = store.search(
+        query_vector=vectors[0],
+        top_k=pool_size,
+        query_text=label,
+        chunk_type="raw",
+    )
+    if not candidates:
+        return []
+
+    if config.reranker_model and provider.supports_rerank():
+        try:
+            scores = provider.rerank(label, [c.chunk for c in candidates])
+        except Exception as exc:
+            log.warning("Rerank failed for %r, keeping hybrid order: %s", label, exc)
+        else:
+            if len(scores) == len(candidates):
+                candidates = [
+                    chunk
+                    for _, chunk in sorted(
+                        zip(scores, candidates, strict=True),
+                        key=lambda pair: pair[0],
+                        reverse=True,
+                    )
+                ]
+
+    capped = _apply_per_source_cap(candidates, config.diversity_max_per_source)
+    return capped[:top_k]
+
+
+def _generate_concept_like_page(
+    label: str,
+    kind: str,
+    page_type: str,
+    provider: LLMProvider,
+    store: Store,
+    config: Config,
+) -> Path | None:
+    """Shared body for ``generate_concept_page`` and ``generate_entity_page``."""
+    chunks = _gather_chunks_for_label(label, provider, store, config)
+    if not chunks:
+        log.info("No chunks found for %s %r, skipping wiki page", kind, label)
+        return None
+
+    chunks = _truncate_chunks_to_budget(chunks, config)
+    chunks_by_source: dict[str, list[SearchChunk]] = {}
+    for chunk in chunks:
+        chunks_by_source.setdefault(chunk.source, []).append(chunk)
+    source_names = sorted(chunks_by_source)
+    chunks_text = _chunks_to_text(chunks)
+    source_list = "\n".join(f"- {name}" for name in source_names)
+
+    prompt = config.wiki_concept_prompt.format(
+        topic=label,
+        kind=kind,
+        source_list=source_list,
+        chunks_text=chunks_text,
+        related_max=config.wiki_related_max,
+    )
+
+    source_hashes: dict[str, str] = {}
+    for name in source_names:
+        source_path = config.documents_dir / name
+        if source_path.exists():
+            source_hashes[name] = file_hash(source_path)
+
+    def resolver(parsed: list[ParsedCitation]) -> list[CitationRecord]:
+        return _resolve_multi_source_citations(
+            parsed, source_names, source_hashes, chunks_by_source
+        )
+
+    return _generate_page(
+        label=label,
+        prompt=prompt,
+        chunks=chunks,
+        chunks_text=chunks_text,
+        citation_resolver=resolver,
+        page_type=page_type,
+        slug=make_slug(label),
+        source_names=source_names,
+        provider=provider,
+        store=store,
+        config=config,
+    )
+
+
+def generate_concept_page(
+    label: str,
+    provider: LLMProvider,
+    store: Store,
+    config: Config,
+) -> Path | None:
+    """Generate one wiki page for a noun-phrase concept label."""
+    return _generate_concept_like_page(
+        label=label,
+        kind="concept",
+        page_type=CONCEPTS_SUBDIR,
+        provider=provider,
+        store=store,
+        config=config,
+    )
+
+
+def generate_entity_page(
+    label: str,
+    provider: LLMProvider,
+    store: Store,
+    config: Config,
+) -> Path | None:
+    """Generate one wiki page for a proper-noun entity label."""
+    return _generate_concept_like_page(
+        label=label,
+        kind="entity",
+        page_type=ENTITIES_SUBDIR,
+        provider=provider,
+        store=store,
+        config=config,
+    )
+
+
+def build_wiki(
+    entities: list[ExtractedEntity],
+    provider: LLMProvider,
+    store: Store,
+    config: Config | None = None,
+) -> list[Path]:
+    """Produce concept and entity pages for each extracted record.
+
+    Dispatches to :func:`generate_concept_page` for ``EntityKind.CONCEPT``
+    records and :func:`generate_entity_page` for ``EntityKind.ENTITY``
+    records. Pages that fail to ground a single citation are silently
+    skipped by ``_generate_page``; the returned list is the set of pages
+    that landed on disk.
+    """
+    if config is None:
+        config = cfg
+
+    pages: list[Path] = []
+    for entity in entities:
+        if entity.kind is EntityKind.CONCEPT:
+            page = generate_concept_page(entity.label, provider, store, config)
+        else:
+            page = generate_entity_page(entity.label, provider, store, config)
+        if page is not None:
+            pages.append(page)
+    log.info("Generated %d concept/entity pages", len(pages))
     return pages

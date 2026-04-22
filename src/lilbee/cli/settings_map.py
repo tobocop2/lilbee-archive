@@ -205,6 +205,18 @@ SETTINGS_MAP: dict[str, SettingDef] = {
         group="Wiki",
         help_text="Minimum chunk mentions before an entity or concept gets its own page",
     ),
+    "wiki_concept_max_chunks_per_page": SettingDef(
+        int,
+        nullable=False,
+        group="Wiki",
+        help_text="Maximum chunks passed into each concept or entity page generation call",
+    ),
+    "wiki_related_max": SettingDef(
+        int,
+        nullable=False,
+        group="Wiki",
+        help_text="Maximum related concepts listed in the `## Related` section of each page",
+    ),
     "wiki_clusterer_k": SettingDef(
         int,
         nullable=False,

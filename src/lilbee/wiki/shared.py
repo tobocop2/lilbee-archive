@@ -14,6 +14,8 @@ MIN_CLUSTER_SOURCES = 3  # minimum unique sources for a synthesis page
 
 SUMMARIES_SUBDIR = "summaries"
 SYNTHESIS_SUBDIR = "synthesis"
+CONCEPTS_SUBDIR = "concepts"
+ENTITIES_SUBDIR = "entities"
 DRAFTS_SUBDIR = "drafts"
 ARCHIVE_SUBDIR = "archive"
 
@@ -23,11 +25,18 @@ class WikiPageType(StrEnum):
 
     SUMMARY = "summary"
     SYNTHESIS = "synthesis"
+    CONCEPT = "concept"
+    ENTITY = "entity"
     DRAFT = "draft"
     ARCHIVE = "archive"
 
 
-WIKI_CONTENT_SUBDIRS: tuple[str, ...] = (SUMMARIES_SUBDIR, SYNTHESIS_SUBDIR)
+WIKI_CONTENT_SUBDIRS: tuple[str, ...] = (
+    SUMMARIES_SUBDIR,
+    SYNTHESIS_SUBDIR,
+    CONCEPTS_SUBDIR,
+    ENTITIES_SUBDIR,
+)
 
 WIKI_DISABLED_ERROR = "wiki not enabled"
 
@@ -39,6 +48,8 @@ WIKI_LOG_ACTION_GENERATED = "generated"
 SUBDIR_TO_TYPE: dict[str, WikiPageType] = {
     SUMMARIES_SUBDIR: WikiPageType.SUMMARY,
     SYNTHESIS_SUBDIR: WikiPageType.SYNTHESIS,
+    CONCEPTS_SUBDIR: WikiPageType.CONCEPT,
+    ENTITIES_SUBDIR: WikiPageType.ENTITY,
     DRAFTS_SUBDIR: WikiPageType.DRAFT,
     ARCHIVE_SUBDIR: WikiPageType.ARCHIVE,
 }

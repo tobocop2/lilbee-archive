@@ -616,6 +616,43 @@ class Config(BaseSettings):
     # its own wiki page. Filters one-off noise.
     wiki_entity_min_mentions: int = ConfigField(default=3, ge=1, writable=True)
 
+    # Maximum chunks passed into each concept or entity page generation
+    # call. Caps context size so one page does not blow the context
+    # window on a prolific topic.
+    wiki_concept_max_chunks_per_page: int = ConfigField(default=25, ge=1, writable=True)
+
+    # Maximum number of related concepts the model is asked to list in
+    # the `## Related` section of each page.
+    wiki_related_max: int = ConfigField(default=8, ge=0, writable=True)
+
+    # Prompt template for concept and entity wiki pages. Must contain
+    # {topic}, {kind}, {source_list}, {chunks_text}, and {related_max}
+    # placeholders.
+    wiki_concept_prompt: str = (
+        "You are a knowledge compiler. Given source chunks that mention the "
+        "{kind} '{topic}', write a wiki page in markdown that explains what "
+        "the {kind} is, how it appears across the sources, and how it connects "
+        "to related ideas.\n\n"
+        "Rules:\n"
+        "1. Every factual claim MUST have an inline citation [^src1], [^src2], etc.\n"
+        "2. Cite the EXACT text from the source that supports each claim by quoting it.\n"
+        "3. For connections or patterns you identify across sources, mark with [*inference*].\n"
+        "4. Use blockquotes (>) for directly cited facts.\n"
+        "5. End the body with a `## Related` section listing at most {related_max} "
+        "other concepts or entities that co-occur with '{topic}' in the chunks. "
+        "One per line as a bullet.\n"
+        "6. After `## Related`, end with a citation block in this format:\n\n"
+        "---\n"
+        "<!-- citations (auto-generated from _citations table -- do not edit) -->\n"
+        '[^src1]: {{source_name}}, excerpt: "exact quoted text"\n'
+        '[^src2]: {{source_name}}, excerpt: "exact quoted text"\n\n'
+        "Topic: {topic}\n"
+        "Kind: {kind}\n\n"
+        "Sources:\n{source_list}\n\n"
+        "Chunks:\n{chunks_text}\n\n"
+        "Write the page now. Start with a heading."
+    )
+
     # Class variable — not a settings field
     _toml_cache: ClassVar[dict[str, Any]] = {}
 

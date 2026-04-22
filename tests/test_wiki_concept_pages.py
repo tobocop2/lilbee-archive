@@ -1,0 +1,286 @@
+"""Tests for concept + entity page generation and the build_wiki orchestrator.
+
+Covers ``_gather_chunks_for_label`` under reranker-on and reranker-off,
+the per-source diversity cap, and that ``generate_concept_page``,
+``generate_entity_page``, and ``build_wiki`` wire through the expected
+subdirs and reuse the shared _generate_page pipeline.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from lilbee.config import cfg
+from lilbee.store import SearchChunk
+from lilbee.wiki.entity_extractor import (
+    ChunkRef,
+    EntityKind,
+    ExtractedEntity,
+)
+from lilbee.wiki.gen import (
+    _apply_per_source_cap,
+    _gather_chunks_for_label,
+    build_wiki,
+    generate_concept_page,
+    generate_entity_page,
+)
+from lilbee.wiki.shared import CONCEPTS_SUBDIR, ENTITIES_SUBDIR
+
+
+def _chunk(source: str, idx: int, text: str = "t") -> SearchChunk:
+    return SearchChunk(
+        source=source,
+        content_type="text/plain",
+        page_start=1,
+        page_end=1,
+        line_start=1,
+        line_end=1,
+        chunk=text,
+        chunk_index=idx,
+        vector=[0.0] * 3,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _compact_cfg_defaults() -> None:
+    """Shrink retrieval knobs so tiny test fixtures flow through the cap logic.
+
+    The conftest's autouse ``_isolate_cfg`` snapshots and restores the whole
+    cfg, so we only override the fields we need for these tests.
+    """
+    cfg.wiki_concept_max_chunks_per_page = 3
+    cfg.candidate_multiplier = 2
+    cfg.diversity_max_per_source = 2
+    cfg.reranker_model = ""
+
+
+class TestApplyPerSourceCap:
+    def test_zero_cap_keeps_everything(self) -> None:
+        chunks = [_chunk("a.txt", 0), _chunk("a.txt", 1), _chunk("b.txt", 0)]
+        assert _apply_per_source_cap(chunks, 0) == chunks
+
+    def test_cap_of_one_keeps_first_chunk_per_source(self) -> None:
+        chunks = [
+            _chunk("a.txt", 0),
+            _chunk("a.txt", 1),
+            _chunk("b.txt", 0),
+            _chunk("b.txt", 1),
+        ]
+        result = _apply_per_source_cap(chunks, 1)
+        assert [(c.source, c.chunk_index) for c in result] == [
+            ("a.txt", 0),
+            ("b.txt", 0),
+        ]
+
+    def test_order_preserved_within_cap(self) -> None:
+        chunks = [
+            _chunk("a.txt", 3),
+            _chunk("a.txt", 1),
+            _chunk("a.txt", 2),
+        ]
+        result = _apply_per_source_cap(chunks, 2)
+        assert [c.chunk_index for c in result] == [3, 1]
+
+
+class TestGatherChunksForLabel:
+    def test_empty_label_returns_empty(self) -> None:
+        assert _gather_chunks_for_label("  ", MagicMock(), MagicMock(), cfg) == []
+
+    def test_embed_failure_returns_empty(self) -> None:
+        provider = MagicMock()
+        provider.embed.side_effect = RuntimeError("embed crashed")
+        store = MagicMock()
+        assert _gather_chunks_for_label("braking", provider, store, cfg) == []
+        store.search.assert_not_called()
+
+    def test_empty_embed_result_returns_empty(self) -> None:
+        provider = MagicMock()
+        provider.embed.return_value = []
+        assert _gather_chunks_for_label("braking", provider, MagicMock(), cfg) == []
+
+    def test_no_candidates_returns_empty(self) -> None:
+        provider = MagicMock()
+        provider.embed.return_value = [[0.1, 0.2, 0.3]]
+        store = MagicMock()
+        store.search.return_value = []
+        assert _gather_chunks_for_label("braking", provider, store, cfg) == []
+
+    def test_reranker_off_respects_hybrid_order_and_cap(self) -> None:
+        cfg.reranker_model = ""
+        provider = MagicMock()
+        provider.embed.return_value = [[0.1, 0.2, 0.3]]
+        store = MagicMock()
+        store.search.return_value = [
+            _chunk("a.txt", 0),
+            _chunk("a.txt", 1),
+            _chunk("a.txt", 2),
+            _chunk("b.txt", 0),
+        ]
+        result = _gather_chunks_for_label("braking", provider, store, cfg)
+        assert [(c.source, c.chunk_index) for c in result] == [
+            ("a.txt", 0),
+            ("a.txt", 1),
+            ("b.txt", 0),
+        ]
+        provider.rerank.assert_not_called()
+
+    def test_reranker_on_reorders_by_score(self) -> None:
+        cfg.reranker_model = "some-rerank-model"
+        provider = MagicMock()
+        provider.embed.return_value = [[0.1, 0.2, 0.3]]
+        provider.supports_rerank.return_value = True
+        provider.rerank.return_value = [0.1, 0.9, 0.5]
+        store = MagicMock()
+        store.search.return_value = [
+            _chunk("a.txt", 0, "A"),
+            _chunk("b.txt", 0, "B"),
+            _chunk("c.txt", 0, "C"),
+        ]
+        result = _gather_chunks_for_label("braking", provider, store, cfg)
+        assert [c.source for c in result] == ["b.txt", "c.txt", "a.txt"]
+        provider.rerank.assert_called_once()
+
+    def test_reranker_on_but_unsupported_falls_back(self) -> None:
+        cfg.reranker_model = "x"
+        provider = MagicMock()
+        provider.embed.return_value = [[0.1, 0.2, 0.3]]
+        provider.supports_rerank.return_value = False
+        store = MagicMock()
+        store.search.return_value = [_chunk("a.txt", 0), _chunk("b.txt", 0)]
+        result = _gather_chunks_for_label("q", provider, store, cfg)
+        assert [c.source for c in result] == ["a.txt", "b.txt"]
+        provider.rerank.assert_not_called()
+
+    def test_rerank_exception_falls_back_to_hybrid_order(self) -> None:
+        cfg.reranker_model = "x"
+        provider = MagicMock()
+        provider.embed.return_value = [[0.1, 0.2, 0.3]]
+        provider.supports_rerank.return_value = True
+        provider.rerank.side_effect = RuntimeError("boom")
+        store = MagicMock()
+        store.search.return_value = [_chunk("a.txt", 0), _chunk("b.txt", 0)]
+        result = _gather_chunks_for_label("q", provider, store, cfg)
+        assert [c.source for c in result] == ["a.txt", "b.txt"]
+
+    def test_rerank_returning_wrong_length_is_ignored(self) -> None:
+        cfg.reranker_model = "x"
+        provider = MagicMock()
+        provider.embed.return_value = [[0.1, 0.2, 0.3]]
+        provider.supports_rerank.return_value = True
+        provider.rerank.return_value = [0.9]  # wrong length
+        store = MagicMock()
+        store.search.return_value = [_chunk("a.txt", 0), _chunk("b.txt", 0)]
+        result = _gather_chunks_for_label("q", provider, store, cfg)
+        assert [c.source for c in result] == ["a.txt", "b.txt"]
+
+
+class TestGeneratePages:
+    def test_concept_page_routes_to_concepts_subdir(self, tmp_path: Path) -> None:
+        provider = MagicMock()
+        store = MagicMock()
+        sentinel = tmp_path / "out.md"
+        with (
+            patch(
+                "lilbee.wiki.gen._gather_chunks_for_label",
+                return_value=[_chunk("a.txt", 0, "body")],
+            ),
+            patch("lilbee.wiki.gen._generate_page", return_value=sentinel) as gen,
+        ):
+            result = generate_concept_page("braking systems", provider, store, cfg)
+        assert result is sentinel
+        kwargs = gen.call_args.kwargs
+        assert kwargs["page_type"] == CONCEPTS_SUBDIR
+        assert kwargs["slug"] == "braking-systems"
+        assert kwargs["label"] == "braking systems"
+        # The rendered prompt must know we're writing a concept, not an entity.
+        assert "Kind: concept" in kwargs["prompt"]
+
+    def test_entity_page_routes_to_entities_subdir(self, tmp_path: Path) -> None:
+        provider = MagicMock()
+        store = MagicMock()
+        sentinel = tmp_path / "out.md"
+        with (
+            patch(
+                "lilbee.wiki.gen._gather_chunks_for_label",
+                return_value=[_chunk("hist.txt", 0, "body")],
+            ),
+            patch("lilbee.wiki.gen._generate_page", return_value=sentinel) as gen,
+        ):
+            result = generate_entity_page("Henry Ford", provider, store, cfg)
+        assert result is sentinel
+        kwargs = gen.call_args.kwargs
+        assert kwargs["page_type"] == ENTITIES_SUBDIR
+        assert kwargs["slug"] == "henry-ford"
+        assert "Kind: entity" in kwargs["prompt"]
+
+    def test_no_chunks_skips_page(self) -> None:
+        with (
+            patch("lilbee.wiki.gen._gather_chunks_for_label", return_value=[]),
+            patch("lilbee.wiki.gen._generate_page") as gen,
+        ):
+            assert generate_concept_page("x", MagicMock(), MagicMock(), cfg) is None
+        gen.assert_not_called()
+
+    def test_source_names_come_from_chunks_and_are_sorted(self, tmp_path: Path) -> None:
+        sentinel = tmp_path / "o.md"
+        with (
+            patch(
+                "lilbee.wiki.gen._gather_chunks_for_label",
+                return_value=[
+                    _chunk("z.txt", 0, "foo"),
+                    _chunk("a.txt", 0, "bar"),
+                ],
+            ),
+            patch("lilbee.wiki.gen._generate_page", return_value=sentinel) as gen,
+        ):
+            generate_concept_page("topic", MagicMock(), MagicMock(), cfg)
+        assert gen.call_args.kwargs["source_names"] == ["a.txt", "z.txt"]
+
+
+class TestBuildWiki:
+    def test_dispatches_concept_and_entity_records(self, tmp_path: Path) -> None:
+        concept_rec = ExtractedEntity(
+            slug="braking",
+            kind=EntityKind.CONCEPT,
+            label="braking",
+            type_hint="noun_phrase",
+            chunk_refs=(ChunkRef("a.txt", 0),),
+        )
+        entity_rec = ExtractedEntity(
+            slug="henry-ford",
+            kind=EntityKind.ENTITY,
+            label="Henry Ford",
+            type_hint="PERSON",
+            chunk_refs=(ChunkRef("a.txt", 1),),
+        )
+        concept_path = tmp_path / "concepts" / "braking.md"
+        entity_path = tmp_path / "entities" / "henry-ford.md"
+        with (
+            patch("lilbee.wiki.gen.generate_concept_page", return_value=concept_path) as gc,
+            patch("lilbee.wiki.gen.generate_entity_page", return_value=entity_path) as ge,
+        ):
+            result = build_wiki([concept_rec, entity_rec], MagicMock(), MagicMock(), cfg)
+        assert result == [concept_path, entity_path]
+        gc.assert_called_once()
+        ge.assert_called_once()
+        assert gc.call_args.args[0] == "braking"
+        assert ge.call_args.args[0] == "Henry Ford"
+
+    def test_none_return_is_skipped(self) -> None:
+        rec = ExtractedEntity(
+            slug="x",
+            kind=EntityKind.CONCEPT,
+            label="x",
+            type_hint="noun_phrase",
+            chunk_refs=(ChunkRef("a.txt", 0),),
+        )
+        with patch("lilbee.wiki.gen.generate_concept_page", return_value=None):
+            assert build_wiki([rec], MagicMock(), MagicMock(), cfg) == []
+
+    def test_defaults_config_to_cfg_singleton(self) -> None:
+        with patch("lilbee.wiki.gen.generate_concept_page") as gc:
+            build_wiki([], MagicMock(), MagicMock(), None)
+        gc.assert_not_called()

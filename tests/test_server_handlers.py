@@ -683,7 +683,21 @@ class TestSetChatModel:
 
 
 class TestModelsCatalog:
-    @patch("lilbee.catalog.get_catalog")
+    @staticmethod
+    def _manifest(name: str, tag: str, task: str = "chat"):
+        from lilbee.registry import ModelManifest
+
+        return ModelManifest(
+            name=name,
+            tag=tag,
+            size_bytes=1,
+            task=task,
+            source_repo=f"org/{name}-GGUF",
+            source_filename=f"{name}.gguf",
+            downloaded_at="2026-01-01T00:00:00+00:00",
+        )
+
+    @patch("lilbee.server.handlers.get_catalog")
     async def test_returns_catalog_response(self, mock_get_catalog, mock_svc):
         from lilbee.catalog import CatalogModel, CatalogResult
 
@@ -707,7 +721,7 @@ class TestModelsCatalog:
                 )
             ],
         )
-        mock_svc.provider.list_models.return_value = ["qwen3:8b"]
+        mock_svc.registry.list_installed.return_value = [self._manifest("qwen3", "8b")]
         result = await handlers.models_catalog()
 
         assert result.total == 1
@@ -724,12 +738,12 @@ class TestModelsCatalog:
         assert m.installed is True
         assert m.source == "native"
 
-    @patch("lilbee.catalog.get_catalog")
+    @patch("lilbee.server.handlers.get_catalog")
     async def test_filters_passed_to_catalog(self, mock_get_catalog, mock_svc):
         from lilbee.catalog import CatalogResult
 
         mock_get_catalog.return_value = CatalogResult(total=0, limit=10, offset=5, models=[])
-        mock_svc.provider.list_models.return_value = []
+        mock_svc.registry.list_installed.return_value = []
         await handlers.models_catalog(
             task="chat",
             search="qwen",
@@ -751,7 +765,7 @@ class TestModelsCatalog:
             offset=5,
         )
 
-    @patch("lilbee.catalog.get_catalog")
+    @patch("lilbee.server.handlers.get_catalog")
     async def test_installed_flag(self, mock_get_catalog, mock_svc):
         from lilbee.catalog import CatalogModel, CatalogResult
 
@@ -775,20 +789,78 @@ class TestModelsCatalog:
                 )
             ],
         )
-        mock_svc.provider.list_models.return_value = ["qwen3:8b"]
+        mock_svc.registry.list_installed.return_value = [self._manifest("qwen3", "8b")]
         result = await handlers.models_catalog()
         assert result.models[0].installed is True
 
-    @patch("lilbee.catalog.get_catalog")
+    @patch("lilbee.server.handlers.get_catalog")
     async def test_has_more_propagated(self, mock_get_catalog, mock_svc):
         from lilbee.catalog import CatalogResult
 
         mock_get_catalog.return_value = CatalogResult(
             total=0, limit=20, offset=0, models=[], has_more=True
         )
-        mock_svc.provider.list_models.return_value = []
+        mock_svc.registry.list_installed.return_value = []
         result = await handlers.models_catalog()
         assert result.has_more is True
+
+    @patch("lilbee.server.handlers.get_catalog")
+    async def test_installed_reflects_registry_not_routing_provider(
+        self, mock_get_catalog, mock_svc
+    ):
+        """installed flag must reflect on-disk GGUFs only, not litellm routability.
+
+        The routing provider's ``list_models()`` can include models that are
+        routable via litellm proxies but have no GGUF on disk. The catalog's
+        ``installed`` field should only be True when a ModelManifest exists
+        in the registry for that ref.
+        """
+        from lilbee.catalog import CatalogModel, CatalogResult
+
+        mock_get_catalog.return_value = CatalogResult(
+            total=2,
+            limit=20,
+            offset=0,
+            models=[
+                CatalogModel(
+                    name="qwen3",
+                    tag="8b",
+                    display_name="Qwen3 8B",
+                    hf_repo="Qwen/Qwen3-8B-GGUF",
+                    gguf_filename="*Q4_K_M.gguf",
+                    size_gb=5.0,
+                    min_ram_gb=8.0,
+                    description="on disk",
+                    featured=True,
+                    downloads=0,
+                    task="chat",
+                ),
+                CatalogModel(
+                    name="mistral",
+                    tag="7b",
+                    display_name="Mistral 7B",
+                    hf_repo="TheBloke/Mistral-7B-GGUF",
+                    gguf_filename="*Q4_K_M.gguf",
+                    size_gb=4.0,
+                    min_ram_gb=8.0,
+                    description="routable only",
+                    featured=False,
+                    downloads=0,
+                    task="chat",
+                ),
+            ],
+        )
+        # Registry has only qwen3 on disk.
+        mock_svc.registry.list_installed.return_value = [self._manifest("qwen3", "8b")]
+        # Routing provider also claims mistral is routable (litellm proxy),
+        # but its GGUF is not on disk.
+        mock_svc.provider.list_models.return_value = ["qwen3:8b", "mistral:7b"]
+
+        result = await handlers.models_catalog()
+
+        by_ref = {f"{m.name}:{m.tag}": m for m in result.models}
+        assert by_ref["qwen3:8b"].installed is True
+        assert by_ref["mistral:7b"].installed is False
 
 
 class TestModelsInstalled:
@@ -1138,18 +1210,148 @@ class TestListDocuments:
         assert all("readme" in d.filename for d in result.documents)
 
 
-class TestGetConfigReranker:
-    @patch("lilbee.reranker.reranker_available", return_value=False)
-    async def test_hides_reranker_when_not_installed(self, mock_avail):
-        result = await handlers.get_config()
-        assert "reranker_model" not in result.model_dump()
+class TestSetRerankerModel:
+    @patch("lilbee.server.handlers.get_services")
+    async def test_empty_string_disables(self, mock_svc, tmp_path):
+        """Empty string is accepted and disables reranking."""
+        cfg.reranker_model = "bge-reranker-v2-m3:latest"
+        result = await handlers.set_reranker_model("")
+        assert result.model == ""
+        assert cfg.reranker_model == ""
 
-    @patch("lilbee.reranker.reranker_available", return_value=True)
-    async def test_shows_reranker_when_installed(self, mock_avail):
+    @patch("lilbee.server.handlers.get_services")
+    async def test_accepts_installed_model(self, mock_svc, tmp_path):
+        mock_svc.return_value.provider.list_models.return_value = ["bge-reranker-v2-m3:latest"]
+        result = await handlers.set_reranker_model("bge-reranker-v2-m3:latest")
+        assert result.model == "bge-reranker-v2-m3:latest"
+        assert cfg.reranker_model == "bge-reranker-v2-m3:latest"
+
+    @patch("lilbee.server.handlers.get_services")
+    async def test_accepts_catalog_entry_not_yet_installed(self, mock_svc, tmp_path):
+        """Known rerank catalog refs validate even before install."""
+        mock_svc.return_value.provider.list_models.return_value = []
+        result = await handlers.set_reranker_model("bge-reranker-v2-m3")
+        assert result.model == "bge-reranker-v2-m3:latest"
+
+    @patch("lilbee.server.handlers.get_services")
+    async def test_rejects_unknown_model(self, mock_svc):
+        mock_svc.return_value.provider.list_models.return_value = []
+        with pytest.raises(ValueError, match="not available"):
+            await handlers.set_reranker_model("totally-bogus-ranker")
+
+
+class TestModelsInstalledTaskFilter:
+    async def test_task_filter_narrows_to_rerank(self):
+        from lilbee.catalog import FEATURED_RERANK
+        from lilbee.model_manager import ModelSource
+        from lilbee.models import ModelTask
+
+        rerank_ref = FEATURED_RERANK[0].ref
+        mock_manager = MagicMock()
+        mock_manager.list_installed.return_value = [rerank_ref, "qwen3:8b"]
+        mock_manager.get_source.return_value = ModelSource.NATIVE
+        with patch("lilbee.server.handlers.get_model_manager", return_value=mock_manager):
+            result = await handlers.models_installed(task=ModelTask.RERANK)
+        names = [m.name for m in result.models]
+        assert names == [rerank_ref]
+
+    async def test_no_task_filter_returns_all(self):
+        from lilbee.model_manager import ModelSource
+
+        mock_manager = MagicMock()
+        mock_manager.list_installed.return_value = ["qwen3:8b", "nomic-embed-text:v1.5"]
+        mock_manager.get_source.return_value = ModelSource.NATIVE
+        with patch("lilbee.server.handlers.get_model_manager", return_value=mock_manager):
+            result = await handlers.models_installed()
+        assert len(result.models) == 2
+
+
+class _FakeProvider:
+    """Minimal provider stand-in that answers the ``supports_rerank()`` probe.
+
+    ``_provider_has_rerank`` is capability-based, so tests that claim a
+    provider supports / doesn't support rerank need a concrete object
+    that answers the method — ``object()`` and ``hasattr``-style toggles
+    no longer reflect reality.
+    """
+
+    def __init__(self, *, rerank: bool) -> None:
+        self._rerank = rerank
+
+    def supports_rerank(self) -> bool:
+        return self._rerank
+
+
+class TestListModelsReranker:
+    async def test_includes_reranker_section_when_provider_supports_it(self):
+        with (
+            patch("lilbee.server.handlers.get_services") as mock_svc,
+            patch("lilbee.models.list_installed_models", return_value=[]),
+        ):
+            mock_svc.return_value.provider = _FakeProvider(rerank=True)
+            result = await handlers.list_models()
+        assert result.reranker is not None
+        assert len(result.reranker.catalog) > 0
+
+    async def test_omits_reranker_section_when_provider_lacks_rerank(self):
+        with (
+            patch("lilbee.server.handlers.get_services") as mock_svc,
+            patch("lilbee.models.list_installed_models", return_value=[]),
+        ):
+            mock_svc.return_value.provider = _FakeProvider(rerank=False)
+            result = await handlers.list_models()
+        assert result.reranker is None
+
+
+class TestGetConfigReranker:
+    async def test_always_includes_reranker_fields(self):
+        """Reranker fields are always present; plugin renders based on flag."""
         result = await handlers.get_config()
         dumped = result.model_dump()
         assert "reranker_model" in dumped
         assert "rerank_candidates" in dumped
+        assert "reranker_available" in dumped
+
+    async def test_reranker_available_true_when_provider_has_rerank(self):
+        with patch("lilbee.server.handlers.get_services") as mock_svc:
+            mock_svc.return_value.provider = _FakeProvider(rerank=True)
+            result = await handlers.get_config()
+        assert result.model_dump()["reranker_available"] is True
+
+    async def test_reranker_available_false_when_services_missing(self):
+        with patch("lilbee.server.handlers.get_services", side_effect=RuntimeError("no services")):
+            result = await handlers.get_config()
+        assert result.model_dump()["reranker_available"] is False
+
+    async def test_reranker_available_false_when_provider_lacks_rerank(self):
+        """A provider that reports ``supports_rerank() is False`` toggles the flag off."""
+        with patch("lilbee.server.handlers.get_services") as mock_svc:
+            mock_svc.return_value.provider = _FakeProvider(rerank=False)
+            result = await handlers.get_config()
+        assert result.model_dump()["reranker_available"] is False
+
+    async def test_reranker_available_false_when_supports_raises(self):
+        """Providers whose ``supports_rerank`` explodes must not crash ``get_config``."""
+
+        class _BoomProvider:
+            def supports_rerank(self) -> bool:
+                raise RuntimeError("boom")
+
+        with patch("lilbee.server.handlers.get_services") as mock_svc:
+            mock_svc.return_value.provider = _BoomProvider()
+            result = await handlers.get_config()
+        assert result.model_dump()["reranker_available"] is False
+
+    async def test_reranker_available_false_when_provider_missing_method(self):
+        """Legacy providers that predate ``supports_rerank`` count as unavailable."""
+
+        class _LegacyProvider:
+            pass
+
+        with patch("lilbee.server.handlers.get_services") as mock_svc:
+            mock_svc.return_value.provider = _LegacyProvider()
+            result = await handlers.get_config()
+        assert result.model_dump()["reranker_available"] is False
 
 
 class TestCrawlStream:

@@ -152,29 +152,78 @@ def render_status(con: Console) -> None:
     con.print(gather_status())
 
 
+IMPORTED_SUBDIR = "imported"
+
+
 @dataclass
 class CopyResult:
-    """Result of copying files into the documents directory."""
+    """Result of copying files into the documents directory.
+
+    ``copied`` and ``skipped`` hold the source-relative paths (as stored in
+    LanceDB's ``chunks.source``). They're forward-slash-normalised so tests
+    and UI consumers don't have to worry about OS separators.
+    """
 
     copied: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
 
 
+def _rel_source_name(path: Path, base: Path) -> str:
+    """Path relative to ``base`` as a forward-slash string (portable)."""
+    return path.relative_to(base).as_posix()
+
+
 def copy_files(paths: list[Path], *, force: bool = False) -> CopyResult:
-    """Copy paths into documents dir. Returns structured result (no console output)."""
+    """Stage paths under ``<documents_dir>/imported/`` for ingestion.
+
+    Fast path: when a given input already lives inside ``documents_dir``
+    (anywhere, including ``documents/``, ``crawled/``, a pre-existing
+    ``imported/`` tree, etc.), no copy happens — the file is indexed in
+    place. This covers "add this vault file to the KB" for managed installs
+    without duplicating content.
+
+    Otherwise, the file (or directory) is copied into
+    ``<documents_dir>/imported/<basename>``. The returned relative paths are
+    what LanceDB will store as ``chunks.source`` on the next sync.
+    """
     cfg.documents_dir.mkdir(parents=True, exist_ok=True)
+    docs_dir_resolved = cfg.documents_dir.resolve()
+    imported_dir = cfg.documents_dir / IMPORTED_SUBDIR
     result = CopyResult()
     for p in paths:
-        dest = cfg.documents_dir / p.name
-        validate_path_within(dest, cfg.documents_dir)
+        try:
+            resolved = p.resolve()
+        except OSError:
+            # Broken symlinks etc. — fall through to the copy branch, which
+            # will itself raise a clearer error if the file really isn't
+            # accessible.
+            resolved = p
+
+        # Fast-path: already inside documents_dir — index in place.
+        in_docs_dir = False
+        try:
+            resolved.relative_to(docs_dir_resolved)
+            in_docs_dir = True
+        except ValueError:
+            in_docs_dir = False
+
+        if in_docs_dir:
+            rel = _rel_source_name(resolved, docs_dir_resolved)
+            result.copied.append(rel)
+            continue
+
+        # Slow path: copy into imported/.
+        imported_dir.mkdir(parents=True, exist_ok=True)
+        dest = imported_dir / p.name
+        validate_path_within(dest, docs_dir_resolved)
         if dest.exists() and not force:
-            result.skipped.append(p.name)
+            result.skipped.append(_rel_source_name(dest, docs_dir_resolved))
             continue
         if p.is_dir():
             shutil.copytree(p, dest, dirs_exist_ok=True, ignore=_copytree_ignore, symlinks=False)
         else:
             shutil.copy2(p, dest)
-        result.copied.append(p.name)
+        result.copied.append(_rel_source_name(dest, docs_dir_resolved))
     return result
 
 

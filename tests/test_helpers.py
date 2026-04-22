@@ -32,31 +32,33 @@ class TestCopyFiles:
 
         result = copy_files([src])
 
-        assert result.copied == ["hello.txt"]
+        assert result.copied == ["imported/hello.txt"]
         assert result.skipped == []
-        assert (cfg.documents_dir / "hello.txt").read_text() == "hello"
+        assert (cfg.documents_dir / "imported" / "hello.txt").read_text() == "hello"
 
     def test_skip_existing_no_force(self, tmp_path):
-        (cfg.documents_dir / "hello.txt").write_text("old")
+        (cfg.documents_dir / "imported").mkdir()
+        (cfg.documents_dir / "imported" / "hello.txt").write_text("old")
         src = tmp_path / "hello.txt"
         src.write_text("new")
 
         result = copy_files([src])
 
         assert result.copied == []
-        assert result.skipped == ["hello.txt"]
-        assert (cfg.documents_dir / "hello.txt").read_text() == "old"
+        assert result.skipped == ["imported/hello.txt"]
+        assert (cfg.documents_dir / "imported" / "hello.txt").read_text() == "old"
 
     def test_overwrite_existing_with_force(self, tmp_path):
-        (cfg.documents_dir / "hello.txt").write_text("old")
+        (cfg.documents_dir / "imported").mkdir()
+        (cfg.documents_dir / "imported" / "hello.txt").write_text("old")
         src = tmp_path / "hello.txt"
         src.write_text("new")
 
         result = copy_files([src], force=True)
 
-        assert result.copied == ["hello.txt"]
+        assert result.copied == ["imported/hello.txt"]
         assert result.skipped == []
-        assert (cfg.documents_dir / "hello.txt").read_text() == "new"
+        assert (cfg.documents_dir / "imported" / "hello.txt").read_text() == "new"
 
     def test_copy_directory(self, tmp_path):
         src_dir = tmp_path / "mydir"
@@ -66,9 +68,9 @@ class TestCopyFiles:
 
         result = copy_files([src_dir])
 
-        assert result.copied == ["mydir"]
-        assert (cfg.documents_dir / "mydir" / "a.txt").read_text() == "a"
-        assert (cfg.documents_dir / "mydir" / "b.txt").read_text() == "b"
+        assert result.copied == ["imported/mydir"]
+        assert (cfg.documents_dir / "imported" / "mydir" / "a.txt").read_text() == "a"
+        assert (cfg.documents_dir / "imported" / "mydir" / "b.txt").read_text() == "b"
 
     def test_empty_paths(self):
         result = copy_files([])
@@ -86,8 +88,23 @@ class TestCopyFiles:
 
         result = copy_files([src])
 
-        assert result.copied == ["file.txt"]
+        assert result.copied == ["imported/file.txt"]
         assert cfg.documents_dir.exists()
+        assert (cfg.documents_dir / "imported" / "file.txt").exists()
+
+    def test_fast_path_file_already_under_documents_dir(self, tmp_path):
+        # When a caller passes a path that's already inside documents_dir,
+        # the file is indexed in place — no copy happens.
+        (cfg.documents_dir / "notes").mkdir()
+        existing = cfg.documents_dir / "notes" / "kept.md"
+        existing.write_text("kept")
+
+        result = copy_files([existing])
+
+        assert result.copied == ["notes/kept.md"]
+        assert result.skipped == []
+        # No duplicate copy under imported/.
+        assert not (cfg.documents_dir / "imported" / "kept.md").exists()
 
 
 class TestCopyPaths:
@@ -98,10 +115,11 @@ class TestCopyPaths:
 
         copied = copy_paths([src], con)
 
-        assert copied == ["doc.txt"]
+        assert copied == ["imported/doc.txt"]
 
     def test_prints_warning_for_skipped(self, tmp_path):
-        (cfg.documents_dir / "doc.txt").write_text("old")
+        (cfg.documents_dir / "imported").mkdir()
+        (cfg.documents_dir / "imported" / "doc.txt").write_text("old")
         src = tmp_path / "doc.txt"
         src.write_text("new")
         con = Console(quiet=True)

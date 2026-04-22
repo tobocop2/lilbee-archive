@@ -105,7 +105,8 @@ class TestAddEndpoint:
 
         src = tmp_path / "dup.txt"
         src.write_text("Version 1")
-        (isolated_env / "dup.txt").write_text("Existing")
+        (isolated_env / "imported").mkdir(exist_ok=True)
+        (isolated_env / "imported" / "dup.txt").write_text("Existing")
 
         async with AsyncTestClient(create_app()) as client:
             resp = await client.post(
@@ -115,7 +116,7 @@ class TestAddEndpoint:
         assert resp.status_code == 201
         events = _parse_sse_events(resp.content)
         summary = [d for t, d in events if t == "done" and "copied" in d][-1]
-        assert "dup.txt" in summary["copied"]
+        assert "imported/dup.txt" in summary["copied"]
 
     async def test_done_event_has_correct_fields(self, mock_extract_file, isolated_env, tmp_path):
         """The done event includes added, updated, removed, failed counts."""

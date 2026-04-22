@@ -56,7 +56,14 @@ class ChatMessage(BaseModel):
 
 
 class CleanedChunk(BaseModel):
-    """A search result chunk with vector stripped and distance renamed."""
+    """A search result chunk with vector stripped and distance renamed.
+
+    ``vault_path`` is stamped only when ``cfg.vault_base`` is set (managed
+    install — the plugin has told the server where the user's vault root
+    lives). On external / CLI-only installs it stays ``None`` so the caller
+    can tell "I can open this in Obsidian" from "I need to preview it via
+    /api/source".
+    """
 
     source: str
     content_type: str
@@ -68,6 +75,7 @@ class CleanedChunk(BaseModel):
     line_start: int = 0
     line_end: int = 0
     chunk_index: int = 0
+    vault_path: str | None = None
 
 
 class StatusSourceInfo(BaseModel):
@@ -248,6 +256,23 @@ class AddSummary(BaseModel):
     skipped: list[str]
     errors: list[str]
     sync: SyncSummary | None = None
+
+
+class SourceContentResponse(BaseModel):
+    """Response for GET /api/source (text mode).
+
+    Holds the rendered markdown (for markdown / crawled files, with the
+    managed-frontmatter block stripped) along with any metadata lilbee
+    already tracks for that file. PDFs and binary formats are returned via
+    the ``raw=1`` variant instead — this model is the text-friendly shape.
+    """
+
+    source: str
+    markdown: str
+    content_type: str
+    crawled_at: str | None = None
+    source_url: str | None = None
+    title: str | None = None
 
 
 class WikiPageSummary(BaseModel):

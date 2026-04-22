@@ -155,7 +155,8 @@ class TestAdd:
         external = tmp_path / "external.md"
         external.write_text("# External\nThis file lives outside the project.")
         result = bee.add([external])
-        assert "external.md" in result.added
+        # External files land under imported/ now.
+        assert "imported/external.md" in result.added
         found = bee.search("external")
         assert len(found) > 0
 

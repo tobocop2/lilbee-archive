@@ -1684,14 +1684,19 @@ class TestSaveSingleResult:
     """Unit tests for _save_single_result (per-page flush helper)."""
 
     def test_writes_new_content(self, isolated_env):
-        from lilbee.crawler import _save_single_result
+        from lilbee.crawler import _save_single_result, parse_managed_frontmatter
 
         meta: dict = {}
         result = CrawlResult(url="https://example.com/new", markdown="# New")
         path = _save_single_result(result, meta)
         assert path is not None
         assert path.exists()
-        assert path.read_text(encoding="utf-8") == "# New"
+        body = path.read_text(encoding="utf-8")
+        # Managed frontmatter is prepended; body is preserved afterward.
+        parsed = parse_managed_frontmatter(body)
+        assert parsed is not None
+        assert parsed["source_url"] == "https://example.com/new"
+        assert body.endswith("# New")
 
     def test_returns_none_on_failure(self, isolated_env):
         from lilbee.crawler import _save_single_result
@@ -1941,7 +1946,8 @@ class TestStreamingFlush:
         # p1 is skipped (unchanged), p2 is written.
         assert len(paths) == 1
         assert paths[0].name == "index.md"
-        assert paths[0].read_text(encoding="utf-8") == "# NewPage"
+        # Body carries managed frontmatter but ends with the new content.
+        assert paths[0].read_text(encoding="utf-8").endswith("# NewPage")
 
     @patch("lilbee.crawler.crawl_single")
     async def test_single_url_flushes_via_per_page_path(self, mock_crawl_single, isolated_env):
@@ -1983,12 +1989,20 @@ class TestStreamingFlush:
             paths = await crawl_and_save("https://example.com", depth=2, max_pages=10)
 
         assert len(paths) == 3
-        contents = {p.read_text(encoding="utf-8") for p in paths}
-        assert contents == {"# A", "# B", "# C"}
+        # Each file now carries a managed frontmatter block; assert on the
+        # trailing content rather than exact equality so the managed-header
+        # contract can evolve independently.
+        contents = {p.read_text(encoding="utf-8").rsplit("\n", 1)[-1] or "" for p in paths}
+        # Each file ends with its respective heading (the "# X" line).
+        for body in (p.read_text(encoding="utf-8") for p in paths):
+            assert any(body.rstrip().endswith(marker) for marker in ("# A", "# B", "# C"))
+        _ = contents  # unused — kept for future assertions
 
         meta = load_crawl_metadata()
         for url, md in urls_and_content:
             assert url in meta
+            # Hash is computed against the raw markdown body, not the
+            # frontmatter-adorned file contents.
             assert meta[url].content_hash == content_hash(md)
 
     async def test_cancel_does_not_trigger_auto_sync(self, isolated_env):

@@ -403,10 +403,10 @@ class TestAdd:
         result = await add([str(src)])
 
         assert result["command"] == "add"
-        assert "test.txt" in result["copied"]
+        assert "imported/test.txt" in result["copied"]
         assert result["errors"] == []
         assert result["skipped"] == []
-        assert (cfg.documents_dir / "test.txt").read_text() == "hello world"
+        assert (cfg.documents_dir / "imported" / "test.txt").read_text() == "hello world"
         mock_sync.assert_awaited_once()
 
     @mock.patch("lilbee.ingest.sync", new_callable=AsyncMock, return_value=_SYNC_NOOP)
@@ -424,27 +424,31 @@ class TestAdd:
 
     @mock.patch("lilbee.ingest.sync", new_callable=AsyncMock, return_value=_SYNC_NOOP)
     async def test_add_existing_no_force(self, mock_sync, tmp_path):
-        (cfg.documents_dir / "exist.txt").write_text("old")
+        imported_dir = cfg.documents_dir / "imported"
+        imported_dir.mkdir(parents=True, exist_ok=True)
+        (imported_dir / "exist.txt").write_text("old")
         src = tmp_path / "exist.txt"
         src.write_text("new")
 
         result = await add([str(src)])
 
-        assert "exist.txt" in result["skipped"]
+        assert "imported/exist.txt" in result["skipped"]
         assert result["copied"] == []
-        assert (cfg.documents_dir / "exist.txt").read_text() == "old"
+        assert (imported_dir / "exist.txt").read_text() == "old"
 
     @mock.patch("lilbee.ingest.sync", new_callable=AsyncMock, return_value=_SYNC_NOOP)
     async def test_add_existing_with_force(self, mock_sync, tmp_path):
-        (cfg.documents_dir / "exist.txt").write_text("old")
+        imported_dir = cfg.documents_dir / "imported"
+        imported_dir.mkdir(parents=True, exist_ok=True)
+        (imported_dir / "exist.txt").write_text("old")
         src = tmp_path / "exist.txt"
         src.write_text("new")
 
         result = await add([str(src)], force=True)
 
-        assert "exist.txt" in result["copied"]
+        assert "imported/exist.txt" in result["copied"]
         assert result["skipped"] == []
-        assert (cfg.documents_dir / "exist.txt").read_text() == "new"
+        assert (imported_dir / "exist.txt").read_text() == "new"
 
     @mock.patch("lilbee.ingest.sync", new_callable=AsyncMock, return_value=_SYNC_NOOP)
     async def test_add_directory(self, mock_sync, tmp_path):
@@ -454,8 +458,8 @@ class TestAdd:
 
         result = await add([str(src_dir)])
 
-        assert "mydir" in result["copied"]
-        assert (cfg.documents_dir / "mydir" / "a.txt").read_text() == "a"
+        assert "imported/mydir" in result["copied"]
+        assert (cfg.documents_dir / "imported" / "mydir" / "a.txt").read_text() == "a"
 
     @mock.patch("lilbee.ingest.sync", new_callable=AsyncMock, return_value=_SYNC_NOOP)
     async def test_add_with_enable_ocr(self, mock_sync, tmp_path):

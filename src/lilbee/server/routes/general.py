@@ -1,18 +1,21 @@
-"""General routes — health, status, config."""
+"""General routes — health, status, config, source preview."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from litestar import get, patch
+from litestar import Response, get, patch
+from litestar.exceptions import NotFoundException
 from pydantic import ValidationError
 
 from lilbee.server import handlers
 from lilbee.server.auth import read_only
+from lilbee.server.handlers import SourceNotFoundError
 from lilbee.server.models import (
     ConfigResponse,
     ConfigUpdateResponse,
     HealthResponse,
+    SourceContentResponse,
     StatusResponse,
 )
 
@@ -54,3 +57,28 @@ async def config_update_route(data: dict[str, Any]) -> ConfigUpdateResponse:
         from litestar.exceptions import ValidationException
 
         raise ValidationException(str(exc)) from exc
+
+
+@get("/api/source")
+@read_only
+async def source_route(
+    source: str,
+    raw: bool = False,
+) -> Response[bytes] | SourceContentResponse:
+    """Return the stored content for a ``chunks.source`` value.
+
+    ``raw=1`` returns the file's bytes with an inline Content-Disposition
+    (useful for PDFs rendered in an Obsidian modal). The default text mode
+    returns a JSON object with the markdown body and any managed metadata.
+    """
+    try:
+        if raw:
+            data, content_type = await handlers.get_source_bytes(source)
+            return Response(
+                content=data,
+                media_type=content_type,
+                headers={"Content-Disposition": "inline"},
+            )
+        return await handlers.get_source_text(source)
+    except SourceNotFoundError as exc:
+        raise NotFoundException(str(exc)) from exc

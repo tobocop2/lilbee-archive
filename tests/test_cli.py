@@ -174,7 +174,7 @@ class TestAdd:
         result = runner.invoke(app, ["add", str(src_file)])
         assert result.exit_code == 0
         assert "Copied 1" in result.output
-        assert (cfg.documents_dir / "manual.txt").exists()
+        assert (cfg.documents_dir / "imported" / "manual.txt").exists()
 
     def test_add_directory(self, isolated_env, tmp_path):
         """Adding a directory recursively copies it."""
@@ -185,8 +185,8 @@ class TestAdd:
 
         result = runner.invoke(app, ["add", str(src_dir)])
         assert result.exit_code == 0
-        assert (cfg.documents_dir / "docs" / "file1.txt").exists()
-        assert (cfg.documents_dir / "docs" / "file2.txt").exists()
+        assert (cfg.documents_dir / "imported" / "docs" / "file1.txt").exists()
+        assert (cfg.documents_dir / "imported" / "docs" / "file2.txt").exists()
 
     def test_add_multiple_paths(self, isolated_env, tmp_path):
         """Adding multiple paths works."""
@@ -217,7 +217,7 @@ class TestAdd:
         (src_dir / "file1.txt").write_text("Version 2")
         result = runner.invoke(app, ["add", "--force", str(src_dir)])
         assert result.exit_code == 0
-        assert (cfg.documents_dir / "docs" / "file1.txt").read_text() == "Version 2"
+        assert (cfg.documents_dir / "imported" / "docs" / "file1.txt").read_text() == "Version 2"
 
     def test_add_warns_on_existing(self, isolated_env, tmp_path):
         """Adding a file that already exists warns without --force."""
@@ -250,7 +250,7 @@ class TestAddIgnoresDirs:
         result = runner.invoke(app, ["add", str(src_dir)])
         assert result.exit_code == 0
 
-        dest = cfg.documents_dir / "project"
+        dest = cfg.documents_dir / "imported" / "project"
         assert (dest / "readme.txt").exists()
         assert not (dest / ".git").exists()
         assert not (dest / "node_modules").exists()
@@ -1324,7 +1324,7 @@ class TestAddJson:
         assert result.exit_code == 0
         data = json.loads(result.output.strip())
         assert data["command"] == "add"
-        assert "manual.txt" in data["copied"]
+        assert "imported/manual.txt" in data["copied"]
         assert "sync" in data
 
     @mock.patch("lilbee.ingest.sync", new_callable=AsyncMock, return_value=_SYNC_NOOP)
@@ -1333,14 +1333,15 @@ class TestAddJson:
         src = tmp_path / "source" / "notes.txt"
         src.parent.mkdir()
         src.write_text("some content")
-        # Pre-populate documents dir so file is skipped
-        cfg.documents_dir.mkdir(parents=True, exist_ok=True)
-        (cfg.documents_dir / "notes.txt").write_text("old content")
+        # Pre-populate the imported/ subdir so the incoming file collides.
+        imported_dir = cfg.documents_dir / "imported"
+        imported_dir.mkdir(parents=True, exist_ok=True)
+        (imported_dir / "notes.txt").write_text("old content")
         result = runner.invoke(app, ["--json", "add", str(src)])
         assert result.exit_code == 0
         data = json.loads(result.output.strip())
         assert data["copied"] == []
-        assert "notes.txt" in data["skipped"]
+        assert "imported/notes.txt" in data["skipped"]
         assert "Warning" not in result.output
 
 

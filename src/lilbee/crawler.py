@@ -456,6 +456,54 @@ def content_hash(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
 
+def _managed_frontmatter(url: str, crawled_at: str) -> str:
+    """Render the YAML frontmatter block lilbee stamps on crawled pages.
+
+    Keys kept stable across versions — plugin auto-sync and server-side
+    orphan pruning both key off ``lilbee_managed: true`` + ``source_url``.
+    If you add keys here, update ``parse_managed_frontmatter`` as well.
+    """
+    # URL is quoted with double quotes so embedded colons and URL-reserved
+    # characters don't confuse a YAML parser. Escape the rare case of
+    # stray double quotes in the URL itself.
+    escaped_url = url.replace("\\", "\\\\").replace('"', '\\"')
+    return (
+        "---\n"
+        "lilbee_managed: true\n"
+        f'source_url: "{escaped_url}"\n'
+        f"crawled_at: {crawled_at}\n"
+        "---\n\n"
+    )
+
+
+def parse_managed_frontmatter(text: str) -> dict[str, str] | None:
+    """Extract managed-frontmatter keys from a crawled file's text.
+
+    Returns a dict with ``lilbee_managed``, ``source_url``, ``crawled_at``
+    when the block is present and well-formed; ``None`` otherwise. Used by
+    orphan pruning so we only delete files we authored.
+    """
+    if not text.startswith("---\n"):
+        return None
+    end = text.find("\n---\n", 4)
+    if end == -1:
+        return None
+    block = text[4:end]
+    parsed: dict[str, str] = {}
+    for line in block.splitlines():
+        if ":" not in line:
+            continue
+        key, _, raw_value = line.partition(":")
+        key = key.strip()
+        value = raw_value.strip()
+        if value.startswith('"') and value.endswith('"') and len(value) >= 2:
+            value = value[1:-1].replace('\\"', '"').replace("\\\\", "\\")
+        parsed[key] = value
+    if parsed.get("lilbee_managed") != "true":
+        return None
+    return parsed
+
+
 def _save_single_result(result: CrawlResult, meta: dict[str, CrawlMeta]) -> Path | None:
     """Write one crawl result to disk if it's new or changed.
 
@@ -478,7 +526,9 @@ def _save_single_result(result: CrawlResult, meta: dict[str, CrawlMeta]) -> Path
         log.info("Content unchanged, skipping save: %s", result.url)
         return None
     file_path.parent.mkdir(parents=True, exist_ok=True)
-    file_path.write_text(result.markdown, encoding="utf-8")
+    crawled_at = datetime.now(UTC).isoformat()
+    body = _managed_frontmatter(result.url, crawled_at) + result.markdown
+    file_path.write_text(body, encoding="utf-8")
     return file_path
 
 
@@ -916,6 +966,43 @@ async def _iter_crawl_stream(stream: Any) -> AsyncIterator[Any]:
     yield stream
 
 
+def _prune_host_orphans(host: str, fresh_urls: set[str]) -> list[Path]:
+    """Delete managed files under ``<_web_dir>/<host>/`` whose URL isn't in ``fresh_urls``.
+
+    Walks the host subtree, reads frontmatter on every file (only lilbee-managed
+    files qualify — anything else, user-authored or from another tool, is
+    skipped), and removes files whose ``source_url`` isn't in the freshly
+    crawled set. Returns the list of removed paths for logging / testing.
+
+    Intentionally scoped to a single host: whole-site crawls are the only
+    context in which we can reliably declare a URL "orphaned". Multi-host
+    or partial crawls would risk deleting content the user still wants.
+    """
+    host_dir = _web_dir() / host
+    if not host_dir.exists():
+        return []
+    removed: list[Path] = []
+    for path in host_dir.rglob("*.md"):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            log.debug("Skipping unreadable file during prune: %s", path)
+            continue
+        meta = parse_managed_frontmatter(text)
+        if meta is None:
+            continue
+        source_url = meta.get("source_url", "")
+        if not source_url or source_url in fresh_urls:
+            continue
+        try:
+            path.unlink()
+        except OSError:
+            log.warning("Failed to prune orphaned crawl file: %s", path, exc_info=True)
+            continue
+        removed.append(path)
+    return removed
+
+
 async def _maybe_periodic_sync() -> None:
     """Fire off a background sync if the crawl_sync_interval has elapsed.
     Skips if a sync is already running or periodic sync is disabled (interval=0).
@@ -992,6 +1079,7 @@ async def crawl_and_save(
 
         meta = load_crawl_metadata()
         written_paths: list[Path] = []
+        fresh_urls: set[str] = set()
         pages_seen = 0
         pages_since_metadata_flush = 0
 
@@ -1002,6 +1090,7 @@ async def crawl_and_save(
             if path is None:
                 return None
             _update_single_metadata(meta, result, datetime.now(UTC).isoformat())
+            fresh_urls.add(result.url)
             pages_since_metadata_flush += 1
             if pages_since_metadata_flush >= METADATA_FLUSH_INTERVAL:
                 _flush_metadata(meta)
@@ -1040,6 +1129,19 @@ async def crawl_and_save(
         cancelled = cancel is not None and cancel.is_set()
         if not cancelled:
             await _maybe_periodic_sync()
+            if depth != 0 and cfg.crawl_prune_orphans and not include_subdomains:
+                try:
+                    host = urlparse(url).hostname or ""
+                    if host:
+                        removed = _prune_host_orphans(host, fresh_urls)
+                        if removed:
+                            log.info(
+                                "Pruned %d orphaned crawl file(s) under %s",
+                                len(removed),
+                                host,
+                            )
+                except Exception:
+                    log.warning("Orphan pruning failed", exc_info=True)
 
         if on_progress:
             on_progress(

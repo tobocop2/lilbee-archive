@@ -428,6 +428,12 @@ class Config(BaseSettings):
     # Retry count per URL when rate-limit codes come back.
     crawl_retry_max_attempts: int = ConfigField(default=3, ge=0, writable=True)
 
+    # Remove vault-managed crawled files that aren't in the fresh crawl
+    # set. Scoped to single-host recursive crawls; never deletes files
+    # outside ``<documents_dir>/crawled/<host>/`` and never touches files
+    # without the managed-frontmatter marker.
+    crawl_prune_orphans: bool = ConfigField(default=True, writable=True)
+
     # Regex patterns that skip URLs at link-discovery time during recursive
     # crawls. Defaults block WordPress scaffolding (pagination, archives,
     # tracking query params) that inflates useful-page count by 5-7x without

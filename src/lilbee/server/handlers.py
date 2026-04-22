@@ -46,6 +46,7 @@ from lilbee.server.models import (
     ModelsInstalledResponse,
     ModelsShowResponse,
     SetModelResponse,
+    SourceContentResponse,
     StatusResponse,
     SyncSummary,
 )
@@ -904,6 +905,131 @@ class _ExternalModelsCache:
 
 
 _external_cache = _ExternalModelsCache()
+
+
+class SourceNotFoundError(LookupError):
+    """Raised when ``get_source`` cannot locate the requested file.
+
+    Routes translate this to HTTP 404 rather than 500.
+    """
+
+
+# Common document extensions and their inline-safe Content-Type mappings.
+# Used by the raw endpoint so browsers render PDFs / images inline without
+# the user having to download them first. Unknown extensions fall back to
+# application/octet-stream.
+_RAW_CONTENT_TYPES: dict[str, str] = {
+    ".pdf": "application/pdf",
+    ".md": "text/markdown; charset=utf-8",
+    ".txt": "text/plain; charset=utf-8",
+    ".html": "text/html; charset=utf-8",
+    ".htm": "text/html; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".jsonl": "application/x-ndjson; charset=utf-8",
+    ".csv": "text/csv; charset=utf-8",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".svg": "image/svg+xml",
+    ".epub": "application/epub+zip",
+}
+
+
+def _resolve_and_validate_source(source: str) -> Path:
+    """Resolve a source path and guarantee it stays under ``documents_dir``.
+
+    Source values from the client are treated as untrusted — running
+    ``documents_dir / source`` would let ``../`` segments escape the
+    managed tree. :func:`validate_path_within` rejects that.
+    """
+    from lilbee.store import resolve_source
+
+    candidate = resolve_source(cfg, source)
+    try:
+        validate_path_within(candidate, cfg.documents_dir)
+    except ValueError as exc:
+        raise SourceNotFoundError(f"source not under documents_dir: {source}") from exc
+    if not candidate.exists() or not candidate.is_file():
+        raise SourceNotFoundError(f"source not found: {source}")
+    return candidate
+
+
+def raw_content_type(path: Path) -> str:
+    """Best-effort Content-Type for ``path`` on the raw endpoint."""
+    return _RAW_CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream")
+
+
+async def get_source_text(source: str) -> SourceContentResponse:
+    """Return the textual content of ``source`` with managed metadata stripped.
+
+    Raises :class:`SourceNotFoundError` when the path can't be resolved or
+    doesn't exist. Markdown files have any lilbee-managed frontmatter
+    stripped from ``markdown`` but the extracted fields are lifted up into
+    the response body so clients can render a preview header.
+    """
+    path = _resolve_and_validate_source(source)
+
+    suffix = path.suffix.lower()
+    if suffix == ".pdf":
+        # Text mode doesn't serve binary; tell the caller to use raw=1.
+        raise SourceNotFoundError(
+            "binary format; request GET /api/source with raw=1 for bytes"
+        )
+
+    try:
+        body = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise SourceNotFoundError(f"unreadable source: {source}") from exc
+
+    crawled_at: str | None = None
+    source_url: str | None = None
+    markdown_body = body
+    if suffix == ".md":
+        from lilbee.crawler import parse_managed_frontmatter
+
+        parsed = parse_managed_frontmatter(body)
+        if parsed is not None:
+            crawled_at = parsed.get("crawled_at") or None
+            source_url = parsed.get("source_url") or None
+            # Drop the frontmatter from the markdown body so renderers
+            # don't have to special-case it.
+            end = body.find("\n---\n", 4)
+            if end != -1:
+                markdown_body = body[end + 5 :].lstrip("\n")
+
+    title = _derive_title(markdown_body) if suffix == ".md" else None
+    content_type = "markdown" if suffix == ".md" else "text"
+
+    return SourceContentResponse(
+        source=source,
+        markdown=markdown_body,
+        content_type=content_type,
+        crawled_at=crawled_at,
+        source_url=source_url,
+        title=title,
+    )
+
+
+def _derive_title(markdown_body: str) -> str | None:
+    """Return the first top-level heading (``# ...``) or None."""
+    for line in markdown_body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("# "):
+            return stripped[2:].strip()
+        if stripped and not stripped.startswith("#"):
+            return None
+    return None
+
+
+async def get_source_bytes(source: str) -> tuple[bytes, str]:
+    """Return ``(raw bytes, Content-Type)`` for the requested source."""
+    path = _resolve_and_validate_source(source)
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        raise SourceNotFoundError(f"unreadable source: {source}") from exc
+    return data, raw_content_type(path)
 
 
 async def list_external_models() -> ExternalModelsResponse:

@@ -252,7 +252,10 @@ class Config(BaseSettings):
 
     # Paths — resolved from env/defaults in model_validator(mode='before')
     data_root: Path = Field(default=Path())
-    documents_dir: Path = Field(default=Path())
+    # documents_dir is relocatable via PATCH /api/config; the handler moves
+    # the tree + rewrites sidecar data when it changes. The pydantic layer
+    # just enforces the type.
+    documents_dir: Path = ConfigField(default=Path(), writable=True)
     data_dir: Path = Field(default=Path())
     lancedb_dir: Path = Field(default=Path())
     models_dir: Path = Field(default=Path())

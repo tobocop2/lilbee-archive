@@ -558,9 +558,27 @@ async def update_config(updates: dict[str, Any]) -> ConfigUpdateResponse:
     {"chunk_size": 1024, "chunk_overlap": "bad"} would leave chunk_size
     changed but chunk_overlap unchanged — the caller gets an error but
     the config is silently modified. The snapshot/rollback prevents that.
+
+    ``documents_dir`` is handled specially: the plain setattr path only
+    mutates the in-memory value, but the directory is a mobile root that
+    owns files on disk. It goes through :func:`relocate_documents_dir`
+    which holds the write lock, moves the tree, and rewrites sidecar
+    paths. On move failure, the field stays pointing at the old path and
+    the whole PATCH reports an error — no half-applied state.
     """
     _validate_config_updates(updates)
+    updates = dict(updates)  # local copy so we can peel off documents_dir
+
+    # Handle documents_dir first — its relocation has a filesystem side
+    # effect. If it fails, none of the other fields have been touched yet,
+    # so the caller sees a clean all-or-nothing PATCH.
+    docs_dir_update = updates.pop("documents_dir", _SENTINEL)
+    if docs_dir_update is not _SENTINEL:
+        _apply_documents_dir_update(docs_dir_update)
+
     to_persist, to_delete = _apply_config_updates(updates)
+    if docs_dir_update is not _SENTINEL:
+        to_persist["documents_dir"] = str(cfg.documents_dir)
     if to_persist:
         settings.update_values(cfg.data_root, to_persist)
     if to_delete:
@@ -569,8 +587,24 @@ async def update_config(updates: dict[str, Any]) -> ConfigUpdateResponse:
 
     if API_KEY_FIELDS & set(updates):
         inject_provider_keys()
-    reindex_required = bool(REINDEX_FIELDS & set(updates))
-    return ConfigUpdateResponse(updated=list(updates), reindex_required=reindex_required)
+    changed_keys = list(updates)
+    if docs_dir_update is not _SENTINEL:
+        changed_keys.append("documents_dir")
+    reindex_required = bool(REINDEX_FIELDS & set(changed_keys))
+    return ConfigUpdateResponse(updated=changed_keys, reindex_required=reindex_required)
+
+
+_SENTINEL: Any = object()
+
+
+def _apply_documents_dir_update(value: Any) -> None:
+    """Validate and perform the documents_dir relocation side effect."""
+    from lilbee.server.relocate import relocate_documents_dir
+
+    if value is None:
+        raise ValueError("documents_dir does not accept null")
+    target = value if isinstance(value, Path) else Path(value)
+    relocate_documents_dir(target)
 
 
 async def delete_documents(

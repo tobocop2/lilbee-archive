@@ -44,6 +44,10 @@ WIKI_DISABLED_ERROR = "wiki not enabled"
 # statuses returned to CLI/MCP/HTTP callers); these are internal audit trail
 # verbs written into the log file.
 WIKI_LOG_ACTION_GENERATED = "generated"
+WIKI_LOG_ACTION_BUILD = "build"
+WIKI_LOG_ACTION_UPDATE = "update"
+WIKI_LOG_ACTION_INGEST = "ingest"
+WIKI_LOG_ACTION_LINT = "lint"
 
 SUBDIR_TO_TYPE: dict[str, WikiPageType] = {
     SUMMARIES_SUBDIR: WikiPageType.SUMMARY,

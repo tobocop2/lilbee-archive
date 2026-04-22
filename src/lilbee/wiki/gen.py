@@ -32,6 +32,7 @@ from lilbee.wiki.citation import (
 )
 from lilbee.wiki.entity_extractor import EntityKind, ExtractedEntity
 from lilbee.wiki.index import append_wiki_log, update_wiki_index
+from lilbee.wiki.links import rewrite_wiki_links
 from lilbee.wiki.shared import (
     CONCEPTS_SUBDIR,
     DRAFTS_SUBDIR,
@@ -976,20 +977,64 @@ def _entity_surface_map(entities: list[ExtractedEntity]) -> dict[str, str]:
     return mapping
 
 
-def _rewrite_links_across_wiki(entities: list[ExtractedEntity], config: Config) -> None:
-    """Rewrite ``[[slug]]`` links on every page under ``wiki/`` content subdirs."""
-    from lilbee.wiki.links import rewrite_wiki_links
+_ENTITY_LIKE_SUBDIRS: tuple[str, ...] = (CONCEPTS_SUBDIR, ENTITIES_SUBDIR)
+_LINK_REWRITE_SUBDIRS: tuple[str, ...] = (
+    CONCEPTS_SUBDIR,
+    ENTITIES_SUBDIR,
+    SUMMARIES_SUBDIR,
+    SYNTHESIS_SUBDIR,
+)
 
-    surface_to_slug = _entity_surface_map(entities)
-    if not surface_to_slug:
-        return
-    wiki_root = config.data_root / config.wiki_dir
-    for subdir in (CONCEPTS_SUBDIR, ENTITIES_SUBDIR, SUMMARIES_SUBDIR, SYNTHESIS_SUBDIR):
+
+def _augment_surface_map_with_existing_pages(
+    surface_to_slug: dict[str, str], wiki_root: Path
+) -> None:
+    """Add slugs for pages already on disk so an incremental rebuild of one
+    concept still links to its unchanged neighbors. Only enrich the map
+    with the hyphen-to-space surface form since we don't have the
+    original label text from existing frontmatter here; that's fine
+    because body prose typically uses the spaced form.
+    """
+    for subdir in _ENTITY_LIKE_SUBDIRS:
         subdir_path = wiki_root / subdir
         if not subdir_path.is_dir():
             continue
         for md_path in subdir_path.rglob("*.md"):
+            slug = md_path.stem
+            spaced = slug.replace("-", " ")
+            surface_to_slug.setdefault(spaced, slug)
+
+
+def _rewrite_links_across_wiki(entities: list[ExtractedEntity], config: Config) -> None:
+    """Rewrite ``[[slug]]`` links on every page under ``wiki/`` content subdirs.
+
+    A page never receives a link to itself: the rewriter drops the
+    owning page's slug from its local surface map before writing.
+    Callers pass whichever entities they just (re-)generated; the map
+    is augmented with slugs from the existing on-disk corpus so a
+    touched page still links to untouched neighbors.
+    """
+    surface_to_slug = _entity_surface_map(entities)
+    wiki_root = config.data_root / config.wiki_dir
+    _augment_surface_map_with_existing_pages(surface_to_slug, wiki_root)
+    if not surface_to_slug:
+        return
+
+    for subdir in _LINK_REWRITE_SUBDIRS:
+        subdir_path = wiki_root / subdir
+        if not subdir_path.is_dir():
+            continue
+        is_entity_subdir = subdir in _ENTITY_LIKE_SUBDIRS
+        for md_path in subdir_path.rglob("*.md"):
+            owning_slug = md_path.stem if is_entity_subdir else None
+            page_map = (
+                {s: slug for s, slug in surface_to_slug.items() if slug != owning_slug}
+                if owning_slug
+                else surface_to_slug
+            )
+            if not page_map:
+                continue
             original = md_path.read_text(encoding="utf-8")
-            rewritten = rewrite_wiki_links(original, surface_to_slug)
+            rewritten = rewrite_wiki_links(original, page_map)
             if rewritten != original:
                 md_path.write_text(rewritten, encoding="utf-8")

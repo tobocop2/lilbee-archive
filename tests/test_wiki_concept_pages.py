@@ -393,6 +393,55 @@ class TestBuildWikiRewritesLinks:
             build_wiki([], MagicMock(), MagicMock(), cfg)
         gc.assert_not_called()
 
+    def test_page_is_not_linked_to_itself(self, tmp_path: Path) -> None:
+        """Rewriting braking.md must not inject [[braking]] into its own body."""
+        cfg.data_root = tmp_path
+        wiki_root = tmp_path / cfg.wiki_dir
+        (wiki_root / "concepts").mkdir(parents=True)
+        (wiki_root / "concepts" / "braking.md").write_text(
+            "# Braking\n\nAll about braking systems.\n"
+        )
+        entities = [
+            ExtractedEntity(
+                slug="braking",
+                kind=EntityKind.CONCEPT,
+                label="braking",
+                type_hint="noun_phrase",
+                chunk_refs=(ChunkRef("a.txt", 0),),
+            )
+        ]
+        with patch("lilbee.wiki.gen.generate_concept_page", return_value=None):
+            build_wiki(entities, MagicMock(), MagicMock(), cfg)
+        body = (wiki_root / "concepts" / "braking.md").read_text()
+        assert "[[braking]]" not in body
+        assert "braking systems" in body
+
+    def test_incremental_rebuild_links_to_existing_on_disk_slugs(self, tmp_path: Path) -> None:
+        """A touched entity's page links to pre-existing slugs not in the touched set."""
+        cfg.data_root = tmp_path
+        wiki_root = tmp_path / cfg.wiki_dir
+        (wiki_root / "concepts").mkdir(parents=True)
+        (wiki_root / "entities").mkdir()
+        # engine.md already exists on disk from a prior build.
+        (wiki_root / "entities" / "henry-ford.md").write_text("# Henry Ford\n\nA person.\n")
+        # The freshly regenerated page mentions Henry Ford in its body.
+        (wiki_root / "concepts" / "braking.md").write_text(
+            "# Braking\n\nInvented during henry ford's era.\n"
+        )
+        entities = [
+            ExtractedEntity(
+                slug="braking",
+                kind=EntityKind.CONCEPT,
+                label="braking",
+                type_hint="noun_phrase",
+                chunk_refs=(ChunkRef("a.txt", 0),),
+            )
+        ]
+        with patch("lilbee.wiki.gen.generate_concept_page", return_value=None):
+            build_wiki(entities, MagicMock(), MagicMock(), cfg)
+        braking_body = (wiki_root / "concepts" / "braking.md").read_text()
+        assert "[[henry-ford]]" in braking_body
+
 
 class TestBuildWiki:
     def test_dispatches_concept_and_entity_records(self, tmp_path: Path) -> None:

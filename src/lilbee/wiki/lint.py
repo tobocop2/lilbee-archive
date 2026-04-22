@@ -207,10 +207,13 @@ def lint_changed_sources(
     store: Store,
     config: Config | None = None,
 ) -> LintReport:
-    """Lightweight lint: check only wiki pages citing changed/removed sources.
-    Intended to run automatically after sync.
+    """Lightweight lint for wiki pages citing changed or removed sources.
+
+    Callable from tools that already know the set of changed sources
+    (e.g. a future `lilbee wiki check <source>` command); the sync
+    pipeline uses `_incremental_wiki_update` instead, which runs full
+    extraction rather than citation replay.
     """
-    # TODO: wire into sync pipeline
     if config is None:
         config = cfg
     report = LintReport()

@@ -123,10 +123,14 @@ SETTINGS_LIST_EDITOR_RESTORE_DEFAULTS = "Restore defaults"
 WIKI_EMPTY_STATE = "No wiki pages found"
 WIKI_SEARCH_PLACEHOLDER = "Filter pages..."
 WIKI_NO_CONTENT = "Select a page to view"
+WIKI_INDEX_LABEL = "Index"
+WIKI_LOG_LABEL = "Log"
 # Keyed by the WikiPageType value (a ``str`` via StrEnum) so callers can
 # look up a heading from a raw ``page_type`` string without coercion.
 WIKI_TYPE_HEADINGS: dict[str, str] = {
-    WikiPageType.SUMMARY: "Summaries",
+    WikiPageType.CONCEPT: "Concepts",
+    WikiPageType.ENTITY: "Entities",
+    WikiPageType.SUMMARY: "Source Summaries",
     WikiPageType.SYNTHESIS: "Synthesis",
 }
 APP_CANCELLED = "Cancelled"

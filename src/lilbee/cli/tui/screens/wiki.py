@@ -171,8 +171,11 @@ class WikiScreen(Screen[None]):
 
         Slugs like ``summaries/cv-manual/01-brakes/page-0042`` become nested
         branches under their page-type group, with leaves for leaf pages and
-        expandable branches for intermediate heading folders.
+        expandable branches for intermediate heading folders. ``index.md``
+        and ``log.md`` at the wiki root are surfaced as top-level leaves.
         """
+        self._add_root_shortcut(tree, "index", msg.WIKI_INDEX_LABEL)
+        self._add_root_shortcut(tree, "log", msg.WIKI_LOG_LABEL)
         grouped = _group_pages(pages)
         for page_type, group_pages in grouped:
             heading = msg.WIKI_TYPE_HEADINGS.get(page_type, page_type.capitalize())
@@ -180,6 +183,13 @@ class WikiScreen(Screen[None]):
             for page in group_pages:
                 self._page_slugs.append(page.slug)
                 self._insert_page(group_node, page)
+
+    def _add_root_shortcut(self, tree: Tree[str | None], slug: str, label: str) -> None:
+        """Add a top-level leaf for an auto-generated page (index.md, log.md)."""
+        if not (_wiki_root() / f"{slug}.md").is_file():
+            return
+        tree.root.add_leaf(label, data=slug)
+        self._page_slugs.append(slug)
 
     def _insert_page(self, group_node: TreeNode[str | None], page: WikiPageInfo) -> None:
         """Walk the slug path and add/reuse branches until the leaf position.
@@ -358,11 +368,16 @@ def _find_or_add_branch(parent: TreeNode[str | None], label_part: str) -> TreeNo
 def _group_pages(
     pages: list[WikiPageInfo],
 ) -> list[tuple[str, list[WikiPageInfo]]]:
-    """Group pages by page_type, maintaining order: summaries first, then synthesis."""
+    """Group pages by page_type in sidebar order: concepts, entities, then legacy."""
     from lilbee.wiki.shared import WikiPageType
 
     groups: dict[str, list[WikiPageInfo]] = {}
-    type_order: tuple[str, ...] = (WikiPageType.SUMMARY, WikiPageType.SYNTHESIS)
+    type_order: tuple[str, ...] = (
+        WikiPageType.CONCEPT,
+        WikiPageType.ENTITY,
+        WikiPageType.SUMMARY,
+        WikiPageType.SYNTHESIS,
+    )
     for t in type_order:
         group = [p for p in pages if p.page_type == t]
         if group:

@@ -5566,6 +5566,20 @@ class TestWikiGroupPages:
 
         assert _group_pages([]) == []
 
+    def test_concepts_and_entities_lead_the_order(self):
+        """Concepts and Entities should appear before Summaries and Synthesis."""
+        from lilbee.cli.tui.screens.wiki import _group_pages
+        from lilbee.wiki.browse import WikiPageInfo
+
+        pages = [
+            WikiPageInfo("summaries/a", "A", "summary", 1, ""),
+            WikiPageInfo("synthesis/b", "B", "synthesis", 2, ""),
+            WikiPageInfo("concepts/c", "C", "concept", 1, ""),
+            WikiPageInfo("entities/e", "E", "entity", 1, ""),
+        ]
+        types = [g[0] for g in _group_pages(pages)]
+        assert types == ["concept", "entity", "summary", "synthesis"]
+
 
 class TestWikiDisplayPageMissing:
     async def test_display_nonexistent_page(self, tmp_path):

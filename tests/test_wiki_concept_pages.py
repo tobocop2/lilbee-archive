@@ -394,12 +394,19 @@ class TestBuildWikiRewritesLinks:
         gc.assert_not_called()
 
     def test_page_is_not_linked_to_itself(self, tmp_path: Path) -> None:
-        """Rewriting braking.md must not inject [[braking]] into its own body."""
+        """braking.md must not gain a [[braking]] self-link even while the
+        rewriter is actively editing it with OTHER slugs.
+
+        Two entities so the owning-slug filter is actually exercised:
+        without both, ``if not page_map: continue`` short-circuits
+        before the regex ever runs and the assertion is satisfied for
+        the wrong reason.
+        """
         cfg.data_root = tmp_path
         wiki_root = tmp_path / cfg.wiki_dir
         (wiki_root / "concepts").mkdir(parents=True)
         (wiki_root / "concepts" / "braking.md").write_text(
-            "# Braking\n\nAll about braking systems.\n"
+            "# Braking\n\nUsed in every henry ford design, braking systems matter.\n"
         )
         entities = [
             ExtractedEntity(
@@ -408,13 +415,25 @@ class TestBuildWikiRewritesLinks:
                 label="braking",
                 type_hint="noun_phrase",
                 chunk_refs=(ChunkRef("a.txt", 0),),
-            )
+            ),
+            ExtractedEntity(
+                slug="henry-ford",
+                kind=EntityKind.ENTITY,
+                label="Henry Ford",
+                type_hint="PERSON",
+                chunk_refs=(ChunkRef("a.txt", 1),),
+            ),
         ]
-        with patch("lilbee.wiki.gen.generate_concept_page", return_value=None):
+        with (
+            patch("lilbee.wiki.gen.generate_concept_page", return_value=None),
+            patch("lilbee.wiki.gen.generate_entity_page", return_value=None),
+        ):
             build_wiki(entities, MagicMock(), MagicMock(), cfg)
         body = (wiki_root / "concepts" / "braking.md").read_text()
+        # Proves the rewriter did run (it emitted at least one other link),
+        # and that the owning slug was correctly filtered.
+        assert "[[henry-ford]]" in body
         assert "[[braking]]" not in body
-        assert "braking systems" in body
 
     def test_incremental_rebuild_links_to_existing_on_disk_slugs(self, tmp_path: Path) -> None:
         """A touched entity's page links to pre-existing slugs not in the touched set."""

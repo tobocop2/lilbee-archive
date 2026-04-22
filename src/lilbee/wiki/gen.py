@@ -989,11 +989,11 @@ _LINK_REWRITE_SUBDIRS: tuple[str, ...] = (
 def _augment_surface_map_with_existing_pages(
     surface_to_slug: dict[str, str], wiki_root: Path
 ) -> None:
-    """Add slugs for pages already on disk so an incremental rebuild of one
-    concept still links to its unchanged neighbors. Only enrich the map
-    with the hyphen-to-space surface form since we don't have the
-    original label text from existing frontmatter here; that's fine
-    because body prose typically uses the spaced form.
+    """Mutate *surface_to_slug* in place, adding slugs for pages already
+    on disk so an incremental rebuild of one concept still links to its
+    unchanged neighbors. Only enriches the map with the hyphen-to-space
+    surface form because frontmatter labels aren't read here; body prose
+    typically uses the spaced form so this covers the common case.
     """
     for subdir in _ENTITY_LIKE_SUBDIRS:
         subdir_path = wiki_root / subdir

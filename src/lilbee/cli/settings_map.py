@@ -7,7 +7,7 @@ from enum import StrEnum
 
 from pydantic_core import PydanticUndefined
 
-from lilbee.config import ClustererBackend, cfg
+from lilbee.config import ClustererBackend, WikiEntityMode, cfg
 
 
 class RenderStyle(StrEnum):
@@ -186,6 +186,18 @@ SETTINGS_MAP: dict[str, SettingDef] = {
         group="Wiki",
         help_text="Synthesis clusterer backend (embedding or concepts)",
         choices=tuple(b.value for b in ClustererBackend),
+    ),
+    "wiki_entity_mode": SettingDef(
+        str,
+        nullable=False,
+        group="Wiki",
+        help_text=(
+            "Entity extraction strategy "
+            "(ner_concepts = default, NER + noun-phrase clusters; "
+            "plus_llm_types = NER + LLM-proposed schema; "
+            "llm_tagged = LLM tags every chunk)"
+        ),
+        choices=tuple(m.value for m in WikiEntityMode),
     ),
     "wiki_clusterer_k": SettingDef(
         int,

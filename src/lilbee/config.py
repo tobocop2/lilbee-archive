@@ -21,6 +21,14 @@ class ClustererBackend(StrEnum):
     CONCEPTS = "concepts"
 
 
+class WikiEntityMode(StrEnum):
+    """Strategy used to extract concepts and entities for the wiki."""
+
+    NER_CONCEPTS = "ner_concepts"
+    NER_CONCEPTS_PLUS_LLM_TYPES = "ner_concepts_plus_llm_types"
+    LLM_TAGGED = "llm_tagged"
+
+
 def ConfigField(
     *args: Any,
     writable: bool = False,
@@ -594,6 +602,15 @@ class Config(BaseSettings):
     # Maximum noun-phrase concepts extracted per chunk.
     # Caps extraction to avoid noise from very long chunks.
     concept_max_per_chunk: int = ConfigField(default=10, ge=1, writable=True)
+
+    # Strategy used to extract concepts and entities for the concept/entity
+    # wiki. NER_CONCEPTS (default) combines spaCy NER with noun-phrase
+    # clusters. NER_CONCEPTS_PLUS_LLM_TYPES layers an LLM-proposed domain
+    # schema on top. LLM_TAGGED asks the LLM to tag every chunk (most
+    # expensive). Unimplemented modes fall back to NER_CONCEPTS.
+    wiki_entity_mode: WikiEntityMode = ConfigField(
+        default=WikiEntityMode.NER_CONCEPTS, writable=True
+    )
 
     # Class variable — not a settings field
     _toml_cache: ClassVar[dict[str, Any]] = {}

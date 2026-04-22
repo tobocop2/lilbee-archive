@@ -237,6 +237,67 @@ class TestLintAll:
         assert report.error_count == 0
 
 
+class TestOrphanDetection:
+    def test_orphan_concept_flagged(self, tmp_path: Path):
+        write_wiki_page(tmp_path, "concepts", "braking", "# Braking\n\nText.\n")
+        write_wiki_page(tmp_path, "concepts", "linked", "# Linked\n\nText.\n")
+        # Someone links to "linked" but nobody links to "braking".
+        write_wiki_page(tmp_path, "summaries", "doc", "See [[linked]] for details.\n")
+        store = MagicMock(spec=Store)
+        store.get_citations_for_wiki.return_value = []
+        report = lint_all(store)
+        orphan_issues = [
+            i for i in report.issues if i.issue_type is not None and i.issue_type.value == "orphan"
+        ]
+        slugs = {issue.wiki_source for issue in orphan_issues}
+        assert "wiki/concepts/braking.md" in slugs
+        assert "wiki/concepts/linked.md" not in slugs
+
+    def test_orphan_detection_ignores_non_concept_subdirs(self, tmp_path: Path):
+        # Summaries/synthesis pages are never flagged as orphans even if
+        # nobody links to them; the graph centerpiece is concepts+entities.
+        write_wiki_page(tmp_path, "summaries", "loose-doc", "# Loose doc\n\nText.\n")
+        store = MagicMock(spec=Store)
+        store.get_citations_for_wiki.return_value = []
+        report = lint_all(store)
+        orphan_issues = [
+            i for i in report.issues if i.issue_type is not None and i.issue_type.value == "orphan"
+        ]
+        assert orphan_issues == []
+
+    def test_entity_page_with_incoming_link_is_not_orphan(self, tmp_path: Path):
+        write_wiki_page(tmp_path, "entities", "henry-ford", "# Henry Ford\n\nText.\n")
+        write_wiki_page(
+            tmp_path,
+            "concepts",
+            "motor-company",
+            "Linked via [[henry-ford]] alias.\n",
+        )
+        store = MagicMock(spec=Store)
+        store.get_citations_for_wiki.return_value = []
+        report = lint_all(store)
+        orphan_slugs = {
+            i.wiki_source
+            for i in report.issues
+            if i.issue_type is not None and i.issue_type.value == "orphan"
+        }
+        assert "wiki/entities/henry-ford.md" not in orphan_slugs
+
+    def test_alias_link_form_counts_as_inbound(self, tmp_path: Path):
+        # [[slug|display text]] should still count — slug is the left side.
+        write_wiki_page(tmp_path, "concepts", "braking", "# Braking\n\nText.\n")
+        write_wiki_page(tmp_path, "summaries", "doc", "See [[braking|the brake chapter]].\n")
+        store = MagicMock(spec=Store)
+        store.get_citations_for_wiki.return_value = []
+        report = lint_all(store)
+        orphan_slugs = {
+            i.wiki_source
+            for i in report.issues
+            if i.issue_type is not None and i.issue_type.value == "orphan"
+        }
+        assert "wiki/concepts/braking.md" not in orphan_slugs
+
+
 class TestPathTraversalDefense:
     def test_citation_with_traversal_path_returns_error(self, tmp_path: Path):
         write_source(tmp_path, "legit.md", "content")

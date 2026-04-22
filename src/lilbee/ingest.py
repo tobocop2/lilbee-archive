@@ -5,14 +5,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
-import importlib.metadata
-import json
 import logging
 import os
 import threading
 from collections.abc import Callable, Generator
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple, TypedDict, cast
@@ -211,35 +208,25 @@ def content_type_to_mode(content_type: str) -> ExtractMode:
 
 
 def extraction_config(mode: ExtractMode) -> ExtractionConfig:
-    """Build ExtractionConfig for the given extraction mode.
-
-    ``include_document_structure`` is turned on only when the wiki feature
-    is enabled, since the heading tree is used solely by wiki generation.
-    With wiki disabled, every call kreuzberg would otherwise spend walking
-    and serializing the tree is pure overhead.
-    """
+    """Build ExtractionConfig for the given extraction mode."""
     from kreuzberg import ExtractionConfig, OcrConfig, PageConfig
 
     chunking = build_chunking_config()
     pages = PageConfig(extract_pages=True, insert_page_markers=False)
     ocr = OcrConfig(backend=_TESSERACT_BACKEND)
-    want_structure = cfg.wiki
     builders: dict[ExtractMode, Callable[[], ExtractionConfig]] = {
         ExtractMode.MARKDOWN: lambda: ExtractionConfig(
             chunking=chunking,
             output_format=_MARKDOWN_OUTPUT,
-            include_document_structure=want_structure,
         ),
         ExtractMode.PAGINATED: lambda: ExtractionConfig(
             chunking=chunking,
             pages=pages,
-            include_document_structure=want_structure,
         ),
         ExtractMode.PAGINATED_OCR: lambda: ExtractionConfig(
             chunking=chunking,
             pages=pages,
             ocr=ocr,
-            include_document_structure=want_structure,
         ),
     }
     return builders[mode]()
@@ -421,41 +408,6 @@ async def _handle_scanned_pdf_fallback(
     return result
 
 
-def _persist_document_structure(path: Path, source_name: str, result: Any) -> None:
-    """Persist kreuzberg's ``result.document`` tree into the ``_structure`` table.
-
-    Silently no-ops when wiki is disabled (the tree has no consumer in that
-    case) or when kreuzberg did not emit a structure (plain text, OCR output,
-    some formats). Runs as a side effect during ingest so wiki generation
-    has the tree available without re-extracting the source.
-    """
-    if not cfg.wiki:
-        return
-    document = getattr(result, "document", None)
-    if document is None:
-        return
-    try:
-        payload = json.dumps(document)
-    except (TypeError, ValueError):
-        log.warning("DocumentStructure for %s is not JSON serialisable; skipping", source_name)
-        return
-    try:
-        version = importlib.metadata.version("kreuzberg")
-    except importlib.metadata.PackageNotFoundError:  # pragma: no cover
-        version = ""
-    record = {
-        "source_filename": source_name,
-        "source_hash": file_hash(path),
-        "document_json": payload,
-        "kreuzberg_version": version,
-        "created_at": datetime.now(UTC).isoformat(),
-    }
-    try:
-        get_services().store.upsert_document_structure(cast(Any, record))
-    except Exception:
-        log.warning("Failed to persist DocumentStructure for %s", source_name, exc_info=True)
-
-
 async def ingest_document(
     path: Path,
     source_name: str,
@@ -489,8 +441,6 @@ async def ingest_document(
 
     if not result.chunks:
         return []
-
-    _persist_document_structure(path, source_name, result)
 
     texts = [chunk.content for chunk in result.chunks]
     vectors = await asyncio.to_thread(

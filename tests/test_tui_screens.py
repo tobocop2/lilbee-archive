@@ -7847,69 +7847,6 @@ async def test_task_bar_indeterminate_flag_propagated():
         assert bar.display is True
 
 
-def test_resolve_wiki_targets_all():
-    """Returns all source names when no specific source requested."""
-    from lilbee.cli.tui.wiki_worker import resolve_wiki_targets
-
-    fake_store = MagicMock()
-    fake_store.get_sources.return_value = [
-        {"filename": "a.txt"},
-        {"filename": "b.txt"},
-    ]
-    fake_svc = MagicMock(store=fake_store)
-    with patch("lilbee.cli.tui.wiki_worker.get_services", return_value=fake_svc):
-        result = resolve_wiki_targets()
-    assert result == ["a.txt", "b.txt"]
-
-
-def test_resolve_wiki_targets_specific():
-    """Returns only the requested source when it exists."""
-    from lilbee.cli.tui.wiki_worker import resolve_wiki_targets
-
-    fake_store = MagicMock()
-    fake_store.get_sources.return_value = [
-        {"filename": "a.txt"},
-        {"filename": "b.txt"},
-    ]
-    fake_svc = MagicMock(store=fake_store)
-    with patch("lilbee.cli.tui.wiki_worker.get_services", return_value=fake_svc):
-        result = resolve_wiki_targets("b.txt")
-    assert result == ["b.txt"]
-
-
-def test_resolve_wiki_targets_unknown():
-    """Returns None for an unknown source name."""
-    from lilbee.cli.tui.wiki_worker import resolve_wiki_targets
-
-    fake_store = MagicMock()
-    fake_store.get_sources.return_value = [{"filename": "a.txt"}]
-    fake_svc = MagicMock(store=fake_store)
-    with patch("lilbee.cli.tui.wiki_worker.get_services", return_value=fake_svc):
-        assert resolve_wiki_targets("missing.txt") is None
-
-
-def test_resolve_wiki_targets_empty_sources():
-    """Returns None when no sources are indexed."""
-    from lilbee.cli.tui.wiki_worker import resolve_wiki_targets
-
-    fake_store = MagicMock()
-    fake_store.get_sources.return_value = []
-    fake_svc = MagicMock(store=fake_store)
-    with patch("lilbee.cli.tui.wiki_worker.get_services", return_value=fake_svc):
-        assert resolve_wiki_targets() is None
-
-
-def test_resolve_wiki_targets_get_sources_error():
-    """Returns None when get_sources raises."""
-    from lilbee.cli.tui.wiki_worker import resolve_wiki_targets
-
-    fake_store = MagicMock()
-    fake_store.get_sources.side_effect = RuntimeError("db gone")
-    fake_svc = MagicMock(store=fake_store)
-    with patch("lilbee.cli.tui.wiki_worker.get_services", return_value=fake_svc):
-        assert resolve_wiki_targets() is None
-
-
 def _direct_call(_widget, fn, *args, **kwargs):
     """Stub for call_from_thread that calls fn directly (no Textual app needed)."""
     fn(*args, **kwargs)
@@ -7941,39 +7878,6 @@ async def test_wiki_screen_reload():
         with patch.object(app.screen, "_load_pages") as mock_load:
             app.screen.reload()
             mock_load.assert_called_once()
-
-
-async def test_wiki_screen_regenerate_disabled():
-    """Regenerate notifies when wiki is disabled."""
-    app = _make_wiki_app()
-    async with app.run_test(size=(120, 40)) as pilot:
-        await pilot.pause()
-        with (
-            patch("lilbee.cli.tui.screens.wiki.cfg") as mock_cfg,
-            patch.object(app.screen, "notify") as mock_notify,
-        ):
-            mock_cfg.wiki = False
-            await pilot.press("r")
-            mock_notify.assert_called_once()
-
-
-async def test_wiki_screen_regenerate_no_sources():
-    """Regenerate notifies when no indexed sources found."""
-    app = _make_wiki_app()
-    async with app.run_test(size=(120, 40)) as pilot:
-        await pilot.pause()
-        with (
-            patch("lilbee.cli.tui.screens.wiki.cfg") as mock_cfg,
-            patch(
-                "lilbee.cli.tui.screens.wiki.resolve_wiki_targets",
-                return_value=None,
-            ),
-            patch.object(app.screen, "notify") as mock_notify,
-        ):
-            mock_cfg.wiki = True
-
-            await pilot.press("r")
-            mock_notify.assert_called_once()
 
 
 async def test_chat_open_crawl_dialog():
@@ -8059,43 +7963,6 @@ async def test_wiki_source_for_slug_returns_none_for_empty_sources():
         assert result is None
 
 
-async def test_wiki_action_regenerate_submits_when_targets_exist(tmp_path):
-    """With wiki enabled and targets present, regenerate notifies and submits the task."""
-    cfg.wiki = True
-    cfg.data_root = tmp_path
-    (cfg.data_root / cfg.wiki_dir).mkdir(parents=True)
-    app = _make_wiki_app()
-    async with app.run_test(size=(120, 40)) as pilot:
-        await pilot.pause()
-        with (
-            patch(
-                "lilbee.cli.tui.screens.wiki.resolve_wiki_targets",
-                return_value=["doc.pdf", "other.pdf"],
-            ),
-            patch.object(app.screen, "_submit_wiki_task") as mock_submit,
-            patch.object(app.screen, "notify") as mock_notify,
-        ):
-            app.screen.action_regenerate()
-            await pilot.pause()
-        mock_submit.assert_called_once_with(["doc.pdf", "other.pdf"])
-        mock_notify.assert_called_once()
-        assert "2" in mock_notify.call_args[0][0]
-
-
-async def test_wiki_submit_task_noop_without_lilbee_app(tmp_path):
-    """_submit_wiki_task short-circuits when the parent app isn't a LilbeeApp."""
-    cfg.wiki = True
-    cfg.data_root = tmp_path
-    (cfg.data_root / cfg.wiki_dir).mkdir(parents=True)
-    app = _make_wiki_app()
-    async with app.run_test(size=(120, 40)) as pilot:
-        await pilot.pause()
-        # WikiTestApp is not a LilbeeApp, so the guard returns immediately
-        # without touching a task bar.
-        app.screen._submit_wiki_task(["doc.pdf"])
-        await pilot.pause()
-
-
 async def test_wiki_selected_source_returns_none_for_branch_without_slug():
     """_selected_source returns None when the highlighted tree node is a branch (no slug)."""
     from textual.widgets import Tree
@@ -8112,38 +7979,6 @@ async def test_wiki_selected_source_returns_none_for_branch_without_slug():
         await pilot.pause()
         result = app.screen._selected_source()
         assert result is None
-
-
-async def test_wiki_regenerate_selected_page_not_found():
-    """action_regenerate with a selected leaf whose source isn't indexed shows error."""
-    from textual.widgets import Tree
-
-    app = _make_wiki_app(with_task_bar=True)
-    async with app.run_test(size=(120, 40)) as pilot:
-        await pilot.pause()
-        tree = app.screen.query_one("#wiki-page-list", Tree)
-        tree.reset("Wiki")
-        tree.root.add_leaf("test page", data="summaries/test")
-        tree.focus()
-        await pilot.pause()
-        await pilot.press("down")
-        await pilot.pause()
-        mock_page = MagicMock()
-        mock_page.frontmatter = {"sources": ["gone.txt"]}
-        with (
-            patch("lilbee.cli.tui.screens.wiki.cfg") as mock_cfg,
-            patch("lilbee.cli.tui.screens.wiki.read_page", return_value=mock_page),
-            patch(
-                "lilbee.cli.tui.screens.wiki.resolve_wiki_targets",
-                return_value=None,
-            ),
-            patch.object(app.screen, "notify") as mock_notify,
-        ):
-            mock_cfg.wiki = True
-            await pilot.press("r")
-            await pilot.pause()
-        mock_notify.assert_called_once()
-        assert "Source not found" in mock_notify.call_args[0][0]
 
 
 # =============================================================================

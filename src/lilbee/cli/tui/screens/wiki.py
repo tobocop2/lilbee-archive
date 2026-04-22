@@ -21,7 +21,6 @@ from textual.widgets.tree import TreeNode
 from lilbee.cli.tui import messages as msg
 from lilbee.cli.tui.widgets.nav_aware_input import NavAwareInput
 from lilbee.cli.tui.widgets.task_bar import TaskBar
-from lilbee.cli.tui.wiki_worker import generate_wiki_pages, resolve_wiki_targets
 from lilbee.config import cfg
 from lilbee.wiki.browse import read_page
 
@@ -78,16 +77,12 @@ class WikiScreen(Screen[None]):
 
     CSS_PATH = "wiki.tcss"
     AUTO_FOCUS = "#wiki-page-list"
-    HELP = (
-        "Browse wiki pages. h/l collapse/expand, j/k navigate, "
-        "Enter opens a page, / searches, r regenerates the selected source."
-    )
+    HELP = "Browse wiki pages. h/l collapse/expand, j/k navigate, Enter opens a page, / searches."
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("q", "go_back", "Back", show=True),
         Binding("escape", "dismiss_or_back", "Back", show=False),
         Binding("slash", "focus_search", "Search", show=True),
-        Binding("r", "regenerate", "Regen", show=True, priority=True),
         Binding("j", "cursor_down", "Nav", show=False),
         Binding("k", "cursor_up", "Nav", show=False),
         Binding("h", "cursor_left", "Collapse", show=False),
@@ -282,24 +277,6 @@ class WikiScreen(Screen[None]):
             return None
         return self._source_for_slug(slug)
 
-    def action_regenerate(self) -> None:
-        """Regenerate wiki page(s). Selected page's source, or all sources."""
-        if not cfg.wiki:
-            self.notify(msg.CMD_WIKI_DISABLED, severity="warning")
-            return
-
-        requested = self._selected_source()
-        targets = resolve_wiki_targets(requested)
-        if targets is None:
-            if requested is not None:
-                self.notify(msg.CMD_WIKI_NOT_FOUND.format(name=requested), severity="error")
-            else:
-                self.notify(msg.CMD_WIKI_NO_SOURCES, severity="warning")
-            return
-
-        self.notify(msg.CMD_WIKI_STARTED.format(count=len(targets)))
-        self._submit_wiki_task(targets)
-
     def _source_for_slug(self, slug: str) -> str | None:
         """Extract the primary source filename from a wiki page's frontmatter."""
         root = _wiki_root()
@@ -311,32 +288,6 @@ class WikiScreen(Screen[None]):
         if isinstance(sources, list) and sources:
             return str(sources[0])
         return None
-
-    def _submit_wiki_task(self, sources: list[str]) -> None:
-        """Submit wiki generation to the app-level TaskBarController."""
-        from lilbee.cli.tui.app import LilbeeApp
-        from lilbee.cli.tui.task_queue import TaskType
-        from lilbee.cli.tui.thread_safe import call_from_thread
-        from lilbee.cli.tui.widgets.task_bar import ProgressReporter
-
-        if not isinstance(self.app, LilbeeApp):  # test apps aren't LilbeeApp
-            return
-        total = len(sources)
-
-        def _target(reporter: ProgressReporter) -> None:
-            generated = generate_wiki_pages(sources, reporter)
-            call_from_thread(
-                self,
-                self.notify,
-                msg.CMD_WIKI_SUCCESS.format(generated=generated, total=total),
-            )
-
-        self.app.task_bar.start_task(
-            msg.TASK_NAME_WIKI.format(count=total),
-            TaskType.WIKI,
-            _target,
-            on_success=lambda: call_from_thread(self, self.reload),
-        )
 
     def action_focus_search(self) -> None:
         """Focus the search input -- bound to / key."""

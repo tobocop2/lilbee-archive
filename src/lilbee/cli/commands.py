@@ -6,7 +6,7 @@ import asyncio
 import json
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, NoReturn
+from typing import TYPE_CHECKING
 
 import typer
 
@@ -51,10 +51,6 @@ from lilbee.services import get_services
 from lilbee.wiki.shared import (
     DRAFTS_SUBDIR,
     SUMMARIES_SUBDIR,
-    WIKI_DISABLED_ERROR,
-    WIKI_EMPTY_SOURCE_ERROR,
-    WIKI_STATUS_FAILED,
-    WIKI_STATUS_GENERATED,
 )
 
 CHUNK_PREVIEW_LEN = 80  # characters shown in human-readable search output
@@ -1097,148 +1093,6 @@ def wiki_status(
         )
     else:
         console.print("  Lint: all clean")
-
-
-@wiki_app.command(name="generate")
-def wiki_generate(
-    source: str = typer.Argument(..., help="Source filename (e.g. cv-manual.pdf)."),
-    data_dir: Path | None = data_dir_option,
-    use_global: bool = global_option,
-) -> None:
-    """Generate wiki tree summaries for *source* (per-page leaves + chapter reduces)."""
-    apply_overrides(data_dir=data_dir, use_global=use_global)
-
-    if not cfg.wiki:
-        _fail_wiki_generate(WIKI_DISABLED_ERROR)
-    if not source or not source.strip():
-        _fail_wiki_generate(WIKI_EMPTY_SOURCE_ERROR)
-
-    from lilbee.wiki.gen import generate_summary_page
-
-    services = get_services()
-    chunks = services.store.get_chunks_by_source(source)
-    if not chunks:
-        _fail_wiki_generate(f"No indexed chunks for source: {source}")
-
-    on_progress = None if cfg.json_mode else _wiki_progress_to_stderr
-    paths = generate_summary_page(
-        source, chunks, services.provider, services.store, on_progress=on_progress
-    )
-
-    if not paths:
-        _emit_wiki_generate_failure(source)
-    _emit_wiki_generate_success(source, [str(p) for p in paths])
-
-
-def _fail_wiki_generate(error: str) -> NoReturn:
-    """Emit a wiki_generate validation error (pre-generation) as {"error": ...} and exit 1.
-
-    Distinct from _emit_wiki_generate_failure, which emits a soft-failure result
-    (generator ran but returned no pages) in the full wiki_generate JSON shape.
-    """
-    if cfg.json_mode:
-        json_output({"error": error})
-    else:
-        typer.echo(error, err=True)
-    raise typer.Exit(1)
-
-
-def _emit_wiki_generate_success(source: str, paths: list[str]) -> None:
-    """Emit the wiki_generate success result in JSON or default mode."""
-    if cfg.json_mode:
-        json_output(
-            {
-                "command": "wiki_generate",
-                "source": source,
-                "status": WIKI_STATUS_GENERATED,
-                "paths": paths,
-            }
-        )
-        return
-    console.print(f"Generated [{theme.LABEL}]{len(paths)}[/{theme.LABEL}] wiki pages for {source}:")
-    for path in paths:
-        console.print(f"  {path}")
-
-
-def _emit_wiki_generate_failure(source: str) -> NoReturn:
-    """Emit the wiki_generate soft-failure (generator returned no pages) and exit non-zero."""
-    if cfg.json_mode:
-        json_output(
-            {
-                "command": "wiki_generate",
-                "source": source,
-                "status": WIKI_STATUS_FAILED,
-                "paths": [],
-            }
-        )
-    else:
-        typer.echo(f"Generation failed for {source}", err=True)
-    raise typer.Exit(1)
-
-
-def _wiki_progress_to_stderr(stage: str, data: dict[str, object]) -> None:
-    """Print wiki generation stage updates to stderr in default (non-JSON) mode."""
-    chunk_count = data.get("chunks")
-    detail = f" ({chunk_count} chunks)" if chunk_count is not None else ""
-    typer.echo(f"[{stage}]{detail}", err=True)
-
-
-@wiki_app.command(name="tree")
-def wiki_tree(
-    source: str = typer.Argument(..., help="Source filename to render the tree for."),
-    data_dir: Path | None = data_dir_option,
-    use_global: bool = global_option,
-) -> None:
-    """Render the heading tree extracted at ingest time for *source*."""
-    apply_overrides(data_dir=data_dir, use_global=use_global)
-
-    if not cfg.wiki:
-        _fail_wiki_generate(WIKI_DISABLED_ERROR)
-    if not source or not source.strip():
-        _fail_wiki_generate(WIKI_EMPTY_SOURCE_ERROR)
-
-    from lilbee.wiki.structure import (
-        deserialize_document,
-        walk_structure_to_wiki_nodes,
-        wiki_node_to_dict,
-    )
-
-    record = get_services().store.get_document_structure(source)
-    if record is None:
-        if cfg.json_mode:
-            json_output({"command": "wiki_tree", "source": source, "nodes": []})
-            return
-        console.print(f"No document structure stored for {source}.")
-        return
-
-    document = deserialize_document(record["document_json"])
-    nodes = walk_structure_to_wiki_nodes(document) if document is not None else []
-
-    if cfg.json_mode:
-        json_output(
-            {
-                "command": "wiki_tree",
-                "source": source,
-                "nodes": [wiki_node_to_dict(n) for n in nodes],
-            }
-        )
-        return
-
-    if not nodes:
-        console.print("Document has no detected heading structure.")
-        return
-
-    for node in nodes:
-        indent = "  " * max(node.depth - 1, 0)
-        page_span = (
-            f"p{node.page_start}"
-            if node.page_start == node.page_end
-            else f"p{node.page_start}-{node.page_end}"
-        )
-        console.print(
-            f"{indent}[{theme.ACCENT}]{node.title}[/{theme.ACCENT}] "
-            f"[{theme.LABEL}]({node.kind}, {page_span})[/{theme.LABEL}]"
-        )
 
 
 @wiki_app.command(name="synthesize")

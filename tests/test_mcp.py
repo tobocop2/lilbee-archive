@@ -23,14 +23,12 @@ from lilbee.mcp import (
     status,
     sync,
     wiki_citations,
-    wiki_generate,
     wiki_lint,
     wiki_list,
     wiki_prune,
     wiki_read,
     wiki_status,
     wiki_synthesize,
-    wiki_tree,
 )
 from lilbee.store import SearchChunk
 
@@ -731,56 +729,6 @@ class TestWikiSynthesizeTool:
         assert result["paths"] == []
 
 
-class TestWikiTreeTool:
-    def test_wiki_disabled_returns_error(self, mock_svc, tmp_path):
-        cfg.wiki = False
-        assert wiki_tree("doc.pdf") == {"error": "wiki not enabled"}
-
-    def test_empty_source_returns_error(self, mock_svc, tmp_path):
-        cfg.wiki = True
-        result = wiki_tree("   ")
-        assert result == {"error": "source must not be empty"}
-
-    def test_no_structure_returns_empty_nodes(self, mock_svc, tmp_path):
-        cfg.wiki = True
-        mock_svc.store.get_document_structure.return_value = None
-        result = wiki_tree("never.pdf")
-        assert result["command"] == "wiki_tree"
-        assert result["source"] == "never.pdf"
-        assert result["nodes"] == []
-
-    def test_invalid_json_returns_empty_nodes(self, mock_svc, tmp_path):
-        cfg.wiki = True
-        mock_svc.store.get_document_structure.return_value = {"document_json": "{bad"}
-        result = wiki_tree("bad.pdf")
-        assert result["nodes"] == []
-
-    def test_returns_serialized_nodes(self, mock_svc, tmp_path):
-        import json as _json
-
-        cfg.wiki = True
-        document = {
-            "nodes": [
-                {
-                    "id": "h1",
-                    "content": {"node_type": "heading", "level": 1, "text": "Chapter"},
-                    "page": 1,
-                    "children": [],
-                }
-            ]
-        }
-        mock_svc.store.get_document_structure.return_value = {
-            "document_json": _json.dumps(document)
-        }
-        result = wiki_tree("doc.pdf")
-        assert len(result["nodes"]) == 1
-        node = result["nodes"][0]
-        assert node["title"] == "Chapter"
-        assert node["slug"] == "01-chapter"
-        assert node["kind"] == "chapter"
-        assert node["page_start"] == 1
-
-
 class TestWikiPrune:
     def test_prune_no_pages(self, mock_svc, tmp_path):
         cfg.wiki_dir = "wiki"
@@ -790,59 +738,6 @@ class TestWikiPrune:
         assert result["archived"] == 0
         assert result["flagged"] == 0
         assert result["records"] == []
-
-
-class TestWikiGenerate:
-    def test_generate_success(self, mock_svc, tmp_path):
-        cfg.wiki = True
-        cfg.data_root = tmp_path
-        cfg.wiki_dir = "wiki"
-        mock_svc.store.get_chunks_by_source.return_value = [MagicMock()]
-        out_path = tmp_path / "wiki" / "summaries" / "doc" / "page-0001.md"
-        with mock.patch("lilbee.wiki.gen.generate_summary_page", return_value=[out_path]):
-            result = wiki_generate("doc.pdf")
-        assert result["command"] == "wiki_generate"
-        assert result["source"] == "doc.pdf"
-        assert result["status"] == "generated"
-        assert result["paths"] == [str(out_path)]
-
-    def test_generate_no_chunks_returns_error(self, mock_svc, tmp_path):
-        cfg.wiki = True
-        cfg.data_root = tmp_path
-        cfg.wiki_dir = "wiki"
-        mock_svc.store.get_chunks_by_source.return_value = []
-        result = wiki_generate("missing.pdf")
-        assert "error" in result
-        assert "missing.pdf" in result["error"]
-
-    def test_generate_empty_result_status_failed(self, mock_svc, tmp_path):
-        cfg.wiki = True
-        cfg.data_root = tmp_path
-        cfg.wiki_dir = "wiki"
-        mock_svc.store.get_chunks_by_source.return_value = [MagicMock()]
-        with mock.patch("lilbee.wiki.gen.generate_summary_page", return_value=[]):
-            result = wiki_generate("doc.pdf")
-        assert result["status"] == "failed"
-        assert result["paths"] == []
-
-    def test_generate_wiki_disabled(self):
-        cfg.wiki = False
-        result = wiki_generate("doc.pdf")
-        assert result == {"error": "wiki not enabled"}
-
-    def test_generate_empty_source_returns_error(self, mock_svc, tmp_path):
-        cfg.wiki = True
-        cfg.data_root = tmp_path
-        cfg.wiki_dir = "wiki"
-        result = wiki_generate("")
-        assert "error" in result
-
-    def test_generate_whitespace_source_returns_error(self, mock_svc, tmp_path):
-        cfg.wiki = True
-        cfg.data_root = tmp_path
-        cfg.wiki_dir = "wiki"
-        result = wiki_generate("   ")
-        assert result == {"error": "source must not be empty"}
 
 
 class TestWikiList:

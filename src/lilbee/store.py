@@ -21,7 +21,6 @@ from lilbee.config import (
     CHUNKS_TABLE,
     CITATIONS_TABLE,
     SOURCES_TABLE,
-    STRUCTURE_TABLE,
     Config,
     cfg,
 )
@@ -191,29 +190,6 @@ def _citations_schema() -> pa.Schema:
             pa.field("created_at", pa.utf8()),
         ]
     )
-
-
-def _structure_schema() -> pa.Schema:
-    """Schema for the serialized document structure tree emitted by kreuzberg."""
-    return pa.schema(
-        [
-            pa.field("source_filename", pa.utf8()),
-            pa.field("source_hash", pa.utf8()),
-            pa.field("document_json", pa.utf8()),
-            pa.field("kreuzberg_version", pa.utf8()),
-            pa.field("created_at", pa.utf8()),
-        ]
-    )
-
-
-class StructureRecord(TypedDict):
-    """A serialized ``DocumentStructure`` tree, keyed by source."""
-
-    source_filename: str
-    source_hash: str
-    document_json: str
-    kreuzberg_version: str
-    created_at: str
 
 
 def _table_names(db: lancedb.DBConnection) -> list[str]:
@@ -548,17 +524,11 @@ class Store:
             )
 
     def delete_source(self, filename: str) -> None:
-        """Remove a source file tracking record and any cached document structure."""
+        """Remove a source file tracking record."""
         with write_lock():
             table = self.open_table(SOURCES_TABLE)
             if table is not None:
                 _safe_delete_unlocked(table, f"filename = '{escape_sql_string(filename)}'")
-            structure = self.open_table(STRUCTURE_TABLE)
-            if structure is not None:
-                _safe_delete_unlocked(
-                    structure,
-                    f"source_filename = '{escape_sql_string(filename)}'",
-                )
 
     def remove_documents(
         self,
@@ -642,71 +612,6 @@ class Store:
             CITATIONS_TABLE,
             f"wiki_source = '{escape_sql_string(wiki_source)}'",
         )
-
-    def upsert_document_structure(self, record: StructureRecord) -> None:
-        """Replace any existing structure row for this source with *record*."""
-        with write_lock():
-            db = self.get_db()
-            table = ensure_table(db, STRUCTURE_TABLE, _structure_schema())
-            escaped = escape_sql_string(record["source_filename"])
-            _safe_delete_unlocked(table, f"source_filename = '{escaped}'")
-            table.add([record])
-
-    def get_document_structure(self, source_filename: str) -> StructureRecord | None:
-        """Return the stored structure record for *source_filename*, or None."""
-        table = self.open_table(STRUCTURE_TABLE)
-        if table is None:
-            return None
-        escaped = escape_sql_string(source_filename)
-        rows: list[StructureRecord] = (
-            table.search().where(f"source_filename = '{escaped}'").to_list()
-        )
-        return rows[0] if rows else None
-
-    def delete_document_structure(self, source_filename: str) -> None:
-        """Delete the structure row for *source_filename* (used when the source is removed)."""
-        self.clear_table(
-            STRUCTURE_TABLE,
-            f"source_filename = '{escape_sql_string(source_filename)}'",
-        )
-
-    def get_ancestor_chain(self, source_filename: str, node_slug: str) -> list[str]:
-        """Return ancestor slugs for *node_slug* in top-down order (root first).
-
-        Walks the persisted DocumentStructure for *source_filename* and returns
-        every ancestor of *node_slug* up to the root, in top-down order. The
-        leaf node itself is included as the final entry. Returns an empty
-        list when the source has no structure persisted, when *node_slug* is
-        not found in the tree, or when the JSON blob is unparseable.
-
-        Callers use this for drill-down: given a wiki page's slug, show its
-        chapter > section > page breadcrumb.
-        """
-        # Local import to avoid a cycle (structure imports from store indirectly
-        # via the wiki package).
-        from lilbee.wiki.structure import (
-            deserialize_document,
-            walk_structure_to_wiki_nodes,
-        )
-
-        record = self.get_document_structure(source_filename)
-        if record is None:
-            return []
-        document = deserialize_document(record["document_json"])
-        if document is None:
-            return []
-        nodes = walk_structure_to_wiki_nodes(document)
-        by_slug = {n.slug: n for n in nodes}
-        if node_slug not in by_slug:
-            return []
-        chain: list[str] = []
-        current: str | None = node_slug
-        while current is not None:
-            chain.append(current)
-            parent = by_slug[current].parent_slug
-            current = parent
-        chain.reverse()
-        return chain
 
     def close(self) -> None:
         """Release the database connection and reset state."""

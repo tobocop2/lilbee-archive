@@ -18,9 +18,6 @@ from lilbee.wiki.shared import (
     DRAFTS_SUBDIR,
     SUMMARIES_SUBDIR,
     WIKI_DISABLED_ERROR,
-    WIKI_EMPTY_SOURCE_ERROR,
-    WIKI_STATUS_FAILED,
-    WIKI_STATUS_GENERATED,
 )
 
 if TYPE_CHECKING:
@@ -371,44 +368,6 @@ def wiki_read(slug: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-def wiki_generate(source: str) -> dict[str, Any]:
-    """Generate wiki tree summaries for a single source document.
-
-    Runs the same pipeline the HTTP and TUI entry points use: per-page
-    leaves at wiki/summaries/<source>/page-NNNN.md plus chapter/section
-    reduces at wiki/summaries/<source>/<slug>/index.md when a
-    DocumentStructure was persisted at ingest time.
-
-    Returns ``{"command", "source", "status", "paths"}`` on success, or
-    ``{"error": "..."}`` when the source has no indexed chunks, wiki is
-    disabled, or the input is empty.
-
-    Args:
-        source: Source filename indexed in the store, e.g. "cv-manual.pdf".
-    """
-    from lilbee.wiki.gen import generate_summary_page
-
-    if not cfg.wiki:
-        return {"error": WIKI_DISABLED_ERROR}
-    if not source or not source.strip():
-        return {"error": WIKI_EMPTY_SOURCE_ERROR}
-
-    services = get_services()
-    chunks = services.store.get_chunks_by_source(source)
-    if not chunks:
-        return {"error": f"No indexed chunks for source: {source}"}
-
-    paths = generate_summary_page(source, chunks, services.provider, services.store)
-    status = WIKI_STATUS_GENERATED if paths else WIKI_STATUS_FAILED
-    return {
-        "command": "wiki_generate",
-        "source": source,
-        "status": status,
-        "paths": [str(p) for p in paths],
-    }
-
-
-@mcp.tool()
 def wiki_synthesize() -> dict[str, Any]:
     """Generate synthesis pages for concept clusters spanning three or more sources.
 
@@ -427,39 +386,6 @@ def wiki_synthesize() -> dict[str, Any]:
         "command": "wiki_synthesize",
         "paths": [str(p) for p in paths],
         "count": len(paths),
-    }
-
-
-@mcp.tool()
-def wiki_tree(source: str) -> dict[str, Any]:
-    """Return the heading tree extracted at ingest for a source document.
-
-    The tree is the kreuzberg DocumentStructure persisted during sync,
-    filtered to the heading backbone (title / heading / group nodes).
-    Useful for rendering breadcrumbs or a navigable outline in a client.
-
-    Args:
-        source: Source filename indexed in the store, e.g. "cv-manual.pdf".
-    """
-    if not cfg.wiki:
-        return {"error": WIKI_DISABLED_ERROR}
-    if not source or not source.strip():
-        return {"error": WIKI_EMPTY_SOURCE_ERROR}
-    from lilbee.wiki.structure import (
-        deserialize_document,
-        walk_structure_to_wiki_nodes,
-        wiki_node_to_dict,
-    )
-
-    record = get_services().store.get_document_structure(source)
-    if record is None:
-        return {"command": "wiki_tree", "source": source, "nodes": []}
-    document = deserialize_document(record["document_json"])
-    nodes = walk_structure_to_wiki_nodes(document) if document is not None else []
-    return {
-        "command": "wiki_tree",
-        "source": source,
-        "nodes": [wiki_node_to_dict(n) for n in nodes],
     }
 
 

@@ -1177,13 +1177,14 @@ def wiki_build(
 ) -> None:
     """Build the concept and entity wiki across all ingested sources."""
     apply_overrides(data_dir=data_dir, use_global=use_global)
+    from lilbee.store import SearchChunk
     from lilbee.wiki.entity_extractor import get_entity_extractor
     from lilbee.wiki.gen import build_wiki
     from lilbee.wiki.index import append_wiki_log, update_wiki_index
     from lilbee.wiki.shared import WIKI_LOG_ACTION_BUILD
 
     svc = get_services()
-    chunks: list = []
+    chunks: list[SearchChunk] = []
     for record in svc.store.get_sources():
         chunks.extend(svc.store.get_chunks_by_source(record["filename"]))
 

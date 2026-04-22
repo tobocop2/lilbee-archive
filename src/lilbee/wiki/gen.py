@@ -790,7 +790,7 @@ def _gather_chunks_for_label(
         return []
 
     top_k = config.wiki_concept_max_chunks_per_page
-    pool_size = max(top_k, top_k * config.candidate_multiplier)
+    pool_size = top_k * config.candidate_multiplier
 
     try:
         vectors = provider.embed([label])
@@ -936,9 +936,12 @@ def build_wiki(
 
     Dispatches to :func:`generate_concept_page` for ``EntityKind.CONCEPT``
     records and :func:`generate_entity_page` for ``EntityKind.ENTITY``
-    records. Pages that fail to ground a single citation are silently
-    skipped by ``_generate_page``; the returned list is the set of pages
-    that landed on disk.
+    records. After all pages are written, runs the ``[[wiki link]]``
+    rewriter across every markdown under ``wiki/`` so new pages and
+    existing ones alike cross-reference the freshly extracted slugs.
+    Pages that fail to ground a single citation are silently skipped by
+    ``_generate_page``; the returned list is the set of pages that
+    landed on disk.
     """
     if config is None:
         config = cfg
@@ -951,5 +954,42 @@ def build_wiki(
             page = generate_entity_page(entity.label, provider, store, config)
         if page is not None:
             pages.append(page)
+
+    _rewrite_links_across_wiki(entities, config)
     log.info("Generated %d concept/entity pages", len(pages))
     return pages
+
+
+def _entity_surface_map(entities: list[ExtractedEntity]) -> dict[str, str]:
+    """Build the surface-form -> slug map for the ``[[link]]`` rewriter.
+
+    Includes both the entity's human label (e.g. *"Henry Ford"*) and
+    the slug-with-hyphens-as-spaces variant (*"henry ford"*) so the
+    rewriter catches either form in body text.
+    """
+    mapping: dict[str, str] = {}
+    for entity in entities:
+        mapping[entity.label] = entity.slug
+        spaced = entity.slug.replace("-", " ")
+        if spaced and spaced != entity.label:
+            mapping[spaced] = entity.slug
+    return mapping
+
+
+def _rewrite_links_across_wiki(entities: list[ExtractedEntity], config: Config) -> None:
+    """Rewrite ``[[slug]]`` links on every page under ``wiki/`` content subdirs."""
+    from lilbee.wiki.links import rewrite_wiki_links
+
+    surface_to_slug = _entity_surface_map(entities)
+    if not surface_to_slug:
+        return
+    wiki_root = config.data_root / config.wiki_dir
+    for subdir in (CONCEPTS_SUBDIR, ENTITIES_SUBDIR, SUMMARIES_SUBDIR, SYNTHESIS_SUBDIR):
+        subdir_path = wiki_root / subdir
+        if not subdir_path.is_dir():
+            continue
+        for md_path in subdir_path.rglob("*.md"):
+            original = md_path.read_text(encoding="utf-8")
+            rewritten = rewrite_wiki_links(original, surface_to_slug)
+            if rewritten != original:
+                md_path.write_text(rewritten, encoding="utf-8")

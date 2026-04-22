@@ -239,11 +239,9 @@ class TestLogActionConstants:
             WIKI_LOG_ACTION_GENERATED,
             WIKI_LOG_ACTION_INGEST,
             WIKI_LOG_ACTION_LINT,
-            WIKI_LOG_ACTION_UPDATE,
         )
 
         assert WIKI_LOG_ACTION_BUILD == "build"
-        assert WIKI_LOG_ACTION_UPDATE == "update"
         assert WIKI_LOG_ACTION_INGEST == "ingest"
         assert WIKI_LOG_ACTION_LINT == "lint"
         # Pre-existing constant is unchanged so old log entries still read the same.

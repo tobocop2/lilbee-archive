@@ -237,6 +237,18 @@ class TestLintAll:
         assert report.error_count == 0
 
 
+class TestLintWritesLogEntry:
+    def test_lint_all_appends_lint_entry_to_log(self, tmp_path: Path) -> None:
+        write_wiki_page(tmp_path, "concepts", "braking", "# Braking\n\nText.\n")
+        store = MagicMock(spec=Store)
+        store.get_citations_for_wiki.return_value = []
+        lint_all(store)
+        log_path = tmp_path / "wiki" / "log.md"
+        assert log_path.exists()
+        content = log_path.read_text()
+        assert "lint |" in content
+
+
 class TestOrphanDetection:
     def test_orphan_concept_flagged(self, tmp_path: Path):
         write_wiki_page(tmp_path, "concepts", "braking", "# Braking\n\nText.\n")

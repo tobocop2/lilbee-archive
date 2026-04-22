@@ -346,6 +346,54 @@ class TestGeneratePageProgress:
         assert "generating" in stages
 
 
+class TestBuildWikiRewritesLinks:
+    """After generating pages, build_wiki rewrites slug surface forms to [[links]]."""
+
+    def test_rewrites_new_and_existing_pages(self, tmp_path: Path) -> None:
+        cfg.data_root = tmp_path
+        wiki_root = tmp_path / cfg.wiki_dir
+        (wiki_root / "concepts").mkdir(parents=True)
+        (wiki_root / "summaries").mkdir()
+        (wiki_root / "concepts" / "braking.md").write_text(
+            "# braking\n\nSee henry ford for more.\n"
+        )
+        (wiki_root / "summaries" / "manual.md").write_text(
+            "# Manual\n\nThis book discusses braking thoroughly.\n"
+        )
+        entities = [
+            ExtractedEntity(
+                slug="braking",
+                kind=EntityKind.CONCEPT,
+                label="braking",
+                type_hint="noun_phrase",
+                chunk_refs=(ChunkRef("a.txt", 0),),
+            ),
+            ExtractedEntity(
+                slug="henry-ford",
+                kind=EntityKind.ENTITY,
+                label="Henry Ford",
+                type_hint="PERSON",
+                chunk_refs=(ChunkRef("a.txt", 1),),
+            ),
+        ]
+        with (
+            patch("lilbee.wiki.gen.generate_concept_page", return_value=None),
+            patch("lilbee.wiki.gen.generate_entity_page", return_value=None),
+        ):
+            build_wiki(entities, MagicMock(), MagicMock(), cfg)
+
+        concept_body = (wiki_root / "concepts" / "braking.md").read_text()
+        summary_body = (wiki_root / "summaries" / "manual.md").read_text()
+        assert "[[henry-ford]]" in concept_body
+        assert "[[braking]]" in summary_body
+
+    def test_empty_entity_list_is_noop(self, tmp_path: Path) -> None:
+        cfg.data_root = tmp_path
+        with patch("lilbee.wiki.gen.generate_concept_page") as gc:
+            build_wiki([], MagicMock(), MagicMock(), cfg)
+        gc.assert_not_called()
+
+
 class TestBuildWiki:
     def test_dispatches_concept_and_entity_records(self, tmp_path: Path) -> None:
         concept_rec = ExtractedEntity(

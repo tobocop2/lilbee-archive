@@ -558,6 +558,7 @@ async def _incremental_wiki_update(changed_sources: set[str]) -> None:
     """
     if not cfg.wiki or not changed_sources:
         return
+    from lilbee.store import SearchChunk
     from lilbee.wiki.entity_extractor import EntityKind, get_entity_extractor
     from lilbee.wiki.gen import build_wiki
     from lilbee.wiki.index import append_wiki_log, update_wiki_index
@@ -568,13 +569,9 @@ async def _incremental_wiki_update(changed_sources: set[str]) -> None:
     )
 
     svc = get_services()
-    try:
-        extractor = get_entity_extractor(cfg.wiki_entity_mode, svc.provider, cfg)
-    except KeyError:
-        log.warning("Unknown wiki_entity_mode %r, skipping auto-update", cfg.wiki_entity_mode)
-        return
+    extractor = get_entity_extractor(cfg.wiki_entity_mode, svc.provider, cfg)
 
-    chunks: list = []
+    chunks: list[SearchChunk] = []
     for record in svc.store.get_sources():
         chunks.extend(svc.store.get_chunks_by_source(record["filename"]))
     entities = await asyncio.to_thread(extractor.extract, chunks)

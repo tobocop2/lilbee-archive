@@ -53,38 +53,42 @@ class TestExtractedEntityRecord:
 class TestFactoryDispatch:
     """Each mode routes to the matching extractor class."""
 
-    @pytest.mark.parametrize(
-        ("mode", "expected_cls"),
-        [
-            (WikiEntityMode.NER_CONCEPTS, NerConceptsExtractor),
-            (WikiEntityMode.NER_CONCEPTS_PLUS_LLM_TYPES, NerConceptsPlusLlmTypesExtractor),
-            (WikiEntityMode.LLM_TAGGED, LlmTaggedExtractor),
-        ],
-    )
-    def test_returns_matching_implementation(
-        self, mode: WikiEntityMode, expected_cls: type
-    ) -> None:
+    def test_implemented_mode_returns_its_class(self) -> None:
         provider = MagicMock()
-        extractor = get_entity_extractor(mode, provider, cfg)
-        assert isinstance(extractor, expected_cls)
-        # Every implementation must satisfy the runtime-checkable protocol.
+        extractor = get_entity_extractor(WikiEntityMode.NER_CONCEPTS, provider, cfg)
+        assert isinstance(extractor, NerConceptsExtractor)
+        # Implementations must satisfy the runtime-checkable protocol.
         assert isinstance(extractor, EntityExtractor)
 
 
-class TestStubsRaiseNotImplemented:
-    """The unimplemented strategies still signal absence with NotImplementedError.
+class TestUnimplementedModesFallBack:
+    """Unimplemented strategies fall back to NER_CONCEPTS via the factory.
 
-    NER_CONCEPTS is live (see ``tests/test_ner_concepts_extractor.py``); the
-    other two remain stubs until their own tasks land.
+    The stub classes themselves still raise on direct use, so future
+    implementation work has a clear TODO site, but routing through
+    ``get_entity_extractor`` never hands a caller something that crashes
+    mid-build.
     """
 
     @pytest.mark.parametrize(
         "mode",
         [WikiEntityMode.NER_CONCEPTS_PLUS_LLM_TYPES, WikiEntityMode.LLM_TAGGED],
     )
-    def test_extract_raises_not_implemented(self, mode: WikiEntityMode) -> None:
+    def test_unimplemented_mode_returns_ner_concepts(
+        self, mode: WikiEntityMode, caplog: pytest.LogCaptureFixture
+    ) -> None:
         provider = MagicMock()
-        extractor = get_entity_extractor(mode, provider, cfg)
+        with caplog.at_level("WARNING"):
+            extractor = get_entity_extractor(mode, provider, cfg)
+        assert isinstance(extractor, NerConceptsExtractor)
+        assert any("not yet implemented" in r.message for r in caplog.records)
+
+    @pytest.mark.parametrize(
+        "cls",
+        [NerConceptsPlusLlmTypesExtractor, LlmTaggedExtractor],
+    )
+    def test_stub_extract_still_raises_when_used_directly(self, cls: type) -> None:
+        extractor = cls(MagicMock(), cfg)
         with pytest.raises(NotImplementedError):
             extractor.extract([])
 

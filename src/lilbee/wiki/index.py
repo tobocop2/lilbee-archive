@@ -22,6 +22,7 @@ from lilbee.wiki.shared import (
     SUBDIR_TO_TYPE,
     SUMMARIES_SUBDIR,
     SYNTHESIS_SUBDIR,
+    WIKI_TYPE_HEADINGS,
     parse_frontmatter,
 )
 
@@ -33,13 +34,6 @@ _INDEX_SECTION_ORDER: tuple[str, ...] = (
     SUMMARIES_SUBDIR,
     SYNTHESIS_SUBDIR,
 )
-
-_SECTION_TITLES: dict[str, str] = {
-    CONCEPTS_SUBDIR: "Concepts",
-    ENTITIES_SUBDIR: "Entities",
-    SUMMARIES_SUBDIR: "Source Summaries",
-    SYNTHESIS_SUBDIR: "Synthesis",
-}
 
 
 def _wiki_root(config: Config) -> Path:
@@ -87,7 +81,7 @@ def update_wiki_index(config: Config | None = None) -> Path:
         section_lines = _render_section(root, subdir)
         if not section_lines:
             continue
-        lines.append(f"## {_SECTION_TITLES[subdir]}")
+        lines.append(f"## {WIKI_TYPE_HEADINGS[SUBDIR_TO_TYPE[subdir]]}")
         lines.append("")
         lines.extend(section_lines)
         lines.append("")

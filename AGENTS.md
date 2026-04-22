@@ -343,7 +343,7 @@ setting appears in `/settings`, the HTTP `/set` route, and
 
 **Writing to log.md**. Use `append_wiki_log(action, details)` from
 `wiki/index.py` with one of the `WIKI_LOG_ACTION_*` constants in
-`wiki/shared.py` (`BUILD`, `UPDATE`, `INGEST`, `LINT`, `GENERATED`).
+`wiki/shared.py` (`BUILD`, `INGEST`, `LINT`, `GENERATED`).
 Don't hand-roll timestamps; the helper writes
 `## [YYYY-MM-DD HH:MM] action | details` so `grep '## \['` still
 surfaces every entry.

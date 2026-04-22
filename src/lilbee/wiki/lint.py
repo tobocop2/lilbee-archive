@@ -22,10 +22,12 @@ from lilbee.wiki.citation import (
     find_unmarked_claims,
     verify_citation,
 )
+from lilbee.wiki.index import append_wiki_log
 from lilbee.wiki.shared import (
     CONCEPTS_SUBDIR,
     ENTITIES_SUBDIR,
     WIKI_CONTENT_SUBDIRS,
+    WIKI_LOG_ACTION_LINT,
     parse_frontmatter,
 )
 
@@ -255,6 +257,11 @@ def lint_all(
             report.issues.extend(lint_wiki_page(wiki_source, store, config))
 
     report.issues.extend(_lint_orphans(wiki_root, config))
+    append_wiki_log(
+        WIKI_LOG_ACTION_LINT,
+        f"{report.error_count} error(s), {report.warning_count} warning(s)",
+        config,
+    )
     return report
 
 

@@ -45,7 +45,6 @@ WIKI_DISABLED_ERROR = "wiki not enabled"
 # verbs written into the log file.
 WIKI_LOG_ACTION_GENERATED = "generated"
 WIKI_LOG_ACTION_BUILD = "build"
-WIKI_LOG_ACTION_UPDATE = "update"
 WIKI_LOG_ACTION_INGEST = "ingest"
 WIKI_LOG_ACTION_LINT = "lint"
 
@@ -56,6 +55,16 @@ SUBDIR_TO_TYPE: dict[str, WikiPageType] = {
     ENTITIES_SUBDIR: WikiPageType.ENTITY,
     DRAFTS_SUBDIR: WikiPageType.DRAFT,
     ARCHIVE_SUBDIR: WikiPageType.ARCHIVE,
+}
+
+# One source of truth for sidebar-style headings keyed by page type.
+# Consumed by ``wiki/index.py`` and the TUI sidebar via
+# ``cli/tui/messages.WIKI_TYPE_HEADINGS``.
+WIKI_TYPE_HEADINGS: dict[WikiPageType, str] = {
+    WikiPageType.CONCEPT: "Concepts",
+    WikiPageType.ENTITY: "Entities",
+    WikiPageType.SUMMARY: "Source Summaries",
+    WikiPageType.SYNTHESIS: "Synthesis",
 }
 
 _SLUG_CLEAN_RE = re.compile(r"[^a-z0-9-]")

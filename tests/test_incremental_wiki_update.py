@@ -142,19 +142,3 @@ class TestIncrementalWikiUpdate:
         assert log_path.exists()
         assert "ingest" in log_path.read_text()
         assert "changed.txt" in log_path.read_text()
-
-    @pytest.mark.asyncio
-    async def test_unknown_entity_mode_bails_gracefully(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        def raise_keyerror(*a: object, **kw: object) -> None:
-            raise KeyError("unknown mode")
-
-        monkeypatch.setattr(
-            "lilbee.wiki.entity_extractor.get_entity_extractor",
-            raise_keyerror,
-        )
-        monkeypatch.setattr("lilbee.ingest.get_services", lambda: MagicMock())
-        with patch("lilbee.wiki.gen.build_wiki") as build:
-            await _incremental_wiki_update({"a.txt"})
-        build.assert_not_called()

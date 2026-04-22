@@ -625,6 +625,12 @@ class Config(BaseSettings):
     # the `## Related` section of each page.
     wiki_related_max: int = ConfigField(default=8, ge=0, writable=True)
 
+    # Auto-update cap: if a single sync touches more than this many
+    # concept or entity pages, skip the per-slug regeneration and tell
+    # the user to run `lilbee wiki update` explicitly. Keeps a surprise
+    # bulk import from firing hundreds of LLM calls.
+    wiki_ingest_update_cap: int = ConfigField(default=20, ge=1, writable=True)
+
     # Prompt template for concept and entity wiki pages. Must contain
     # {topic}, {kind}, {source_list}, {chunks_text}, and {related_max}
     # placeholders.

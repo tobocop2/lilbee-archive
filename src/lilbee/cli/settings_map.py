@@ -217,6 +217,15 @@ SETTINGS_MAP: dict[str, SettingDef] = {
         group="Wiki",
         help_text="Maximum related concepts listed in the `## Related` section of each page",
     ),
+    "wiki_ingest_update_cap": SettingDef(
+        int,
+        nullable=False,
+        group="Wiki",
+        help_text=(
+            "Touched-page cap for auto-update after sync. "
+            "Beyond this count, run `lilbee wiki update` manually."
+        ),
+    ),
     "wiki_clusterer_k": SettingDef(
         int,
         nullable=False,

@@ -9,6 +9,7 @@ _citations table is the source of truth; markdown footnotes are rendered from it
 from __future__ import annotations
 
 import difflib
+import functools
 import hashlib
 import logging
 import re
@@ -858,16 +859,13 @@ def _generate_concept_like_page(
         related_max=config.wiki_related_max,
     )
 
-    source_hashes: dict[str, str] = {}
-    for name in source_names:
-        source_path = config.documents_dir / name
-        if source_path.exists():
-            source_hashes[name] = file_hash(source_path)
-
-    def resolver(parsed: list[ParsedCitation]) -> list[CitationRecord]:
-        return _resolve_multi_source_citations(
-            parsed, source_names, source_hashes, chunks_by_source
-        )
+    source_hashes = _hash_existing_sources(source_names, config.documents_dir)
+    resolver = functools.partial(
+        _resolve_multi_source_citations,
+        source_names=source_names,
+        source_hashes=source_hashes,
+        chunks_by_source=chunks_by_source,
+    )
 
     return _generate_page(
         label=label,
@@ -882,6 +880,16 @@ def _generate_concept_like_page(
         store=store,
         config=config,
     )
+
+
+def _hash_existing_sources(source_names: list[str], documents_dir: Path) -> dict[str, str]:
+    """Hash each source file that still exists on disk (used for citation staleness)."""
+    out: dict[str, str] = {}
+    for name in source_names:
+        source_path = documents_dir / name
+        if source_path.exists():
+            out[name] = file_hash(source_path)
+    return out
 
 
 def generate_concept_page(

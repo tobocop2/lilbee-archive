@@ -23,6 +23,7 @@ from lilbee.wiki.entity_extractor import (
 from lilbee.wiki.gen import (
     _apply_per_source_cap,
     _gather_chunks_for_label,
+    _hash_existing_sources,
     build_wiki,
     generate_concept_page,
     generate_entity_page,
@@ -238,6 +239,111 @@ class TestGeneratePages:
         ):
             generate_concept_page("topic", MagicMock(), MagicMock(), cfg)
         assert gen.call_args.kwargs["source_names"] == ["a.txt", "z.txt"]
+
+
+class TestHashExistingSources:
+    def test_hashes_only_files_that_exist(self, tmp_path: Path) -> None:
+        docs = tmp_path / "documents"
+        docs.mkdir()
+        (docs / "here.txt").write_text("content")
+        result = _hash_existing_sources(["here.txt", "missing.txt"], docs)
+        assert "here.txt" in result
+        assert result["here.txt"]  # non-empty hash
+        assert "missing.txt" not in result
+
+    def test_empty_list_returns_empty(self, tmp_path: Path) -> None:
+        assert _hash_existing_sources([], tmp_path) == {}
+
+
+class TestConceptPageWiresResolver:
+    """The resolver passed to _generate_page must curry the multi-source bindings."""
+
+    def test_resolver_binds_sources_and_hashes(self, tmp_path: Path) -> None:
+        cfg.documents_dir = tmp_path / "documents"
+        cfg.documents_dir.mkdir()
+        (cfg.documents_dir / "a.txt").write_text("hello")
+        captured: dict = {}
+
+        def fake_generate_page(**kwargs: object) -> None:
+            captured.update(kwargs)
+            return None
+
+        with (
+            patch(
+                "lilbee.wiki.gen._gather_chunks_for_label",
+                return_value=[_chunk("a.txt", 0, "hello")],
+            ),
+            patch("lilbee.wiki.gen._generate_page", side_effect=fake_generate_page),
+        ):
+            generate_concept_page("topic", MagicMock(), MagicMock(), cfg)
+        resolver = captured["citation_resolver"]
+        # resolver is a functools.partial pre-bound with source_names + source_hashes
+        # so calling it with an empty parsed-citation list returns an empty list
+        # without raising (no chat or store calls required).
+        assert resolver([]) == []
+
+
+class TestPersistAndFinalize:
+    """wiki_prune_raw drops the raw chunks once a page lands successfully."""
+
+    def test_prune_raw_deletes_source_chunks(self, tmp_path: Path) -> None:
+        from lilbee.wiki.gen import _persist_and_finalize
+        from lilbee.wiki.shared import PageTarget
+
+        cfg.wiki_prune_raw = True
+        cfg.data_root = tmp_path
+        wiki_root = tmp_path / cfg.wiki_dir
+        wiki_root.mkdir(parents=True)
+        target = PageTarget(
+            wiki_root=wiki_root,
+            subdir="concepts",
+            slug="braking",
+            wiki_source=f"{cfg.wiki_dir}/concepts/braking.md",
+            page_type="concept",
+            label="braking",
+        )
+        store = MagicMock()
+        _persist_and_finalize(
+            "# braking\n\nbody.\n",
+            target,
+            verified=[],
+            source_names=["a.txt", "b.txt"],
+            store=store,
+            config=cfg,
+        )
+        store.delete_by_source.assert_any_call("a.txt")
+        store.delete_by_source.assert_any_call("b.txt")
+
+
+class TestGeneratePageProgress:
+    """_generate_page forwards progress events to the on_progress callback."""
+
+    def test_progress_callback_receives_generating_stage(self, tmp_path: Path) -> None:
+        from lilbee.wiki.gen import _generate_page
+
+        cfg.data_root = tmp_path
+        (tmp_path / cfg.wiki_dir).mkdir(parents=True, exist_ok=True)
+        events: list[tuple[str, dict]] = []
+        provider = MagicMock()
+        provider.get_capabilities.return_value = []
+        provider.chat.side_effect = RuntimeError("simulated")
+        _generate_page(
+            label="topic",
+            prompt="p",
+            chunks=[_chunk("a.txt", 0, "body")],
+            chunks_text="body",
+            citation_resolver=lambda _: [],
+            page_type="concepts",
+            slug="topic",
+            source_names=["a.txt"],
+            provider=provider,
+            store=MagicMock(),
+            config=cfg,
+            on_progress=lambda stage, data: events.append((stage, data)),
+        )
+        stages = [stage for stage, _ in events]
+        assert "preparing" in stages
+        assert "generating" in stages
 
 
 class TestBuildWiki:

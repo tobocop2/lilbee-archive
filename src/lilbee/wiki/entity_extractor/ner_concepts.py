@@ -65,8 +65,6 @@ class NerConceptsExtractor:
                 if len(surface) < _MIN_CONCEPT_LEN:
                     continue
                 key = _normalize(surface)
-                if not key:
-                    continue
                 rec = entity_records.setdefault(
                     key, _Aggregate(label=surface, type_hint=ent.label_)
                 )
@@ -76,8 +74,6 @@ class NerConceptsExtractor:
                 if len(surface) < _MIN_CONCEPT_LEN:
                     continue
                 key = _normalize(surface)
-                if not key:
-                    continue
                 rec = concept_records.setdefault(
                     key, _Aggregate(label=key, type_hint="noun_phrase")
                 )

@@ -96,6 +96,21 @@ class TestIncrementalWikiUpdate:
         assert build.call_args.args[0] == [brand_new]
 
     @pytest.mark.asyncio
+    async def test_existing_page_with_changed_source_is_touched(
+        self, monkeypatch: pytest.MonkeyPatch, _isolated_wiki: Path
+    ) -> None:
+        """Existing-page + cited-source-changed is the separate branch from new-entity."""
+        existing = _entity("braking", EntityKind.CONCEPT, ["changed.txt"])
+        wiki_root = _isolated_wiki / "wiki"
+        (wiki_root / "concepts").mkdir(parents=True)
+        (wiki_root / "concepts" / "braking.md").write_text("stale\n")
+        _install_service_stubs(monkeypatch, [existing])
+        with patch("lilbee.wiki.gen.build_wiki", return_value=[]) as build:
+            await _incremental_wiki_update({"changed.txt"})
+        build.assert_called_once()
+        assert build.call_args.args[0] == [existing]
+
+    @pytest.mark.asyncio
     async def test_cap_exceeded_skips_regeneration_and_logs_hint(
         self, monkeypatch: pytest.MonkeyPatch, _isolated_wiki: Path
     ) -> None:

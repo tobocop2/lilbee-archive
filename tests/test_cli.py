@@ -2184,6 +2184,27 @@ class TestWikiBuild:
         assert result.exit_code == 0
         assert "No concept or entity pages" in result.output
 
+    def test_collects_chunks_from_every_source(self, mock_svc, isolated_env, monkeypatch):
+        """wiki_build pulls chunks for every tracked source, not just the first."""
+        mock_svc.store.get_sources.return_value = [
+            {"filename": "a.txt"},
+            {"filename": "b.txt"},
+        ]
+        chunk_calls: list[str] = []
+
+        def fake_chunks(source: str) -> list:
+            chunk_calls.append(source)
+            return []
+
+        mock_svc.store.get_chunks_by_source.side_effect = fake_chunks
+        self._stub_extraction(monkeypatch)
+        monkeypatch.setattr("lilbee.wiki.gen.build_wiki", lambda *a, **kw: [])
+        monkeypatch.setattr("lilbee.wiki.index.update_wiki_index", lambda *a, **kw: None)
+        monkeypatch.setattr("lilbee.wiki.index.append_wiki_log", lambda *a, **kw: None)
+        result = runner.invoke(app, ["wiki", "build"])
+        assert result.exit_code == 0
+        assert chunk_calls == ["a.txt", "b.txt"]
+
 
 class TestWikiCitations:
     def test_citations_empty(self, mock_svc):

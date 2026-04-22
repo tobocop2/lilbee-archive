@@ -5313,6 +5313,83 @@ class TestWikiScreenWithPages:
             assert "85%" in header_text
 
 
+class TestWikiRootShortcuts:
+    """index.md and log.md surface as top-level tree leaves when they exist."""
+
+    async def test_index_and_log_appear_as_top_level_leaves(self, tmp_path):
+        cfg.wiki = True
+        cfg.data_root = tmp_path
+        wiki_root = cfg.data_root / cfg.wiki_dir
+        _create_wiki_page(wiki_root, "concepts", "braking", "Braking")
+        (wiki_root / "index.md").write_text("# Wiki Index\n")
+        (wiki_root / "log.md").write_text("# Wiki Log\n")
+
+        app = WikiTestApp()
+        async with app.run_test(size=(120, 40)) as _pilot:
+            from textual.widgets import Tree
+
+            tree = app.screen.query_one("#wiki-page-list", Tree)
+            top_labels = [str(c.label) for c in tree.root.children]
+            assert "Index" in top_labels
+            assert "Log" in top_labels
+
+    async def test_root_shortcut_skipped_when_file_missing(self, tmp_path):
+        cfg.wiki = True
+        cfg.data_root = tmp_path
+        wiki_root = cfg.data_root / cfg.wiki_dir
+        _create_wiki_page(wiki_root, "concepts", "braking", "Braking")
+
+        app = WikiTestApp()
+        async with app.run_test(size=(120, 40)) as _pilot:
+            from textual.widgets import Tree
+
+            tree = app.screen.query_one("#wiki-page-list", Tree)
+            top_labels = [str(c.label) for c in tree.root.children]
+            assert "Index" not in top_labels
+            assert "Log" not in top_labels
+
+
+class TestWikiSelectedSource:
+    """_selected_source short-circuits when the cursor has nothing resolvable."""
+
+    async def test_returns_none_when_no_cursor(self, tmp_path):
+        cfg.wiki = True
+        cfg.data_root = tmp_path
+        wiki_root = cfg.data_root / cfg.wiki_dir
+        wiki_root.mkdir(parents=True)
+        app = WikiTestApp()
+        async with app.run_test(size=(120, 40)) as _pilot:
+            from textual.widgets import Tree
+
+            from lilbee.cli.tui.screens.wiki import WikiScreen
+
+            screen = app.screen
+            assert isinstance(screen, WikiScreen)
+            tree = app.screen.query_one("#wiki-page-list", Tree)
+            tree.cursor_line = -1  # no highlight -> cursor_node is None
+            assert screen._selected_source() is None
+
+    async def test_returns_none_for_group_node(self, tmp_path):
+        """Group nodes (e.g. the Concepts heading) carry data=None, not a slug."""
+        cfg.wiki = True
+        cfg.data_root = tmp_path
+        wiki_root = cfg.data_root / cfg.wiki_dir
+        _create_wiki_page(wiki_root, "concepts", "braking", "Braking")
+
+        app = WikiTestApp()
+        async with app.run_test(size=(120, 40)) as _pilot:
+            from textual.widgets import Tree
+
+            from lilbee.cli.tui.screens.wiki import WikiScreen
+
+            screen = app.screen
+            assert isinstance(screen, WikiScreen)
+            tree = app.screen.query_one("#wiki-page-list", Tree)
+            tree.root.children[0].expand()
+            tree.cursor_line = 0  # the "Concepts" group header (data=None)
+            assert screen._selected_source() is None
+
+
 class TestWikiScreenSearch:
     async def test_search_filters_pages(self, tmp_path):
         """Search input filters the page list."""

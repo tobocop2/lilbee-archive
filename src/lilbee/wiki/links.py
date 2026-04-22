@@ -88,10 +88,7 @@ def _rewrite_line(
     lookup: dict[str, str],
 ) -> str:
     def replace(match: re.Match[str]) -> str:
-        slug = lookup.get(match.group(0).lower())
-        if slug is None:
-            return match.group(0)
-        return f"[[{slug}]]"
+        return f"[[{lookup[match.group(0).lower()]}]]"
 
     return pattern.sub(replace, line)
 

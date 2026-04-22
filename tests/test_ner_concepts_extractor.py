@@ -93,6 +93,47 @@ class TestEmptyAndMissingCases:
             assert extractor.extract([_chunk("a.txt", 0, "anything")]) == []
 
 
+class TestLoadSpacyFallbacks:
+    """_load_spacy swallows both import failure modes and returns None."""
+
+    def test_concepts_module_import_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import builtins
+
+        from lilbee.wiki.entity_extractor import ner_concepts
+
+        real_import = builtins.__import__
+
+        def boom(name: str, *args: Any, **kwargs: Any) -> Any:
+            if name == "lilbee.concepts":
+                raise ImportError("concepts module missing")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", boom)
+        assert ner_concepts._load_spacy() is None
+
+    def test_spacy_model_import_error(self) -> None:
+        from lilbee.wiki.entity_extractor import ner_concepts
+
+        with patch(
+            "lilbee.concepts.load_spacy_pipeline",
+            side_effect=ImportError("model missing"),
+        ):
+            assert ner_concepts._load_spacy() is None
+
+    def test_short_ner_surface_is_filtered(self) -> None:
+        """NER entities with < 2 chars after strip never become ExtractedEntity records."""
+        doc = _FakeDoc(
+            ents=[
+                _FakeSpan("X", "PERSON"),
+                _FakeSpan("Berlin", "GPE"),
+            ]
+        )
+        extractor = NerConceptsExtractor(MagicMock(), cfg)
+        with _patch_pipeline({"text": doc}):
+            result = extractor.extract([_chunk("s.txt", 0, "text")])
+        assert {e.label for e in result} == {"Berlin"}
+
+
 class TestNerExtraction:
     def test_extracts_allowed_ner_labels_as_entities(self) -> None:
         doc = _FakeDoc(

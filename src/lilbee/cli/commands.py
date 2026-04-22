@@ -1168,3 +1168,65 @@ def _count_md_files(directory: Path) -> int:
     if not directory.exists():
         return 0
     return len(list(directory.rglob("*.md")))
+
+
+@wiki_app.command(name="build")
+def wiki_build(
+    data_dir: Path | None = data_dir_option,
+    use_global: bool = global_option,
+) -> None:
+    """Build the concept and entity wiki across all ingested sources."""
+    apply_overrides(data_dir=data_dir, use_global=use_global)
+    from lilbee.wiki.entity_extractor import get_entity_extractor
+    from lilbee.wiki.gen import build_wiki
+    from lilbee.wiki.index import append_wiki_log, update_wiki_index
+    from lilbee.wiki.shared import WIKI_LOG_ACTION_BUILD
+
+    svc = get_services()
+    chunks: list = []
+    for record in svc.store.get_sources():
+        chunks.extend(svc.store.get_chunks_by_source(record["filename"]))
+
+    extractor = get_entity_extractor(cfg.wiki_entity_mode, svc.provider, cfg)
+    entities = extractor.extract(chunks)
+    pages = build_wiki(entities, svc.provider, svc.store, cfg)
+    update_wiki_index()
+    append_wiki_log(
+        WIKI_LOG_ACTION_BUILD,
+        f"{len(pages)} pages from {len(entities)} records",
+    )
+
+    if cfg.json_mode:
+        json_output(
+            {
+                "command": "wiki_build",
+                "paths": [str(p) for p in pages],
+                "entities": len(entities),
+                "count": len(pages),
+            }
+        )
+        return
+
+    if not pages:
+        console.print("No concept or entity pages generated.")
+        return
+
+    console.print(
+        f"Generated [{theme.LABEL}]{len(pages)}[/{theme.LABEL}] "
+        f"wiki pages from {len(entities)} extracted records:"
+    )
+    for path in pages:
+        console.print(f"  {path}")
+
+
+@wiki_app.command(name="update")
+def wiki_update(
+    data_dir: Path | None = data_dir_option,
+    use_global: bool = global_option,
+) -> None:
+    """Refresh the concept and entity wiki after an ingest.
+
+    Currently a full rebuild. The incremental touched-slug regeneration
+    lands in the ingest-hook task and will re-route this command then.
+    """
+    wiki_build(data_dir=data_dir, use_global=use_global)

@@ -90,6 +90,8 @@ def _classify_lines(lines: list[str]) -> list[tuple[str, bool]]:
                 in_frontmatter = False
             continue
 
+        # The citation block is terminal: once its comment marker appears
+        # every following line is citation, so ``in_citation`` never resets.
         if stripped == _CITATION_COMMENT:
             in_citation = True
         if in_citation:

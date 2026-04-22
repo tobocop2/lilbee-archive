@@ -554,6 +554,20 @@ class TestBuildWiki:
             assert build_wiki([rec], MagicMock(), MagicMock(), cfg) == []
 
     def test_defaults_config_to_cfg_singleton(self) -> None:
-        with patch("lilbee.wiki.gen.generate_concept_page") as gc:
-            build_wiki([], MagicMock(), MagicMock(), None)
-        gc.assert_not_called()
+        """When config=None, build_wiki must resolve to the cfg singleton
+        and pass it through to every downstream call site. An empty
+        entity list can't prove the fallback works because the for-loop
+        would short-circuit either way; feed one entity so the
+        generator receives cfg explicitly.
+        """
+        rec = ExtractedEntity(
+            slug="x",
+            kind=EntityKind.CONCEPT,
+            label="x",
+            type_hint="noun_phrase",
+            chunk_refs=(ChunkRef("a.txt", 0),),
+        )
+        with patch("lilbee.wiki.gen.generate_concept_page", return_value=None) as gc:
+            build_wiki([rec], MagicMock(), MagicMock(), None)
+        gc.assert_called_once()
+        assert gc.call_args.args[-1] is cfg

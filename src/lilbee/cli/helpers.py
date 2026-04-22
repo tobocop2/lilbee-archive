@@ -117,8 +117,25 @@ def json_output(data: dict) -> None:
 
 
 def clean_result(result: SearchChunk) -> dict:
-    """Convert SearchChunk to a JSON-friendly dict (no vector, no None scores)."""
-    return result.model_dump(exclude={"vector"}, exclude_none=True)
+    """Convert SearchChunk to a JSON-friendly dict (no vector, no None scores).
+
+    When ``cfg.vault_base`` is set and ``documents_dir`` lives inside it,
+    stamps ``vault_path`` — a vault-relative forward-slash path the Obsidian
+    plugin uses to deep-link the click into the local editor without a
+    server round-trip. Unstamped when vault_base is null (CLI-only / external
+    plugin topology).
+    """
+    data = result.model_dump(exclude={"vector"}, exclude_none=True)
+    vault_base = cfg.vault_base
+    if vault_base is not None:
+        try:
+            docs_rel = cfg.documents_dir.resolve().relative_to(vault_base.resolve())
+        except ValueError:
+            return data
+        source = data.get("source")
+        if isinstance(source, str) and source:
+            data["vault_path"] = (docs_rel / source).as_posix()
+    return data
 
 
 def gather_status() -> StatusResult:

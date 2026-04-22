@@ -518,6 +518,32 @@ def _validate_config_updates(updates: dict[str, Any]) -> None:
     chunk_val = updates.get("chunk_size")
     if isinstance(chunk_val, int) and chunk_val < _MIN_CHUNK_SIZE:
         raise ValueError(f"chunk_size must be >= {_MIN_CHUNK_SIZE}")
+    _validate_vault_base(updates)
+
+
+def _validate_vault_base(updates: dict[str, Any]) -> None:
+    """vault_base must exist and be an ancestor of documents_dir.
+
+    When the plugin sets vault_base (managed install), it must point at an
+    existing directory that contains the current or updated documents_dir.
+    This catches typos and cross-machine misconfiguration before stamping
+    ``vault_path`` on every Source response.
+    """
+    if "vault_base" not in updates or updates["vault_base"] is None:
+        return
+    vb = Path(str(updates["vault_base"]))
+    if not vb.is_absolute():
+        raise ValueError("vault_base must be an absolute path")
+    if not vb.is_dir():
+        raise ValueError(f"vault_base {vb} is not an existing directory")
+    docs_value = updates.get("documents_dir")
+    docs = Path(str(docs_value)) if docs_value is not None else cfg.documents_dir
+    try:
+        docs.resolve().relative_to(vb.resolve())
+    except ValueError as e:
+        raise ValueError(
+            f"documents_dir {docs} must live inside vault_base {vb}"
+        ) from e
 
 
 def _apply_config_updates(updates: dict[str, Any]) -> tuple[dict[str, str], list[str]]:

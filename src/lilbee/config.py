@@ -256,6 +256,11 @@ class Config(BaseSettings):
     # the tree + rewrites sidecar data when it changes. The pydantic layer
     # just enforces the type.
     documents_dir: Path = ConfigField(default=Path(), writable=True)
+    # vault_base: when set (by the Obsidian plugin on managed startup), the
+    # server assumes documents_dir lives under vault_base and stamps
+    # ``vault_path`` on every Source response. Null on CLI-only installs,
+    # external-server plugin setups, or anything that doesn't own the vault.
+    vault_base: Path | None = ConfigField(default=None, writable=True)
     data_dir: Path = Field(default=Path())
     lancedb_dir: Path = Field(default=Path())
     models_dir: Path = Field(default=Path())

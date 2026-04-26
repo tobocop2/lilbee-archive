@@ -3646,7 +3646,7 @@ class TestModelBarCfgSourceOfTruth:
             assert chat_sel.value == "mistral:latest"
 
             with (
-                mock.patch("lilbee.cli.tui.widgets.model_bar.settings.set_value"),
+                mock.patch("lilbee.settings.set_value"),
                 mock.patch("lilbee.cli.tui.widgets.model_bar.reset_services"),
             ):
                 chat_sel.value = "smollm2:135m"

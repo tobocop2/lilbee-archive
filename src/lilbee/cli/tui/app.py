@@ -6,7 +6,7 @@ import contextlib
 import logging
 from collections.abc import Callable
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
@@ -204,12 +204,16 @@ class LilbeeApp(App[None]):
 
         Per AGENTS.md "Write-boundary canonicalization beats read-path
         fallbacks": every model-mutation path goes through this method.
+        Persists and publishes the post-validator value (``getattr(cfg, key)``)
+        rather than the raw input so a tag like ``"qwen3"`` reaches TOML and
+        subscribers as the normalized ``"qwen3:latest"``.
         """
         from lilbee import settings
 
         setattr(cfg, key, value)
-        settings.set_value(cfg.data_root, key, value)
-        self.settings_changed_signal.publish((key, value))
+        normalized = getattr(cfg, key)
+        settings.set_value(cfg.data_root, key, normalized)
+        self.settings_changed_signal.publish((key, normalized))
 
     def _sync_theme_index_to_current(self) -> None:
         """Align the cycle index with the active theme so Ctrl+T moves from there.
@@ -295,7 +299,9 @@ class LilbeeApp(App[None]):
             # so ViewTabs.on_mount captured the previous active_view value.
             # Push the new value into the live ViewTabs so the highlighted
             # tab tracks the actual screen instead of lagging by one step.
-            # Tolerate NoMatches: the help / setup screens don't mount ViewTabs.
+            # Tolerate NoMatches: HelpPanel is opened via push_screen, not
+            # switch_view, but a future caller could land us on a screen
+            # that doesn't mount ViewTabs.
             from contextlib import suppress
 
             from textual.css.query import NoMatches
@@ -328,3 +334,20 @@ class LilbeeApp(App[None]):
         view_names = msg.get_nav_views()
         current_idx = view_names.index(self.active_view)
         self.switch_view(view_names[(current_idx + 1) % len(view_names)])
+
+
+def apply_active_model(host_app: App[Any], key: str, value: str) -> None:
+    """Apply a model-ref change through ``LilbeeApp.set_active_model``
+    when available, with a safe fallback for test harnesses that mount
+    a screen on a minimal ``App`` (no signal, no settings persistence).
+
+    The fallback writes ``cfg`` and ``config.toml`` directly so widget
+    unit tests don't need to boot the full ``LilbeeApp``.
+    """
+    if isinstance(host_app, LilbeeApp):
+        host_app.set_active_model(key, value)
+        return
+    from lilbee import settings
+
+    setattr(cfg, key, value)
+    settings.set_value(cfg.data_root, key, getattr(cfg, key))

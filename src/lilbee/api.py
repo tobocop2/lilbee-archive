@@ -29,6 +29,7 @@ from lilbee.app.ingest import copy_files
 from lilbee.core.config import Config, cfg
 from lilbee.core.security import validate_path_within
 from lilbee.core.services import reset_services
+from lilbee.data.kreuzberg_embedding import register_lilbee_embedding_backend
 from lilbee.data.store import Store
 from lilbee.providers.factory import create_provider
 from lilbee.retrieval.concepts import ConceptGraph
@@ -115,6 +116,7 @@ class Lilbee:
         self._provider = provider or create_provider(self._config)
         self._store = Store(self._config)
         self._embedder = Embedder(self._config, self._provider)
+        register_lilbee_embedding_backend(self._embedder)
         self._reranker = Reranker(self._config)
         self._concepts = ConceptGraph(self._config, self._store)
         self._searcher = Searcher(

@@ -62,6 +62,7 @@ def get_services() -> Services:
 
     from lilbee.catalog.hf_client import HfClient
     from lilbee.core.config import cfg
+    from lilbee.data.kreuzberg_embedding import register_lilbee_embedding_backend
     from lilbee.data.store import Store
     from lilbee.modelhub.model_manager import ModelManager
     from lilbee.modelhub.registry import ModelRegistry
@@ -76,6 +77,7 @@ def get_services() -> Services:
     provider = create_provider(cfg)
     store = Store(cfg)
     embedder = Embedder(cfg, provider)
+    register_lilbee_embedding_backend(embedder)
     reranker = Reranker(cfg)
     concepts = ConceptGraph(cfg, store)
     clusterer = Clusterer(cfg, store)

@@ -60,6 +60,11 @@ class Embedder:
         self._config = config
         self._provider = provider
 
+    @property
+    def embedding_dim(self) -> int:
+        """Configured vector dimension; what ``validate_vector`` enforces."""
+        return self._config.embedding_dim
+
     def truncate(self, text: str) -> str:
         """Truncate text to stay within the embedding model's context window."""
         if len(text) <= self._config.max_embed_chars:

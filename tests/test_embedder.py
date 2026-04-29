@@ -34,6 +34,11 @@ class TestTruncate:
         assert embedder.truncate(text) == text
 
 
+class TestEmbeddingDim:
+    def test_property_matches_config(self, embedder):
+        assert embedder.embedding_dim == cfg.embedding_dim
+
+
 class TestEmbed:
     def test_returns_vector(self, embedder, mock_provider):
         mock_provider.embed.return_value = [[0.1] * 768]

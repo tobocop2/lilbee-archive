@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from lilbee.core.config import cfg
+from lilbee.data.kreuzberg_embedding import KREUZBERG_BACKEND_NAME
 
 if TYPE_CHECKING:
     from kreuzberg import ChunkingConfig
@@ -13,8 +14,10 @@ CHARS_PER_TOKEN = 4
 
 _SEMANTIC_CHUNKER = "semantic"
 _MARKDOWN_CHUNKER = "markdown"
-# Kreuzberg silently falls back to a non-semantic path when embedding is None.
-_SEMANTIC_EMBEDDING_PRESET = "fast"
+_PLUGIN_TYPE_TAG = "plugin"
+# 10 minutes — covers a worst-case batch on slow CPU hardware while still
+# tripping if the embedder hangs. ``None`` would disable the timeout.
+KREUZBERG_EMBED_TIMEOUT_S = 600
 
 
 def build_chunking_config(*, use_semantic: bool = True) -> ChunkingConfig:
@@ -28,8 +31,10 @@ def build_chunking_config(*, use_semantic: bool = True) -> ChunkingConfig:
         return ChunkingConfig(
             chunker_type=_SEMANTIC_CHUNKER,
             embedding=EmbeddingConfig(
-                model=EmbeddingModelType.preset(_SEMANTIC_EMBEDDING_PRESET),
-                show_download_progress=True,
+                model=EmbeddingModelType(
+                    {"type": _PLUGIN_TYPE_TAG, "name": KREUZBERG_BACKEND_NAME}
+                ),
+                max_embed_duration_secs=KREUZBERG_EMBED_TIMEOUT_S,
             ),
             topic_threshold=cfg.topic_threshold,
             max_chars=max_chars,

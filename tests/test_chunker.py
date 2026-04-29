@@ -77,9 +77,10 @@ class TestChunkText:
 
 class TestBuildChunkingConfig:
     def test_semantic_enabled_uses_semantic_chunker_with_embedding(self, monkeypatch):
-        """Semantic path requires an EmbeddingConfig or kreuzberg silently falls back."""
+        """Semantic path requires an EmbeddingConfig pointing at the lilbee plugin."""
         from lilbee.core.config import cfg
-        from lilbee.data.chunk import build_chunking_config
+        from lilbee.data.chunk import KREUZBERG_EMBED_TIMEOUT_S, build_chunking_config
+        from lilbee.data.kreuzberg_embedding import KREUZBERG_BACKEND_NAME
 
         monkeypatch.setattr(cfg, "semantic_chunking", True)
         monkeypatch.setattr(cfg, "topic_threshold", 0.6)
@@ -87,6 +88,15 @@ class TestBuildChunkingConfig:
         assert result.chunker_type == "semantic"
         assert result.topic_threshold == pytest.approx(0.6, abs=1e-5)
         assert result.embedding is not None
+        assert result.embedding.max_embed_duration_secs == KREUZBERG_EMBED_TIMEOUT_S
+        # Round-trip the model through serde to confirm the plugin tag survives.
+        import json
+
+        model_repr = json.loads(json.dumps(result.embedding.model, default=str))
+        # When kreuzberg returns the model as a serde-tagged dict, both fields are present.
+        if isinstance(model_repr, dict):
+            assert model_repr.get("type") == "plugin"
+            assert model_repr.get("name") == KREUZBERG_BACKEND_NAME
 
     def test_semantic_respects_max_chars_when_embedding_present(self, monkeypatch):
         """With an embedding attached kreuzberg honors max_chars on the semantic path."""

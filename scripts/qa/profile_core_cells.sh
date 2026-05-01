@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# Subprocess-form py-spy flames for the chat/search/embed/llm core
+# cells. Each cell drives a CLI subprocess against a tiny corpus and
+# qwen 0.6b. Sequential, no inter-cell state shared.
+#
+# USER RUNS THIS. Requires sudo on macOS.
+#
+# Usage:
+#   sudo bash scripts/qa/profile_core_cells.sh <run_dir> <fixtures_dir>
+#
+# run_dir defaults to ./flames/core. fixtures_dir defaults to the path
+# seed_fixtures.sh wrote (echoed at end of seed run).
+
+set -euo pipefail
+
+RUN_DIR="${1:-./flames/core}"
+FIXTURES_DIR="${2:-/tmp/lilbee-qa-pizza/documents}"
+
+mkdir -p "$RUN_DIR"
+
+if [[ ! -d "$FIXTURES_DIR" ]]; then
+    echo "!! fixtures dir not found: $FIXTURES_DIR" >&2
+    echo "!! run scripts/qa/seed_fixtures.sh first" >&2
+    exit 2
+fi
+
+export LILBEE_DATA="${LILBEE_DATA:-/tmp/lilbee-qa-pizza/data}"
+export LILBEE_LOG_LEVEL="${LILBEE_LOG_LEVEL:-INFO}"
+export LILBEE_NO_SPLASH=1
+export LILBEE_LLM_PROVIDER="${LILBEE_LLM_PROVIDER:-llama-cpp}"
+export LILBEE_CHAT_MODEL="${LILBEE_CHAT_MODEL:-Qwen/Qwen3-0.6B-GGUF}"
+
+mkdir -p "$LILBEE_DATA"
+
+echo ">> LILBEE_DATA   = $LILBEE_DATA"
+echo ">> LILBEE_CHAT   = $LILBEE_CHAT_MODEL"
+echo ">> fixtures      = $FIXTURES_DIR"
+echo ">> output        = $RUN_DIR"
+echo ""
+
+run_cell() {
+    local cell="$1"; shift
+    local svg="$RUN_DIR/${cell}.svg"
+    echo ">> cell $cell"
+    py-spy record -o "$svg" -f flamegraph --rate 250 -- "$@" || {
+        echo "!! cell $cell failed; flame may be partial" >&2
+    }
+}
+
+# Ensure the docs are indexed before the search cells run.
+echo ">> seeding index from $FIXTURES_DIR"
+uv run lilbee add "$FIXTURES_DIR" 2>&1 | tail -3 || true
+uv run lilbee sync 2>&1 | tail -3 || true
+
+run_cell "Core-Search-RAG" \
+    uv run lilbee -j ask "What is EV battery technology?"
+
+run_cell "Core-Search-Chat" \
+    env LILBEE_CHAT_MODE=chat uv run lilbee -j ask "What is EV battery technology?"
+
+run_cell "Core-Search-Empty" \
+    uv run lilbee -j ask "zztop quagmire flibbertigibbet xenophanes"
+
+run_cell "Core-Search-Reranker-Off" \
+    env LILBEE_RERANKER_MODEL="" uv run lilbee -j ask "battery technology"
+
+run_cell "Core-Search-Reranker-On" \
+    uv run lilbee -j ask "battery technology"
+
+run_cell "Core-Embed-Batch" \
+    uv run lilbee sync
+
+run_cell "Core-LanceDB-Hybrid" \
+    uv run python scripts/qa/probe_lancedb_search.py "battery technology"
+
+run_cell "Core-Llama-Stream" \
+    uv run python scripts/qa/probe_llm_stream.py "Recite the alphabet from A to Z, one letter per line."
+
+echo ""
+echo ">> done. flames in $RUN_DIR"

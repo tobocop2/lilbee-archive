@@ -43,5 +43,10 @@ scripts/*
 !scripts/qa/
 scripts/qa/*
 !scripts/qa/*.py
+!scripts/qa/profile_pilot.sh
+!scripts/qa/profile_core_cells.sh
+!scripts/qa/profile_tui_attach.sh
+!scripts/qa/seed_fixtures.sh
+!scripts/qa/run_matrix.sh
 .DS_Store
 .superpowers/

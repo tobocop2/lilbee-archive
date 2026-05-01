@@ -73,6 +73,29 @@ _BUDGETS_MS: dict[str, float] = {
     "stress: type+clear long catalog filter": 6000.0,
     "stress: 8x grid <-> list toggle": 5500.0,
     "stress: 40x pgdn/pgup in catalog": 6000.0,
+    "open ModelPicker (chat)": 600.0,
+    "type 5 chars in ModelPicker": 500.0,
+    "dismiss ModelPicker": 250.0,
+    "switch to Catalog Frontier tab": 800.0,
+    "type 5 chars in Frontier search": 500.0,
+    "Settings tab: Models": 600.0,
+    "Settings tab: Ingest": 400.0,
+    "Settings tab: Retrieval": 400.0,
+    "Settings tab: Generation": 600.0,
+    "Settings tab: Display": 400.0,
+    "Settings tab: API-Keys": 400.0,
+    "Settings tab: Crawling": 400.0,
+    "Settings tab: Wiki": 400.0,
+    "Wiki: focus search": 250.0,
+    "Wiki: type 5 chars in search": 500.0,
+    "Status: expand Configuration": 350.0,
+    "Status: expand Documents": 350.0,
+    "Status: expand Architecture": 350.0,
+    "Status: expand Storage": 350.0,
+    "open CrawlDialog": 600.0,
+    "type URL in CrawlDialog": 500.0,
+    "expand CrawlDialog advanced": 250.0,
+    "dismiss CrawlDialog": 250.0,
 }
 
 
@@ -83,6 +106,8 @@ class StepResult:
     budget_ms: float
     over_budget: bool
     error: str | None = None
+    t_start_unix: float = 0.0
+    t_end_unix: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -91,6 +116,8 @@ class StepResult:
             "budget_ms": self.budget_ms,
             "over_budget": self.over_budget,
             "error": self.error,
+            "t_start_unix": self.t_start_unix,
+            "t_end_unix": self.t_end_unix,
         }
 
 
@@ -148,6 +175,7 @@ class _Profiler:
         without measuring real work.
         """
         budget = _BUDGETS_MS.get(name, _DEFAULT_BUDGET_MS)
+        t_start_unix = time.time()
         t0 = time.perf_counter()
         err: str | None = None
         try:
@@ -156,18 +184,28 @@ class _Profiler:
             err = f"{type(exc).__name__}: {exc}"
             traceback.print_exc()
         ms = (time.perf_counter() - t0) * 1000
+        t_end_unix = time.time()
         over = ms > budget or err is not None
-        self.report.add(StepResult(name=name, ms=ms, budget_ms=budget, over_budget=over, error=err))
+        self.report.add(
+            StepResult(
+                name=name,
+                ms=ms,
+                budget_ms=budget,
+                over_budget=over,
+                error=err,
+                t_start_unix=t_start_unix,
+                t_end_unix=t_end_unix,
+            )
+        )
 
 
-async def run_profile() -> ProfileReport:
+async def run_profile() -> ProfileReport:  # noqa: C901, PLR0915
     """Drive a LilbeeApp through every screen + a few interactions."""
     # Imports inside the runner so module-import time doesn't pollute
     # the boot measurement.
     from textual.widgets import Input
 
     from lilbee.cli.tui.app import LilbeeApp
-    from lilbee.cli.tui.screens.catalog import CatalogScreen
     from lilbee.cli.tui.widgets.chat_input import ChatInput
 
     report = ProfileReport()
@@ -176,6 +214,7 @@ async def run_profile() -> ProfileReport:
     app = LilbeeApp()
 
     async with app.run_test(size=(160, 48)) as pilot:
+
         async def boot() -> None:
             await pilot.pause()
 
@@ -340,7 +379,229 @@ async def run_profile() -> ProfileReport:
 
         await profiler.step("stress: 40x pgdn/pgup in catalog", stress_list_pagedown)
 
+        # Catalog Frontier sub-tab: lazy-mount + populate. The pane is
+        # only added once a frontier-rows worker resolves; in the pilot
+        # harness with no API keys we inject a synthetic row so the
+        # activation path runs.
+        async def to_frontier_tab() -> None:
+            from textual.widgets import TabbedContent
+
+            screen = app.screen
+            if not getattr(screen, "_frontier_rows", None):
+                screen._frontier_rows = list(_synthetic_frontier_rows())
+                screen._sync_frontier_tab()
+                for _ in range(8):
+                    await pilot.pause(0.05)
+            tabs = screen.query_one("#catalog-tabs", TabbedContent)
+            try:
+                tabs.active = "frontier"
+            except Exception:
+                return
+            await pilot.pause()
+            for _ in range(6):
+                await pilot.pause(0.05)
+
+        await profiler.step("switch to Catalog Frontier tab", to_frontier_tab)
+
+        async def type_frontier_search() -> None:
+            search = app.screen.query_one("#catalog-search", Input)
+            search.value = ""
+            search.focus()
+            await pilot.pause()
+            for ch in "gpt-4":
+                await pilot.press(ch)
+            await pilot.pause()
+
+        await profiler.step("type 5 chars in Frontier search", type_frontier_search)
+
+        # ModelPicker modal opens from Chat ModelBar button.
+        app.switch_view("Chat")
+        await pilot.pause()
+        for _ in range(4):
+            await pilot.pause(0.05)
+
+        async def open_chat_picker() -> None:
+            from lilbee.cli.tui.widgets.model_bar import ModelPickerButton
+
+            btn = app.screen.query_one("#chat-model-button", ModelPickerButton)
+            btn.open_picker()
+            await pilot.pause()
+            for _ in range(4):
+                await pilot.pause(0.05)
+
+        await profiler.step("open ModelPicker (chat)", open_chat_picker)
+
+        async def type_in_picker() -> None:
+            search = app.screen.query_one("#picker-search", Input)
+            search.focus()
+            await pilot.pause()
+            for ch in "qwen3":
+                await pilot.press(ch)
+            await pilot.pause()
+
+        await profiler.step("type 5 chars in ModelPicker", type_in_picker)
+
+        async def dismiss_picker() -> None:
+            await pilot.press("escape")
+            await pilot.pause()
+
+        await profiler.step("dismiss ModelPicker", dismiss_picker)
+
+        # Settings: cycle through every group tab.
+        app.switch_view("Settings")
+        await pilot.pause()
+        for _ in range(6):
+            await pilot.pause(0.05)
+
+        for group in (
+            "Models",
+            "Ingest",
+            "Retrieval",
+            "Generation",
+            "Display",
+            "API-Keys",
+            "Crawling",
+            "Wiki",
+        ):
+            pane_id = f"settings-tab-{group.lower().replace('-', '_')}"
+
+            async def to_settings_tab(_pid=pane_id) -> None:
+                from textual.widgets import TabbedContent
+
+                tabs = app.screen.query_one("#settings-tabs", TabbedContent)
+                try:
+                    tabs.active = _pid
+                except Exception:
+                    return
+                await pilot.pause()
+                for _ in range(4):
+                    await pilot.pause(0.05)
+
+            await profiler.step(f"Settings tab: {group}", to_settings_tab)
+
+        # Status: expand each Collapsible section.
+        app.switch_view("Status")
+        await pilot.pause()
+        for _ in range(6):
+            await pilot.pause(0.05)
+
+        for label, sec_id in (
+            ("Configuration", "config-section"),
+            ("Documents", "docs-section"),
+            ("Architecture", "arch-section"),
+            ("Storage", "storage-section"),
+        ):
+
+            async def expand_section(_sid=sec_id) -> None:
+                from textual.widgets import Collapsible
+
+                try:
+                    section = app.screen.query_one(f"#{_sid}", Collapsible)
+                except Exception:
+                    return
+                section.collapsed = False
+                await pilot.pause()
+                for _ in range(3):
+                    await pilot.pause(0.05)
+
+            await profiler.step(f"Status: expand {label}", expand_section)
+
+        # Wiki: focus + filter (only when wiki view registered).
+        from lilbee.core.config import cfg as _cfg
+
+        if _cfg.wiki:
+            app.switch_view("Wiki")
+            await pilot.pause()
+            for _ in range(6):
+                await pilot.pause(0.05)
+
+            async def wiki_focus_search() -> None:
+                search = app.screen.query_one("#wiki-search", Input)
+                search.focus()
+                await pilot.pause()
+
+            await profiler.step("Wiki: focus search", wiki_focus_search)
+
+            async def wiki_type_filter() -> None:
+                for ch in "alpha":
+                    await pilot.press(ch)
+                await pilot.pause()
+
+            await profiler.step("Wiki: type 5 chars in search", wiki_type_filter)
+
+        # CrawlDialog modal: open via ChatScreen helper, fill, dismiss.
+        app.switch_view("Chat")
+        await pilot.pause()
+        for _ in range(4):
+            await pilot.pause(0.05)
+
+        async def open_crawl_dialog() -> None:
+            chat = app.screen
+            chat._open_crawl_dialog()
+            await pilot.pause()
+            for _ in range(4):
+                await pilot.pause(0.05)
+
+        await profiler.step("open CrawlDialog", open_crawl_dialog)
+
+        async def type_url_in_crawl() -> None:
+            url_in = app.screen.query_one("#crawl-url-input", Input)
+            url_in.focus()
+            await pilot.pause()
+            for ch in "https":
+                await pilot.press(ch)
+            await pilot.pause()
+
+        await profiler.step("type URL in CrawlDialog", type_url_in_crawl)
+
+        async def expand_crawl_advanced() -> None:
+            from textual.widgets import Collapsible
+
+            adv = app.screen.query_one("#crawl-advanced", Collapsible)
+            adv.collapsed = False
+            await pilot.pause()
+            for _ in range(2):
+                await pilot.pause(0.05)
+
+        await profiler.step("expand CrawlDialog advanced", expand_crawl_advanced)
+
+        async def dismiss_crawl() -> None:
+            await pilot.press("escape")
+            await pilot.pause()
+
+        await profiler.step("dismiss CrawlDialog", dismiss_crawl)
+
     return report
+
+
+def _synthetic_frontier_rows():
+    """Two stubbed FrontierCatalogRow rows so the lazy-mount path runs.
+
+    The pilot harness has no API keys configured, so the real fetch
+    worker returns an empty list and the Frontier pane never mounts.
+    Injecting a tiny synthetic list lets the activation gesture be
+    measured without touching live cloud APIs.
+    """
+    from lilbee.cli.tui.screens.catalog_utils import FrontierCatalogRow, KeyStatus
+
+    return [
+        FrontierCatalogRow(
+            name="gpt-4o",
+            ref="gpt-4o",
+            task="chat",
+            provider="OpenAI",
+            provider_id="openai",
+            key_status=KeyStatus.MISSING_KEY,
+        ),
+        FrontierCatalogRow(
+            name="claude-opus-4",
+            ref="anthropic/claude-opus-4",
+            task="chat",
+            provider="Anthropic",
+            provider_id="anthropic",
+            key_status=KeyStatus.MISSING_KEY,
+        ),
+    ]
 
 
 async def _switch_and_settle(app, pilot, expected_type, view_name) -> None:
@@ -353,9 +614,23 @@ async def _switch_and_settle(app, pilot, expected_type, view_name) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--json", action="store_true", help="emit JSON instead of text")
+    parser.add_argument(
+        "--timeline-out",
+        type=str,
+        default=None,
+        help="write per-step (start,end) unix timestamps as JSON for speedscope correlation",
+    )
     args = parser.parse_args()
 
     report = asyncio.run(run_profile())
+
+    if args.timeline_out:
+        timeline = {
+            s.name: {"t_start_unix": s.t_start_unix, "t_end_unix": s.t_end_unix, "ms": s.ms}
+            for s in report.steps
+        }
+        with open(args.timeline_out, "w") as fh:
+            json.dump(timeline, fh, indent=2)
 
     if args.json:
         print(report.to_json())

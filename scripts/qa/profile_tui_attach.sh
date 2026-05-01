@@ -15,6 +15,12 @@ DURATION="${2:?usage: profile_tui_attach.sh <PID> <DURATION_S> [<run_dir>]}"
 RUN_DIR="${3:-./flames/tui}"
 
 mkdir -p "$RUN_DIR"
+
+# Same root-ownership fix as profile_pilot.sh.
+if [[ -n "${SUDO_USER:-}" ]]; then
+    chown -R "$SUDO_USER" "$RUN_DIR"
+fi
+
 SVG="$RUN_DIR/tui_walk.svg"
 SPEEDSCOPE="$RUN_DIR/tui_walk.speedscope.json"
 

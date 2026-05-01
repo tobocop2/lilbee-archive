@@ -18,6 +18,11 @@ FIXTURES_DIR="${2:-/tmp/lilbee-qa-pizza/documents}"
 
 mkdir -p "$RUN_DIR"
 
+# Same root-ownership fix as profile_pilot.sh.
+if [[ -n "${SUDO_USER:-}" ]]; then
+    chown -R "$SUDO_USER" "$RUN_DIR"
+fi
+
 if [[ ! -d "$FIXTURES_DIR" ]]; then
     echo "!! fixtures dir not found: $FIXTURES_DIR" >&2
     echo "!! run scripts/qa/seed_fixtures.sh first" >&2

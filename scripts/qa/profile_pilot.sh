@@ -16,6 +16,14 @@ set -euo pipefail
 RUN_DIR="${1:-./flames/profile}"
 mkdir -p "$RUN_DIR"
 
+# When running under sudo, py-spy spawns the wrapped python as the
+# original user. Files written by that child (timeline JSON, etc.)
+# would fail with EACCES against the root-owned run_dir. Fix by
+# chowning the dir back to the invoking user.
+if [[ -n "${SUDO_USER:-}" ]]; then
+    chown -R "$SUDO_USER" "$RUN_DIR"
+fi
+
 SVG="$RUN_DIR/profile_tui.svg"
 SPEEDSCOPE="$RUN_DIR/profile_tui.speedscope.json"
 TIMELINE="$RUN_DIR/profile_tui.timeline.json"

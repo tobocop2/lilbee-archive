@@ -247,7 +247,9 @@ def teardown_session() -> None:
 
 
 def launch_tui() -> None:
-    _send_text(_tmux_target("w-tui"), "uv run lilbee")
+    # Direct venv path so py-spy attaches to the python process, not
+    # to a uv shim. Same reason profile_pilot.sh uses .venv/bin/python.
+    _send_text(_tmux_target("w-tui"), ".venv/bin/lilbee")
     _send_key(_tmux_target("w-tui"), "Enter")
     # Wait for the splash to clear and the chat screen to appear.
     _wait_for_text(_tmux_target("w-tui"), "Search", timeout=30.0)
@@ -259,7 +261,7 @@ def launch_server(host: str = "127.0.0.1", port: int = 7433) -> bool:
 
     Returns True if the server became reachable within 60 s.
     """
-    _send_text(_tmux_target("srv"), f"uv run lilbee serve --host {host} --port {port}")
+    _send_text(_tmux_target("srv"), f".venv/bin/lilbee serve --host {host} --port {port}")
     _send_key(_tmux_target("srv"), "Enter")
     deadline = time.monotonic() + 60.0
     while time.monotonic() < deadline:

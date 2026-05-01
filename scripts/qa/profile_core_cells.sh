@@ -38,6 +38,9 @@ echo ">> fixtures      = $FIXTURES_DIR"
 echo ">> output        = $RUN_DIR"
 echo ""
 
+PY=".venv/bin/python"
+LILBEE=".venv/bin/lilbee"
+
 run_cell() {
     local cell="$1"; shift
     local svg="$RUN_DIR/${cell}.svg"
@@ -49,35 +52,35 @@ run_cell() {
 
 # Ensure the docs are indexed before the search cells run.
 echo ">> seeding index from $FIXTURES_DIR"
-uv run lilbee add "$FIXTURES_DIR" 2>&1 | tail -3 || true
-uv run lilbee sync 2>&1 | tail -3 || true
+"$LILBEE" add "$FIXTURES_DIR" 2>&1 | tail -3 || true
+"$LILBEE" sync 2>&1 | tail -3 || true
 
 run_cell "Core-Search-RAG" \
-    uv run lilbee -j ask "What is EV battery technology?"
+    "$LILBEE" -j ask "What is EV battery technology?"
 
 run_cell "Core-Search-Chat" \
-    env LILBEE_CHAT_MODE=chat uv run lilbee -j ask "What is EV battery technology?"
+    env LILBEE_CHAT_MODE=chat "$LILBEE" -j ask "What is EV battery technology?"
 
 run_cell "Core-Search-Empty" \
-    uv run lilbee -j ask "zztop quagmire flibbertigibbet xenophanes"
+    "$LILBEE" -j ask "zztop quagmire flibbertigibbet xenophanes"
 
 run_cell "Core-Search-Reranker-Off" \
-    env LILBEE_RERANKER_MODEL="" uv run lilbee -j ask "battery technology"
+    env LILBEE_RERANKER_MODEL="" "$LILBEE" -j ask "battery technology"
 
 run_cell "Core-Search-Reranker-On" \
-    uv run lilbee -j ask "battery technology"
+    "$LILBEE" -j ask "battery technology"
 
 run_cell "Core-Embed-Batch" \
-    uv run lilbee sync
+    "$LILBEE" sync
 
 run_cell "Core-LanceDB-Hybrid" \
-    uv run python scripts/qa/probe_lancedb_search.py "battery technology"
+    "$PY" scripts/qa/probe_lancedb_search.py "battery technology"
 
 run_cell "Core-Llama-Stream-NoThink" \
-    uv run python scripts/qa/probe_llm_stream.py "/no_think Recite the alphabet from A to Z, one letter per line."
+    "$PY" scripts/qa/probe_llm_stream.py "/no_think Recite the alphabet from A to Z, one letter per line."
 
 run_cell "Core-Llama-Stream-Thinking" \
-    uv run python scripts/qa/probe_llm_stream.py "What is 17 times 23? Show your reasoning step by step."
+    "$PY" scripts/qa/probe_llm_stream.py "What is 17 times 23? Show your reasoning step by step."
 
 echo ""
 echo ">> done. flames in $RUN_DIR"

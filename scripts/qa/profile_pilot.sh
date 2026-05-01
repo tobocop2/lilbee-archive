@@ -25,19 +25,24 @@ echo ">> writing speedscope: $SPEEDSCOPE"
 echo ">> writing timeline:   $TIMELINE"
 echo ""
 
+# Invoke the venv's python directly. `uv run` adds a shim parent that
+# py-spy attaches to instead of the actual python child, surfacing as
+# 'Failed to find python version from target process'.
+PY=".venv/bin/python"
+
 py-spy record \
     -o "$SVG" \
     -f flamegraph \
     --rate 250 \
     -- \
-    uv run python scripts/qa/profile_tui.py --timeline-out "$TIMELINE"
+    "$PY" scripts/qa/profile_tui.py --timeline-out "$TIMELINE"
 
 py-spy record \
     -o "$SPEEDSCOPE" \
     -f speedscope \
     --rate 250 \
     -- \
-    uv run python scripts/qa/profile_tui.py
+    "$PY" scripts/qa/profile_tui.py
 
 echo ""
 echo ">> done. open $SVG for at-a-glance, $SPEEDSCOPE in speedscope.app for drill-in."

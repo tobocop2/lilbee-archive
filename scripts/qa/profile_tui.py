@@ -96,6 +96,9 @@ _BUDGETS_MS: dict[str, float] = {
     "type URL in CrawlDialog": 500.0,
     "expand CrawlDialog advanced": 250.0,
     "dismiss CrawlDialog": 250.0,
+    "stream 200 reasoning tokens": 4000.0,
+    "stream 200 content tokens": 4000.0,
+    "switch reasoning collapsed -> open": 250.0,
 }
 
 
@@ -570,6 +573,43 @@ async def run_profile() -> ProfileReport:  # noqa: C901, PLR0915
             await pilot.pause()
 
         await profiler.step("dismiss CrawlDialog", dismiss_crawl)
+
+        # Thinking-mode rendering. Inject 200 reasoning tokens into a
+        # synthetic AssistantMessage and measure the per-update cost of
+        # the Collapsible + Static reasoning widget. The actual LLM is
+        # not in the loop; this isolates the renderer.
+        from lilbee.cli.tui.widgets.message import AssistantMessage
+
+        await pilot.pause()
+        chat_log = app.screen.query_one("#chat-log")
+        bubble = AssistantMessage()
+        await chat_log.mount(bubble)
+        await pilot.pause()
+
+        async def stream_reasoning() -> None:
+            for i in range(200):
+                bubble.append_reasoning(f"thinking step {i} ")
+                if i % 20 == 0:
+                    await pilot.pause()
+
+        await profiler.step("stream 200 reasoning tokens", stream_reasoning)
+
+        async def stream_content() -> None:
+            for i in range(200):
+                bubble.append_content(f"answer chunk {i} ")
+                if i % 20 == 0:
+                    await pilot.pause()
+
+        await profiler.step("stream 200 content tokens", stream_content)
+
+        async def toggle_reasoning() -> None:
+            from textual.widgets import Collapsible
+
+            block = bubble.query_one(Collapsible)
+            block.collapsed = not block.collapsed
+            await pilot.pause()
+
+        await profiler.step("switch reasoning collapsed -> open", toggle_reasoning)
 
     return report
 

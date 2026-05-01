@@ -73,8 +73,11 @@ run_cell "Core-Embed-Batch" \
 run_cell "Core-LanceDB-Hybrid" \
     uv run python scripts/qa/probe_lancedb_search.py "battery technology"
 
-run_cell "Core-Llama-Stream" \
-    uv run python scripts/qa/probe_llm_stream.py "Recite the alphabet from A to Z, one letter per line."
+run_cell "Core-Llama-Stream-NoThink" \
+    uv run python scripts/qa/probe_llm_stream.py "/no_think Recite the alphabet from A to Z, one letter per line."
+
+run_cell "Core-Llama-Stream-Thinking" \
+    uv run python scripts/qa/probe_llm_stream.py "What is 17 times 23? Show your reasoning step by step."
 
 echo ""
 echo ">> done. flames in $RUN_DIR"

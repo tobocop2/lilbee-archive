@@ -99,6 +99,8 @@ _BUDGETS_MS: dict[str, float] = {
     "stream 200 reasoning tokens": 4000.0,
     "stream 200 content tokens": 4000.0,
     "switch reasoning collapsed -> open": 250.0,
+    "stress: 500 reasoning tokens (burst, real-stream cadence)": 8000.0,
+    "stress: 500 content tokens (burst, real-stream cadence)": 8000.0,
 }
 
 
@@ -610,6 +612,39 @@ async def run_profile() -> ProfileReport:  # noqa: C901, PLR0915
             await pilot.pause()
 
         await profiler.step("switch reasoning collapsed -> open", toggle_reasoning)
+
+        # Stress: simulate real qwen3 thinking-mode streaming. Reasoning
+        # tokens arrive in tight bursts via call_from_thread; the chat
+        # screen batches at ~50 ms intervals, but the message widget
+        # itself has no debounce on reasoning. With a 60 s thinking
+        # phase that produces ~1200 batched calls, full-string rejoin +
+        # Static.update on every call is the suspected soft-lock cause.
+        # Single pilot.pause at the end so the cost is captured raw.
+        bubble2 = AssistantMessage()
+        await chat_log.mount(bubble2)
+        await pilot.pause()
+
+        async def stress_reasoning_burst() -> None:
+            for i in range(500):
+                bubble2.append_reasoning(f"r{i} ")
+            await pilot.pause()
+
+        await profiler.step(
+            "stress: 500 reasoning tokens (burst, real-stream cadence)", stress_reasoning_burst
+        )
+
+        bubble3 = AssistantMessage()
+        await chat_log.mount(bubble3)
+        await pilot.pause()
+
+        async def stress_content_burst() -> None:
+            for i in range(500):
+                bubble3.append_content(f"c{i} ")
+            await pilot.pause()
+
+        await profiler.step(
+            "stress: 500 content tokens (burst, real-stream cadence)", stress_content_burst
+        )
 
     return report
 

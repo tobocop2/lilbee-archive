@@ -452,33 +452,60 @@ def _tui_cells() -> list[Cell]:
             fragments=[],
         )
     )
-    # Thinking-mode chat with qwen3 0.6b. Sends a reasoning-triggering
-    # prompt and captures the pane while the model streams <think>…</think>
-    # output. The reasoning Collapsible should auto-open and re-collapse
-    # cleanly. User reported a "soft link" rendering during this phase --
-    # captured pane goes to cells/TUI-Chat-Thinking/pane.txt for review.
+    # Thinking and non-thinking chat paths -- profiled side by side
+    # under script 3 (TUI attach). User reported a soft LOCK during the
+    # thinking phase. We capture both so the flames can be compared.
+    # Both prompts go through real qwen 0.6b streaming.
     cells.append(
         Cell(
-            id="TUI-Chat-Thinking",
+            id="TUI-Chat-NoThink",
             pane="w-tui",
             gesture=[
                 ("key", "F1"),
                 ("sleep", 1.0),
                 ("key", "i"),
-                ("send", "What is 17 times 23? Show your reasoning step by step."),
+                ("send", "/no_think Reply with one word: yes."),
                 ("key", "Enter"),
-                ("sleep", 30.0),
+                ("sleep", 15.0),
             ],
-            fragments=["re:391|17.*23|thinking|reasoning"],
-            timeout=60.0,
+            fragments=["re:yes|no|Yes|No"],
+            timeout=30.0,
         )
     )
     cells.append(
         Cell(
-            id="TUI-Chat-ThinkingCollapse",
+            id="TUI-Chat-Thinking",
             pane="w-tui",
-            gesture=[("sleep", 2.0)],
-            fragments=[],
+            gesture=[
+                ("key", "Escape"),
+                ("send", "/clear"),
+                ("key", "Enter"),
+                ("sleep", 1.0),
+                ("key", "i"),
+                ("send", "What is 17 times 23? Show your reasoning step by step."),
+                ("key", "Enter"),
+                ("sleep", 60.0),
+            ],
+            fragments=["re:391|17.*23|thinking|reasoning"],
+            timeout=120.0,
+        )
+    )
+    cells.append(
+        Cell(
+            id="TUI-Chat-ThinkingDuringStream",
+            pane="w-tui",
+            gesture=[
+                ("key", "Escape"),
+                ("send", "/clear"),
+                ("key", "Enter"),
+                ("sleep", 1.0),
+                ("key", "i"),
+                ("send", "List the first 50 prime numbers and explain why each is prime."),
+                ("key", "Enter"),
+                ("sleep", 90.0),
+            ],
+            fragments=["re:prime|2|3|5|7"],
+            timeout=180.0,
         )
     )
     return cells

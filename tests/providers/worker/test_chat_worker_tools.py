@@ -454,6 +454,38 @@ def test_session_chat_raises_context_window_exceeded_on_unfittable_prompt(
     assert "exceeds" in str(excinfo.value)
 
 
+def test_session_chat_overflow_error_includes_usable_budget_and_breakdown(
+    monkeypatch, tmp_path
+) -> None:
+    """The error must surface the usable budget AND the breakdown so the
+    user can see which lever to pull. With n_ctx=40960, response=1024,
+    tools=25000, safety=64 the budget is 14872, and a 19737-token prompt
+    must show "exceeds the usable budget of 14872 tokens" (not the
+    nonsense "exceeds the 40960-token context window"). (bb-ym4p)
+    """
+    from lilbee.providers.base import ContextWindowExceededError
+
+    exc = ContextWindowExceededError.from_breakdown(
+        requested=19_737,
+        n_ctx=40_960,
+        response_budget=1024,
+        tools_overhead=25_000,
+        safety_margin=64,
+        model="Qwen/Qwen3-8B",
+    )
+    message = str(exc)
+    assert "19737" in message
+    assert "usable budget of 14872" in message
+    assert "n_ctx=40960" in message
+    assert "response_budget=1024" in message
+    assert "tools_schema=25000" in message
+    assert "safety_margin=64" in message
+    assert "top_k" in message  # remediation hint present
+    assert exc.requested == 19_737
+    assert exc.usable_budget == 14_872
+    assert exc.n_ctx == 40_960
+
+
 def test_session_chat_overflow_error_reports_runtime_n_ctx_not_residual_budget(
     monkeypatch, tmp_path
 ) -> None:
@@ -580,6 +612,51 @@ def test_session_chat_catches_llama_cpp_overflow_and_reraises_typed(monkeypatch,
         )
     assert "18690" in str(excinfo.value)
     assert "7168" in str(excinfo.value)
+
+
+class TestParseRequestedTokens:
+    """Direct unit tests for ``_parse_requested_tokens`` so regex breakage on
+    an upstream llama-cpp wording change surfaces here, not in production. (bb-1utt)
+    """
+
+    def test_extracts_count_from_canonical_overflow_message(self) -> None:
+        from lilbee.providers.worker.chat_worker import _parse_requested_tokens
+
+        assert (
+            _parse_requested_tokens("Requested tokens (18690) exceed context window of 7168")
+            == 18690
+        )
+
+    def test_returns_none_for_unrelated_value_error(self) -> None:
+        from lilbee.providers.worker.chat_worker import _parse_requested_tokens
+
+        assert _parse_requested_tokens("something else entirely") is None
+
+    def test_returns_none_for_empty_string(self) -> None:
+        from lilbee.providers.worker.chat_worker import _parse_requested_tokens
+
+        assert _parse_requested_tokens("") is None
+
+    def test_does_not_match_batch_size_message(self) -> None:
+        """llama-cpp also raises ``ValueError: Requested tokens (N) exceed
+        batch size of M`` for a different upstream condition; that ValueError
+        should NOT be misclassified as context overflow.
+        """
+        from lilbee.providers.worker.chat_worker import _parse_requested_tokens
+
+        assert _parse_requested_tokens("Requested tokens (4096) exceed batch size of 512") is None
+
+    def test_finds_match_when_embedded_in_a_longer_traceback(self) -> None:
+        """Worker error wrappers may prepend module path / type names; the
+        regex must still find the canonical phrasing inside.
+        """
+        from lilbee.providers.worker.chat_worker import _parse_requested_tokens
+
+        message = (
+            "ValueError: Requested tokens (12345) exceed context window of 4096\n"
+            "  at create_chat_completion"
+        )
+        assert _parse_requested_tokens(message) == 12345
 
 
 def test_session_chat_streaming_catches_deferred_overflow_and_reraises_typed(

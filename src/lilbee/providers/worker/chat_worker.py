@@ -119,9 +119,9 @@ class _ChatSession:
         requested = _parse_requested_tokens(str(exc))
         if requested is None:
             return
-        raise ContextWindowExceededError.from_counts(
+        raise ContextWindowExceededError.from_runtime_overflow(
             requested=requested,
-            available=int(llm.n_ctx()),
+            n_ctx=int(llm.n_ctx()),
             model=model_ref or self._role_config.model_path.name,
         ) from exc
 
@@ -149,20 +149,20 @@ class _ChatSession:
             return result
 
         tools_overhead = count_tools_overhead(tools, tokenize)
-        budget = int(llm.n_ctx()) - reserved - _CTX_SAFETY_MARGIN - tools_overhead
+        n_ctx = int(llm.n_ctx())
+        budget = n_ctx - reserved - _CTX_SAFETY_MARGIN - tools_overhead
         outcome = window_messages_to_budget(
             messages,
             budget=max(0, budget),
             tokenize=tokenize,
         )
         if outcome.messages is None:
-            # Report the model's actual context window in the user-facing error,
-            # not the residual budget after reserving for the response and
-            # tools schema. A clamped-to-zero budget would otherwise surface
-            # as "0-token context window" which reads as broken.
-            raise ContextWindowExceededError.from_counts(
+            raise ContextWindowExceededError.from_breakdown(
                 requested=outcome.requested,
-                available=int(llm.n_ctx()),
+                n_ctx=n_ctx,
+                response_budget=reserved,
+                tools_overhead=tools_overhead,
+                safety_margin=_CTX_SAFETY_MARGIN,
                 model=model_ref or self._role_config.model_path.name,
             )
         if outcome.dropped:
@@ -251,13 +251,8 @@ def _translate_stream_overflow(
     model_ref: str | None,
     role_config: RoleConfig,
 ) -> Any:
-    """Wrap a llama-cpp streaming generator so the deferred overflow ``ValueError``
-    surfaces as the typed ``ContextWindowExceededError`` instead.
-
-    llama-cpp returns the chat-completion generator unadvanced; the overflow
-    check fires on the first ``next()`` call once the parent starts iterating.
-    Without this wrapper that ``ValueError`` reaches ``_handle_chat_streaming``
-    and serialises as a generic worker error (the bb-1utt 500 bug).
+    """Translate llama-cpp's deferred context-overflow ``ValueError`` from a
+    streaming generator into ``ContextWindowExceededError``.
     """
     try:
         yield from response_iter
@@ -265,9 +260,9 @@ def _translate_stream_overflow(
         requested = _parse_requested_tokens(str(exc))
         if requested is None:
             raise
-        raise ContextWindowExceededError.from_counts(
+        raise ContextWindowExceededError.from_runtime_overflow(
             requested=requested,
-            available=int(llm.n_ctx()),
+            n_ctx=int(llm.n_ctx()),
             model=model_ref or role_config.model_path.name,
         ) from exc
 

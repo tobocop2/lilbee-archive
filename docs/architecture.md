@@ -564,6 +564,21 @@ Launched by `lilbee` or `lilbee chat`. Screens: chat, task center, model catalog
 - Models: `model_list`, `model_show`, `model_pull`, `model_rm`
 - Wiki: `wiki_list`, `wiki_read`, `wiki_status`, `wiki_synthesize`, `wiki_lint`, `wiki_citations`, `wiki_drafts_list`, `wiki_drafts_diff`, `wiki_prune`
 
+#### Schema-size discipline
+
+The OpenAI tools schema ships on every chat request; bloat there taxes
+every turn. lilbee's default surface is ~5.7 KB of raw JSON across 17
+tools (~10% of a 32K context, ~35% of Gemma 4's 7K).
+
+- Wiki tools and crawler tools are gated off the schema unless
+  `cfg.wiki` is on or `lilbee[crawler]` is installed.
+- Tool docstrings stay at one or two sentences (FastMCP turns them
+  into per-parameter schema descriptions).
+- `_strip_schema_noise` in `mcp_server.py` drops the FastMCP/Pydantic
+  auto-generated `title` keys before the tools hit the wire.
+- `tests/test_mcp.py::TestToolsSchemaSize` caps the schema at 7 KB; new
+  tools or doc bloat trip the cap and force a deliberate review.
+
 ### Python library
 ```python
 from lilbee import Lilbee

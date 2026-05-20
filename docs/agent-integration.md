@@ -27,7 +27,7 @@ each family with the standard markers is covered:
 | **Phi-4 mini** | `<\|tool\|>`, `<\|/tool\|>` | Microsoft Phi-4-mini-instruct |
 | **Functionary v3** | `>>>all` literal | meetkai/functionary-medium-v3.2 |
 | **Llama 3.x** | `<\|python_tag\|>` | Llama 3.1 / 3.2 / 3.3 Instruct |
-| **GLM 4.5 / 4.6** | `<arg_key>`, `<arg_value>` | zai-org GLM-4.5, GLM-4.6 |
+| **GLM 4.6** | `<arg_key>`, `<arg_value>` | zai-org GLM-4.6 |
 | **GLM 4.7** | single-line `<tool_call>...<arg_key>` | zai-org GLM-4.7 |
 | **Kimi K2** | `<\|tool_calls_section_begin\|>` | moonshotai/Kimi-K2-Instruct |
 | **InternLM2** | GGUF architecture `internlm2` | InternLM2 / InternLM2.5 chat |
@@ -36,8 +36,9 @@ each family with the standard markers is covered:
 
 20 families. Models outside this set fall through to no extraction: the
 raw tool-call markup arrives as plain text in `message.content`, the
-client doesn't invoke the tool, and a warning is logged on the first
-such request. The list is updated periodically as new families are
+client doesn't invoke the tool, and a warning is logged (once per
+loaded model) to the chat worker log at
+`$LILBEE_DATA/logs/worker-chat.log`. The list is updated periodically as new families are
 released and their formats land in the upstream sources we track
 (HuggingFace transformers test fixtures, vLLM tool parsers). Current
 schemas live at

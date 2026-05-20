@@ -44,7 +44,7 @@ dependencies = [
     "litestar>=2.0",
     "uvicorn>=0.30",
     "httpx",
-    "llama-cpp-python",
+    "llama-cpp-python>=0.3.23",
     "diskcache>=5.6.1",
     "jinja2>=2.11.3",
     "typing-extensions>=4.5.0",
@@ -68,7 +68,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-litellm = ["litellm>=1.50"]
+litellm = [
+    "litellm>=1.50",
+]
 graph = ["spacy>=3.8", "graspologic-native>=1.2"]
 crawler = ["crawl4ai>=0.8.6"]
 release = ["lilbee[crawler,litellm,graph]"]

@@ -22,6 +22,37 @@ Three rules cover 90% of usage: **search before answering**, **cite every claim 
 chunk's `source` + line range**, and **delegate indexing / crawling / model pulls to the
 `lilbee-worker` subagent** because they block the shared embedder.
 
+## Trigger map (read this carefully)
+
+When the user follows up on your first answer with any of these phrases, the correct
+move is **`lilbee_settings_set` to widen retrieval, then re-`lilbee_search` and answer
+from the richer pool**. Do **not** just call `lilbee_search` again with the same
+settings; the result will be identical. Do **not** keep stacking more `lilbee_search`
+calls without changing settings; you will overflow the context window.
+
+| User says | First move |
+|---|---|
+| "be exhaustive" / "be thorough" | `lilbee_settings_set` (widen), then re-search |
+| "that's incomplete" / "that's thin" | `lilbee_settings_set` (widen), then re-search |
+| "more detail" / "more depth" / "go wider" | `lilbee_settings_set` (widen), then re-search |
+| "every function and class" / "everything" | `lilbee_settings_set` (widen), then re-search |
+| "I want line numbers for X" (you already had them) | re-`lilbee_search` only |
+| "search for Y" (new query) | `lilbee_search`, no settings change |
+
+Concrete widening values that fit within most context windows:
+
+```
+lilbee_settings_set({
+    "top_k": 15,                  # safe upper bound for budget
+    "diversity_max_per_source": 8,
+    "max_distance": 0.85,
+})
+```
+
+Tell the user one sentence on what you moved. **Do not** reset settings after the
+re-search — the user's later questions in the same session benefit from the wider
+pool. If they want defaults back they will ask. The full pattern is in workflow §5 below.
+
 ## Install
 
 Drop this folder under one of:
@@ -160,8 +191,8 @@ If the response includes `reindex_required: true` (changing `chunk_size` /
 `chunk_overlap` does this), hand `lilbee_sync(force_rebuild=true)` to the worker before
 searching again.
 
-Tell the user which knobs you moved and why; `lilbee_settings_reset([...])` rolls any of
-them back.
+Tell the user which knobs you moved and why. Leave the new values in place;
+`lilbee_settings_reset([...])` is only for when the user explicitly asks to roll back.
 
 ### 5. Your first answer feels thin -- self-tune and retry
 
@@ -182,11 +213,11 @@ lilbee_settings_set({
 })
 lilbee_search("user's natural query")          # same query, richer pool
 # Answer from the richer results, cite every class you found.
-lilbee_settings_reset(["top_k", "diversity_max_per_source", "max_distance"])
 ```
 
-Tell the user one sentence on what you widened and that you've reset
-afterward, so the next question gets the unmodified defaults.
+Tell the user one sentence on what you widened. **Do not reset settings afterward** —
+later questions in the same session benefit from the wider pool. If the user wants
+defaults back they will ask explicitly; only then call `lilbee_settings_reset`.
 
 ### 6. User wants to delete or replace content
 

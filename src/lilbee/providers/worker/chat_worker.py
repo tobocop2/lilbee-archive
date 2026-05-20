@@ -93,9 +93,9 @@ class _ChatSession:
     ) -> Any:
         """Run one chat completion and return the llama-cpp response."""
         llm = self._ensure_loaded(model)
-        windowed = self._window_messages(messages, options, llm, tools=tools, model_ref=model)
         if tools and self._response_schema is None:
             self._warn_unsupported_tool_extraction(model)
+        windowed = self._window_messages(messages, options, llm, tools=tools, model_ref=model)
         kwargs: dict[str, Any] = dict(options) if options else {}
         if tools is not None:
             kwargs["tools"] = tools
@@ -426,6 +426,19 @@ def _extract_non_streaming_result(
     schema: ResponseSchema | None,
 ) -> ChatResult:
     """Build a ``ChatResult`` from one llama-cpp non-streaming response."""
+    first, message = _unwrap_llama_response(response)
+    content = message.get("content")
+    text = content if isinstance(content, str) else ""
+    tool_calls = _coerce_tool_calls(message.get("tool_calls") or [])
+    finish_reason = _coerce_finish_reason(first.get("finish_reason"))
+    extracted = _maybe_extract_via_schema(text, tool_calls, tools_requested, schema)
+    if extracted is None:
+        return ChatResult(text=text, tool_calls=tool_calls, finish_reason=finish_reason)
+    return extracted
+
+
+def _unwrap_llama_response(response: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Validate the llama-cpp response shape and return ``(first_choice, message)``."""
     if not isinstance(response, dict):
         raise TypeError(f"chat response must be dict, got {type(response).__name__}")
     choices = response.get("choices")
@@ -437,16 +450,21 @@ def _extract_non_streaming_result(
     message = first.get("message")
     if not isinstance(message, dict):
         raise TypeError("chat choices[0].message missing or not dict")
-    content = message.get("content")
-    text = content if isinstance(content, str) else ""
-    raw_calls = message.get("tool_calls") or []
-    tool_calls = _coerce_tool_calls(raw_calls)
-    finish_reason = _coerce_finish_reason(first.get("finish_reason"))
-    if tool_calls or not tools_requested or schema is None:
-        return ChatResult(text=text, tool_calls=tool_calls, finish_reason=finish_reason)
+    return first, message
+
+
+def _maybe_extract_via_schema(
+    text: str,
+    native_tool_calls: tuple[ToolCall, ...],
+    tools_requested: bool,
+    schema: ResponseSchema | None,
+) -> ChatResult | None:
+    """Try schema extraction; return ``None`` to keep the native response."""
+    if native_tool_calls or not tools_requested or schema is None:
+        return None
     parsed = parse_response(text, schema)
     if not parsed.tool_calls:
-        return ChatResult(text=text, tool_calls=tool_calls, finish_reason=finish_reason)
+        return None
     return ChatResult(
         text=parsed.content,
         tool_calls=parsed.tool_calls,

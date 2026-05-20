@@ -18,6 +18,7 @@ import argparse
 import json
 import logging
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -55,7 +56,14 @@ class FamilyCheck:
 def load_upstream_repos(path: Path) -> dict[str, str]:
     """Read the family -> repo_id mapping from disk."""
     data = json.loads(path.read_text("utf-8"))
-    return {family: entry["repo"] for family, entry in data.items()}
+    if not isinstance(data, dict):
+        raise ValueError(f"{path}: expected an object at the top level, got {type(data).__name__}")
+    result: dict[str, str] = {}
+    for family, entry in data.items():
+        if not isinstance(entry, dict) or not isinstance(entry.get("repo"), str):
+            raise ValueError(f'{path}: entry for {family!r} must be {{"repo": "..."}}')
+        result[family] = entry["repo"]
+    return result
 
 
 def list_local_schemas(schemas_dir: Path) -> set[str]:
@@ -72,16 +80,11 @@ def check_drift(schemas_dir: Path, repo_map: dict[str, str]) -> tuple[set[str], 
 
 def check_family(family: str, repo_id: str) -> FamilyCheck:
     """Fetch one upstream ``tokenizer_config.json`` and classify retirement status."""
+    config_path, fetch_error = _download_tokenizer_config(repo_id)
+    if fetch_error is not None:
+        return FamilyCheck(family, repo_id, RetirementStatus.BLOCKED, fetch_error)
     try:
-        config_path = hf_hub_download(repo_id=repo_id, filename=TOKENIZER_CONFIG_FILE)
-    except GatedRepoError:
-        return FamilyCheck(family, repo_id, RetirementStatus.BLOCKED, "gated repo")
-    except RepositoryNotFoundError:
-        return FamilyCheck(family, repo_id, RetirementStatus.BLOCKED, "repo not found")
-    except OSError as exc:
-        return FamilyCheck(family, repo_id, RetirementStatus.BLOCKED, f"network/IO: {exc}")
-    try:
-        config = json.loads(Path(config_path).read_text("utf-8"))
+        config = json.loads(Path(config_path or "").read_text("utf-8"))
     except (OSError, ValueError) as exc:
         return FamilyCheck(family, repo_id, RetirementStatus.BLOCKED, f"parse: {exc}")
     if config.get(RESPONSE_SCHEMA_KEY):
@@ -89,8 +92,29 @@ def check_family(family: str, repo_id: str) -> FamilyCheck:
     return FamilyCheck(family, repo_id, RetirementStatus.PENDING)
 
 
+def _download_tokenizer_config(repo_id: str) -> tuple[str | None, str | None]:
+    """Return ``(config_path, None)`` on success, ``(None, reason)`` on any failure.
+
+    Catches every exception the HF client can raise (it has ~10 subclasses
+    and a major bump can add more): the watcher must not crash the weekly
+    cron because of an unknown error variant.
+    """
+    try:
+        return hf_hub_download(repo_id=repo_id, filename=TOKENIZER_CONFIG_FILE), None
+    except GatedRepoError:
+        return None, "gated repo"
+    except RepositoryNotFoundError:
+        return None, "repo not found"
+    except OSError as exc:
+        return None, f"network/IO: {exc}"
+    except Exception as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+
+
 def render_report(checks: list[FamilyCheck]) -> str:
     """Render a markdown retirement report grouped by status."""
+    if not checks:
+        return "# Response-schema retirement check\n\n_No families to check._\n"
     by_status: dict[RetirementStatus, list[FamilyCheck]] = {
         RetirementStatus.READY: [],
         RetirementStatus.PENDING: [],
@@ -98,32 +122,31 @@ def render_report(checks: list[FamilyCheck]) -> str:
     }
     for check in checks:
         by_status[check.status].append(check)
+    sections = [
+        _render_section("Ready to retire", by_status[RetirementStatus.READY], _render_ready_block),
+        _render_section("Pending upstream", by_status[RetirementStatus.PENDING], _render_pending),
+        _render_section("Could not check", by_status[RetirementStatus.BLOCKED], _render_blocked),
+    ]
+    body = "\n".join(section for section in sections if section)
+    return f"# Response-schema retirement check\n\n{body}".rstrip() + "\n"
 
-    lines: list[str] = ["# Response-schema retirement check", ""]
-    ready = by_status[RetirementStatus.READY]
-    if ready:
-        lines.append("## Ready to retire")
-        lines.append("")
-        for check in ready:
-            lines.append(_render_ready_block(check))
-    pending = by_status[RetirementStatus.PENDING]
-    if pending:
-        lines.append("## Pending upstream")
-        lines.append("")
-        for check in pending:
-            lines.append(f"- `{check.family}` — {check.repo_id} has no response_schema yet")
-        lines.append("")
-    blocked = by_status[RetirementStatus.BLOCKED]
-    if blocked:
-        lines.append("## Could not check")
-        lines.append("")
-        for check in blocked:
-            lines.append(f"- `{check.family}` — {check.repo_id}: {check.detail}")
-        lines.append("")
-    if not ready and not pending and not blocked:
-        lines.append("_No families to check._")
-        lines.append("")
-    return "\n".join(lines).rstrip() + "\n"
+
+def _render_section(title: str, checks: list[FamilyCheck], format_item: Callable) -> str:
+    """Render one status section, or empty string when nothing falls in it."""
+    if not checks:
+        return ""
+    items = "".join(format_item(check) for check in checks)
+    return f"## {title}\n\n{items}"
+
+
+def _render_pending(check: FamilyCheck) -> str:
+    """One bullet for a family that's still pending upstream populating."""
+    return f"- `{check.family}`: {check.repo_id} has no response_schema yet\n"
+
+
+def _render_blocked(check: FamilyCheck) -> str:
+    """One bullet for a family the watcher could not check."""
+    return f"- `{check.family}`: {check.repo_id}: {check.detail}\n"
 
 
 def _render_ready_block(check: FamilyCheck) -> str:
@@ -135,9 +158,9 @@ def _render_ready_block(check: FamilyCheck) -> str:
         f"To retire the local copy:\n"
         f"\n"
         f"- [ ] Remove `src/lilbee/providers/worker/response_parser/schemas/{check.family}.json`\n"
-        f"- [ ] Remove `ModelFamily.{check.family.upper()}` from `families.py` "
+        f"- [ ] Remove `TemplateFamily.{check.family.upper()}` from `families.py` "
         f"(enum, detection-marker constants, branch in `detect_family`)\n"
-        f"- [ ] Remove `ModelFamily.{check.family.upper()}` from `_SCHEMA_FILES` "
+        f"- [ ] Remove `TemplateFamily.{check.family.upper()}` from `_SCHEMA_FILES` "
         f"in `schemas.py`\n"
         f"- [ ] Remove the `{check.family}` round-trip test in "
         f"`tests/providers/worker/response_parser/test_parse.py`\n"

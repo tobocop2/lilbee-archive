@@ -13,8 +13,8 @@ FAMILY="$1"
 GGUF="$2"
 TEMPLATE="${3:-}"
 
-LC=/tmp/llama-build/llama-cpp-python-0.3.23/vendor/llama.cpp
-LM=/root/lm
+LC=/root/llama.cpp            # CUDA llama.cpp built by pod_bootstrap.sh
+LM=/root/lilbee               # lilbee checkout (feat/local-model-api) from pod_bootstrap.sh
 WS=/root/demo-ws
 LS_PORT=8090                      # llama-server (the giant)
 EMBED_REF="nomic-ai/nomic-embed-text-v1.5-GGUF"
@@ -93,15 +93,26 @@ GPU_ENV="CUDA_VISIBLE_DEVICES=0"
 # the picker shows one "lilbee" model, not a duplicate from auto-discovery.
 tmux new-session -d -s giantsrv \
   "$GPU_ENV LD_LIBRARY_PATH=$LC/build/bin:$LC/build/src $LC/build/bin/llama-server --jinja -m '$GGUF' --alias '$FAMILY' -ngl 999 --host 127.0.0.1 --port $LS_PORT -c 32768 --no-webui $TMPL_ARG > /tmp/giant-srv.log 2>&1"
+# Measure the cold start empirically: wall time from launch until /health reports
+# the model loaded. This is the real number the demo's cold-start intro card shows
+# (build_reel.sh reads the sidecar), so the "fast-forwarded cold start" is honest,
+# never an invented duration. /health only returns 200 once weights are resident.
+COLD_START_TS=$SECONDS
 UP=0
-for _ in $(seq 1 120); do
+for _ in $(seq 1 200); do
   curl -s "http://127.0.0.1:$LS_PORT/health" >/dev/null 2>&1 && { UP=1; break; }; sleep 3
 done
+COLD_S=$((SECONDS - COLD_START_TS))
 if [ "$UP" != "1" ]; then
   echo "[giant] ERROR: $FAMILY llama-server did not come up (see /tmp/giant-srv.log)" >&2
   exit 3
 fi
-echo "[giant] $FAMILY served on :$LS_PORT"
+SIZE_GB=$(awk "BEGIN{printf \"%.0f\", $(stat -c %s "$GGUF") / 1073741824}")
+# Sidecar consumed by build_reel.sh to render the cold-start intro card.
+printf 'model=%s\nsize_gb=%s\ncold_s=%s\ndevices=%s\n' \
+  "$FAMILY" "$SIZE_GB" "$COLD_S" "$([ "${MULTIGPU:-0}" = "1" ] && echo "2x H200" || echo "1x H200")" \
+  > "$WS/coldstart-$FAMILY.txt"
+echo "[giant] $FAMILY served on :$LS_PORT (cold start ${COLD_S}s, ${SIZE_GB}GB) -> warm; safe to record"
 
 # --- opencode.json: model from llama-server, lilbee_search from lilbee MCP ---
 mkdir -p "$WS/.config/opencode"

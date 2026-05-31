@@ -109,7 +109,7 @@ if [ "$UP" != "1" ]; then
 fi
 SIZE_GB=$(awk "BEGIN{printf \"%.0f\", $(stat -c %s "$GGUF") / 1073741824}")
 # Sidecar consumed by build_reel.sh to render the cold-start intro card.
-printf 'model=%s\nsize_gb=%s\ncold_s=%s\ndevices=%s\n' \
+printf 'model=%s\nsize_gb=%s\ncold_s=%s\ndevices="%s"\n' \
   "$FAMILY" "$SIZE_GB" "$COLD_S" "$([ "${MULTIGPU:-0}" = "1" ] && echo "2x H200" || echo "1x H200")" \
   > "$WS/coldstart-$FAMILY.txt"
 echo "[giant] $FAMILY served on :$LS_PORT (cold start ${COLD_S}s, ${SIZE_GB}GB) -> warm; safe to record"

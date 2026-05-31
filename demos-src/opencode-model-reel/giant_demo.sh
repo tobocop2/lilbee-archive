@@ -128,6 +128,8 @@ cat > "$PROJ/opencode.json" <<JSON
       "models": { "$FAMILY": { "name": "$FAMILY" } }
     }
   },
+  "tools": { "bash": false, "grep": false, "glob": false, "list": false, "read": false, "webfetch": false, "task": false },
+  "permission": { "edit": "allow", "external_directory": "deny" },
   "mcp": {
     "lilbee": {
       "type": "remote",

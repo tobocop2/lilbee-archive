@@ -32,13 +32,20 @@ sync: what executes on the pod is the code in this directory.
    screen fails). The frames are then eyeballed: prompt visible, real TUI working,
    `lilbee_search` fired, file/answer present, good result, zero error frames.
 
-## Capture: on the Mac, not on the pod
+## Capture: on the pod (VHS works here)
 
-VHS's go-rod/ttyd/ffmpeg pipeline captures **0 frames** on the heavy pod after the
-bootstrap (an unresolved, well-characterized failure). So the pod only **serves**
-the giants + the search index; the opencode TUI is run and recorded on the **Mac**,
-pointed at the pod's `llama-server :8090` and lilbee `/mcp :8080` over an SSH tunnel.
-This keeps VHS off the heavy box entirely.
+Everything runs on the pod, VHS included. The old "VHS captures 0 frames on the pod"
+problem had two mundane causes, both fixed in `pod_bootstrap.sh`:
+
+1. **Outdated ttyd.** apt ships ttyd 1.6.3; VHS rejects anything below 1.7.2
+   (`ttyd version (1.6.3) is out of date, VHS requires 1.7.2`). The bootstrap
+   installs the 1.7.7 release binary.
+2. **Absolute `Output` path.** VHS's parser chokes on `Output /root/x.gif`
+   (`Invalid command: root`). Tapes use a **relative** Output and VHS runs from the
+   output dir (`build_reel.sh` handles this).
+
+With those, `VHS_NO_SANDBOX=true vhs tape` renders real multi-frame output on the
+box. No SSH tunnel, no RunPod proxy, no Mac, no public exposure.
 
 ## Honesty rules baked in
 
@@ -57,6 +64,7 @@ This keeps VHS off the heavy box entirely.
 
 ## Status
 
-- `pod_bootstrap.sh`: running on pod `yla4u2ww43zgba` (build stage in progress).
-- `giant_demo.sh`: paths reconciled to `/root/llama.cpp` + `/root/lilbee`; serve +
-  index + record stages pending the build completing and per-model validation.
+- `pod_bootstrap.sh`: CUDA llama-server built; VHS confirmed rendering real frames on
+  the pod (ttyd 1.7.7 + relative Output). VHS step folded into the bootstrap.
+- `giant_demo.sh` / `build_reel.sh`: paths reconciled to `/root/llama.cpp` +
+  `/root/lilbee`; relative-Output fix applied. Per-model serve + index + record next.

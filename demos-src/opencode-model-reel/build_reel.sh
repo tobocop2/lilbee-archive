@@ -35,13 +35,17 @@ done
 "$HERE/giant_demo.sh" "$FAMILY" "$GGUF"
 
 # 2) render the streaming tape
-STEM="$OUT_DIR/_raw-$FAMILY"
-sed -e "s#__OUT__#$STEM#g" \
+# VHS's Output path MUST be relative (an absolute path trips its parser), so the
+# tape gets a bare basename and VHS runs from OUT_DIR; STEM stays absolute for the
+# ffmpeg steps below. VHS_NO_SANDBOX is required for headless chromium on the pod.
+RAW="_raw-$FAMILY"
+STEM="$OUT_DIR/$RAW"
+sed -e "s#__OUT__#$RAW#g" \
     -e "s#__PROMPT__#$PROMPT#g" \
     -e "s#__SESSION__#$FULL#g" \
     -e "s#__STREAMSLEEP__#${STREAM_SLEEP}s#g" \
     "$HERE/giant_demo.tape.tmpl" > "/tmp/tape-$FAMILY.tape"
-vhs "/tmp/tape-$FAMILY.tape"
+( cd "$OUT_DIR" && VHS_NO_SANDBOX=true vhs "/tmp/tape-$FAMILY.tape" )
 
 # 3) cold-start intro card from the MEASURED numbers
 # shellcheck disable=SC1090

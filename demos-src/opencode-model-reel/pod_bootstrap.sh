@@ -13,10 +13,10 @@
 #   giant_demo.sh  -> warm a giant on llama-server + index a codebase + lilbee serve /mcp
 #   build_reel.sh  -> record the live opencode TUI tape + cold-start card + review gate
 #
-# Capture is done on the Mac (opencode over an SSH tunnel to this pod's llama-server
-# :8090 and lilbee /mcp :8080), NOT with VHS on the pod: VHS's go-rod/ttyd pipeline
-# captures 0 frames on the heavy pod after bootstrap. The pod only serves models +
-# the search index; the Mac renders and records the TUI.
+# Everything runs on the pod, including VHS recording. The "VHS captures 0 frames on
+# the pod" failure was an outdated ttyd (apt ships 1.6.3; VHS needs >=1.7.2) plus the
+# absolute-Output-path parser bug -- both fixed in the VHS step below. No SSH tunnel,
+# no Mac, no public exposure: opencode + VHS record the live TUI locally on the box.
 set -uo pipefail
 LOG=/root/run.log
 exec >>"$LOG" 2>&1
@@ -59,6 +59,31 @@ cmake --build build -j --target llama-server || fail "cmake build"
 test -f build/bin/llama-server || fail "llama-server binary missing"
 ln -sf /root/llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
 echo "[$(ts)] llama-server: $(command -v llama-server)"
+
+step "install VHS recorder (ffmpeg + ttyd>=1.7.2 + vhs + headless-chromium deps)"
+apt-get install -y -qq ffmpeg >/dev/null || fail "apt ffmpeg"
+# apt's ttyd is 1.6.3 which VHS rejects ("ttyd out of date, VHS requires 1.7.2");
+# install the release binary. This is the fix that makes VHS record on the pod.
+curl -fsSL https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64 -o /usr/local/bin/ttyd \
+  && chmod +x /usr/local/bin/ttyd || fail "ttyd binary"
+hash -r
+mkdir -p /etc/apt/keyrings
+curl -fsSL https://repo.charm.sh/apt/gpg.key | gpg --dearmor -o /etc/apt/keyrings/charm.gpg
+echo "deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *" > /etc/apt/sources.list.d/charm.list
+apt-get update -qq && apt-get install -y -qq vhs >/dev/null || fail "apt vhs"
+# go-rod (VHS's headless chromium) runtime libs.
+apt-get install -y -qq libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
+  libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libxkbcommon0 \
+  libpango-1.0-0 libcairo2 libatspi2.0-0 libxshmfence1 >/dev/null || true
+apt-get install -y -qq libasound2 >/dev/null 2>&1 || apt-get install -y -qq libasound2t64 >/dev/null 2>&1 || true
+echo "[$(ts)] vhs=$(vhs --version 2>&1) ttyd=$(ttyd --version 2>&1)"
+# Smoke-test VHS now so a regression is caught at bootstrap, not at record time.
+# NOTE: the Output path MUST be relative -- an absolute path trips VHS's parser.
+( cd /root && printf 'Output vhscheck.gif\nSet Width 800\nSet Height 400\nType "echo vhs-ok"\nEnter\nSleep 1s\n' > vhscheck.tape \
+  && VHS_NO_SANDBOX=true vhs vhscheck.tape >/dev/null 2>&1 \
+  && [ "$(ffprobe -v error -count_frames -select_streams v:0 -show_entries stream=nb_read_frames -of csv=p=0 vhscheck.gif 2>/dev/null)" -gt 1 ] \
+  && echo "[$(ts)] VHS smoke-test PASS (frames rendered)" \
+  || echo "[$(ts)] VHS smoke-test FAIL -- try: xvfb-run VHS_NO_SANDBOX=true vhs vhscheck.tape" )
 
 mkdir -p /root/models
 echo "[$(ts)] ====== BUILD_STAGE_DONE ======"

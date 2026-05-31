@@ -85,5 +85,14 @@ echo "[$(ts)] vhs=$(vhs --version 2>&1) ttyd=$(ttyd --version 2>&1)"
   && echo "[$(ts)] VHS smoke-test PASS (frames rendered)" \
   || echo "[$(ts)] VHS smoke-test FAIL -- try: xvfb-run VHS_NO_SANDBOX=true vhs vhscheck.tape" )
 
+step "install opencode CLI (recorded on the pod by build_reel.sh)"
+# Official opencode org is anomalyco/opencode (moved from sst); opencode.ai/install
+# resolves here. Linux CLI ships as a tar.gz, not a zip.
+apt-get install -y -qq unzip >/dev/null 2>&1 || true
+curl -fsSL https://github.com/anomalyco/opencode/releases/latest/download/opencode-linux-x64.tar.gz -o /root/opencode.tar.gz || fail "opencode download"
+tar -xzf /root/opencode.tar.gz -C /usr/local/bin/ || fail "opencode extract"
+chmod +x /usr/local/bin/opencode; hash -r
+echo "[$(ts)] opencode=$(command -v opencode) ver=$(opencode --version 2>&1 | head -1)"
+
 mkdir -p /root/models
 echo "[$(ts)] ====== BUILD_STAGE_DONE ======"

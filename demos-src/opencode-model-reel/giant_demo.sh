@@ -68,11 +68,18 @@ and the lilbee source is NOT in this directory.
 AGENTS
 
 # --- lilbee serve (background, for /mcp) ---
+# tmux new-session inherits the tmux SERVER's start-time environment, not this
+# script's, so LILBEE_MODELS_DIR (which the `lilbee model pull` above honoured to
+# place nomic on /workspace) would be lost here -- serve would resolve models
+# against the default global dir, report them "not installed", skip the embed
+# sidecar, and 503 every search. Inline the var into the command (like LILBEE_DATA)
+# so it reaches serve regardless of the server env.
+MODELS_DIR_ENV="${LILBEE_MODELS_DIR:+LILBEE_MODELS_DIR=$LILBEE_MODELS_DIR}"
 if ! curl -s "http://127.0.0.1:8080/api/health" >/dev/null 2>&1; then
   echo "[prep] starting lilbee serve"
   tmux kill-session -t lilbeeserve 2>/dev/null || true
   tmux new-session -d -s lilbeeserve \
-    "cd $LM && LILBEE_DATA=$WS/.lilbee $LILBEE serve --port 8080 > /tmp/lilbee-serve.log 2>&1"
+    "cd $LM && LILBEE_DATA=$WS/.lilbee $MODELS_DIR_ENV $LILBEE serve --port 8080 > /tmp/lilbee-serve.log 2>&1"
   for _ in $(seq 1 60); do
     curl -s "http://127.0.0.1:8080/api/health" >/dev/null 2>&1 && break; sleep 2
   done

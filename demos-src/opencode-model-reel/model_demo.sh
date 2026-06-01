@@ -24,12 +24,11 @@
 set -uo pipefail
 export PATH=$HOME/.local/bin:/usr/local/bin:$PATH
 export HF_HUB_DISABLE_XET=1 HF_HUB_DISABLE_PROGRESS_BARS=1
-# The pod's root overlay (/) is only ~20G; the big writable volume is /workspace
-# (the RunPod network volume). All model weights + the lilbee index live there,
-# or the 18GB+ GGUF download fills / and ENOSPCs. WS is exported so giant_demo.sh
-# puts the lilbee data dir on the big volume too.
+# Model weights (an 18GB+ GGUF, or a 240GB giant) MUST live on /workspace (the
+# RunPod network volume) or the download fills the small root overlay and ENOSPCs;
+# the volume also persists across pod restarts. The lilbee index stays on the local
+# root disk (small, fast) via giant_demo.sh's default WS.
 export LILBEE_MODELS_DIR="${LILBEE_MODELS_DIR:-/workspace/models}"
-export WS="${WS:-/workspace/demo-ws}"
 
 # --- model spec (env-driven; sensible defaults for the qwen3-coder validation) ---
 FAMILY="${FAMILY:-qwen3-coder}"

@@ -116,7 +116,7 @@ GPU_ENV="CUDA_VISIBLE_DEVICES=0"
 # --alias makes /v1/models advertise the same id opencode is configured with, so
 # the picker shows one "lilbee" model, not a duplicate from auto-discovery.
 tmux new-session -d -s giantsrv \
-  "$GPU_ENV LD_LIBRARY_PATH=$LC/build/bin:$LC/build/src $LC/build/bin/llama-server --jinja -m '$GGUF' --alias '$FAMILY' -ngl 999 --host 127.0.0.1 --port $LS_PORT -c 32768 --no-webui $TMPL_ARG > /tmp/giant-srv.log 2>&1"
+  "$GPU_ENV LD_LIBRARY_PATH=$LC/build/bin:$LC/build/src $LC/build/bin/llama-server --jinja -m '$GGUF' --alias '$FAMILY' -ngl 999 --host 127.0.0.1 --port $LS_PORT -c 131072 -fa --no-webui $TMPL_ARG > /tmp/giant-srv.log 2>&1"
 # Measure the cold start empirically: wall time from launch until /health reports
 # the model loaded. This is the real number the demo's cold-start intro card shows
 # (build_reel.sh reads the sidecar), so the "fast-forwarded cold start" is honest,

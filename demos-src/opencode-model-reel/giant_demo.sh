@@ -15,7 +15,9 @@ TEMPLATE="${3:-}"
 
 LC=/root/llama.cpp            # CUDA llama.cpp built by pod_bootstrap.sh
 LM=/root/lilbee               # lilbee checkout (feat/local-model-api) from pod_bootstrap.sh
-WS=/root/demo-ws
+WS="${WS:-/root/demo-ws}"     # data dir (index + lilbee data); the model driver points
+                              # this at /workspace so the index lives on the big volume
+mkdir -p "$WS"
 LS_PORT=8090                      # llama-server (the giant)
 EMBED_REF="nomic-ai/nomic-embed-text-v1.5-GGUF"
 TINY_CHAT="Qwen/Qwen3-4B-GGUF"    # only so lilbee serve starts; opencode never uses it

@@ -24,14 +24,19 @@
 set -uo pipefail
 export PATH=$HOME/.local/bin:/usr/local/bin:$PATH
 export HF_HUB_DISABLE_XET=1 HF_HUB_DISABLE_PROGRESS_BARS=1
-export LILBEE_MODELS_DIR=/root/models
+# The pod's root overlay (/) is only ~20G; the big writable volume is /workspace
+# (the RunPod network volume). All model weights + the lilbee index live there,
+# or the 18GB+ GGUF download fills / and ENOSPCs. WS is exported so giant_demo.sh
+# puts the lilbee data dir on the big volume too.
+export LILBEE_MODELS_DIR="${LILBEE_MODELS_DIR:-/workspace/models}"
+export WS="${WS:-/workspace/demo-ws}"
 
 # --- model spec (env-driven; sensible defaults for the qwen3-coder validation) ---
 FAMILY="${FAMILY:-qwen3-coder}"
 FULL="${FULL:-Qwen3-Coder-30B}"
 REPO="${REPO:-unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF}"
 QUANT="${QUANT:-*Q4_K_M*}"
-QDIR="${QDIR:-/root/models/$FAMILY}"
+QDIR="${QDIR:-/workspace/models/$FAMILY}"
 MULTIGPU="${MULTIGPU:-0}"
 STREAM_SLEEP="${STREAM_SLEEP:-150}"   # giants stream slowly; fast-forward in post
                                       # (>~200s starves VHS's headless-chromium gif capture)

@@ -28,7 +28,7 @@ export PATH=$HOME/.local/bin:$PATH
 
 step "apt build deps"
 apt-get update -qq || fail "apt update"
-apt-get install -y -qq cmake build-essential pkg-config ccache >/dev/null || fail "apt install"
+apt-get install -y -qq cmake build-essential pkg-config ccache tmux >/dev/null || fail "apt install"
 echo "[$(ts)] apt OK"
 
 step "install uv"

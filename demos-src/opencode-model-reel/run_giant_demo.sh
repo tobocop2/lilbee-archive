@@ -27,7 +27,9 @@ QDIR=/root/models/minimax-q8
 QUANT='Q8_0/*'
 FAMILY=minimax-m2
 FULL=MiniMax-M2
-STREAM_SLEEP=240          # giants generate slowly; fast-forward the slow spans in post
+STREAM_SLEEP=150          # giants generate slowly; fast-forward the slow spans in post
+                          # (>~200s stresses VHS's headless-chromium capture -> empty gif;
+                          #  the 128k context fix lets the giant finish inside 150s)
 MULTIGPU=1               # MiniMax-M2 Q8_0 (~243GB) spans both H200s
 PROMPT='Using ONLY lilbee_search (the code is not on disk here), find lilbee'\''s REAL response parser that extracts tool calls from a model'\''s raw text output. Name the actual module path, the class or function, and which model families it special-cases. Then write tool_call_example.py that mirrors lilbee'\''s real approach (not a generic OpenAI tool_calls dict reader) on a sample raw model-output string, citing the exact lilbee files as path:Lstart-Lend. If lilbee_search does not surface it, say so rather than inventing a generic parser.'
 

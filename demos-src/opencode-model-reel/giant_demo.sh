@@ -114,6 +114,12 @@ fi
 # --- llama-server for the giant ---
 echo "[giant] launching llama-server for $FAMILY"
 tmux kill-session -t giantsrv 2>/dev/null || true
+# Wait for any prior giant to release :LS_PORT before launching the new one, so the
+# readiness gate below can't read a stale server's 200 and start recording against
+# a model that has not finished loading.
+for _ in $(seq 1 30); do
+  curl -fsS -m1 "http://127.0.0.1:$LS_PORT/health" >/dev/null 2>&1 && sleep 1 || break
+done
 TMPL_ARG=""
 [ -n "$TEMPLATE" ] && TMPL_ARG="--chat-template-file $TEMPLATE"
 # Only the 200GB giants need both GPUs. Force-splitting a small model across both
@@ -129,18 +135,25 @@ tmux new-session -d -s giantsrv \
 # Measure the cold start empirically: wall time from launch until /health reports
 # the model loaded. This is the real number the demo's cold-start intro card shows
 # (build_reel.sh reads the sidecar), so the "fast-forwarded cold start" is honest,
-# never an invented duration. /health only returns 200 once weights are resident.
+# never an invented duration. Use curl -fsS (NOT -s): while the model is still
+# loading, /health returns 503 "Loading model", and a bare `curl -s` exits 0 on a
+# 503 -- so the gate would pass instantly and record against a not-yet-loaded
+# giant (empty demo). -fsS only exits 0 on a 2xx, i.e. weights resident. The 400x3s
+# budget (20min) covers a 200GB+ giant loading across both GPUs from the volume.
 COLD_START_TS=$SECONDS
 UP=0
-for _ in $(seq 1 200); do
-  curl -s "http://127.0.0.1:$LS_PORT/health" >/dev/null 2>&1 && { UP=1; break; }; sleep 3
+for _ in $(seq 1 400); do
+  curl -fsS -m2 "http://127.0.0.1:$LS_PORT/health" >/dev/null 2>&1 && { UP=1; break; }; sleep 3
 done
 COLD_S=$((SECONDS - COLD_START_TS))
 if [ "$UP" != "1" ]; then
   echo "[giant] ERROR: $FAMILY llama-server did not come up (see /tmp/giant-srv.log)" >&2
   exit 3
 fi
-SIZE_GB=$(awk "BEGIN{printf \"%.0f\", $(stat -c %s "$GGUF") / 1073741824}")
+# Sum every shard in the model dir (a sharded giant's first shard alone understates
+# the real size the cold-start card reports).
+GGUF_BYTES=$(find "$(dirname "$GGUF")" -iname '*.gguf' ! -name '*.lock' -printf '%s\n' 2>/dev/null | awk '{s+=$1} END{print s+0}')
+SIZE_GB=$(awk "BEGIN{printf \"%.0f\", $GGUF_BYTES / 1073741824}")
 # Sidecar consumed by build_reel.sh to render the cold-start intro card.
 printf 'model=%s\nsize_gb=%s\ncold_s=%s\ndevices="%s"\n' \
   "$FAMILY" "$SIZE_GB" "$COLD_S" "$([ "${MULTIGPU:-0}" = "1" ] && echo "2x H200" || echo "1x H200")" \

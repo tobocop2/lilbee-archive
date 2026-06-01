@@ -55,6 +55,50 @@ poweroff_pod(){
   fi
 }
 
+# --- stall watchdog -------------------------------------------------------------
+# Powers the pod off if NOTHING makes progress for STALL_LIMIT: no log file is
+# written, the download dir stops growing, AND the GPUs go idle. A slow-but-real
+# giant download (bytes grow) or inference/load (GPU busy or giant-srv.log ticks)
+# keeps resetting the timer, so only a genuine wedge trips it.
+STALL_LIMIT="${STALL_LIMIT:-1800}"   # 30 min of total silence
+
+gpu_busy(){  # echo 1 if any GPU is doing work, else 0
+  local u
+  u=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null \
+        | awk '{s+=$1} END{print s+0}')
+  [ "${u:-0}" -ge 5 ] && echo 1 || echo 0
+}
+
+progress_fp(){  # newest log mtime : total downloaded bytes
+  local newest=0 t f
+  for f in "$RES"/matrix.log "$RES"/*/driver.log /root/dl-*.log \
+           /tmp/lilbee-serve.log /tmp/giant-srv.log; do
+    [ -f "$f" ] || continue
+    t=$(stat -c %Y "$f" 2>/dev/null) || t=0
+    [ "$t" -gt "$newest" ] && newest=$t
+  done
+  local bytes; bytes=$(du -sb /workspace/models 2>/dev/null | cut -f1); bytes=${bytes:-0}
+  echo "$newest:$bytes"
+}
+
+watchdog(){
+  local prev="" last now
+  last=$(date -u +%s)
+  while true; do
+    sleep 60
+    now=$(date -u +%s)
+    if [ "$(progress_fp)" != "$prev" ] || [ "$(gpu_busy)" = "1" ]; then
+      prev=$(progress_fp); last=$now
+    elif [ $((now - last)) -ge "$STALL_LIMIT" ]; then
+      note "WATCHDOG: no progress for ${STALL_LIMIT}s (logs idle, download flat, GPUs idle) -> powering off"
+      printf 'STALLED: no progress for %ss, powered off %s\nLast state was in %s\n' \
+        "$STALL_LIMIT" "$(ts)" "$RES/STATE.md" > "$RES/STALLED.md"
+      poweroff_pod
+      return 0
+    fi
+  done
+}
+
 collect(){  # family full out
   local family=$1 full=$2 out=$3
   mkdir -p "$out/agent-output"
@@ -90,10 +134,15 @@ write_status(){  # family full out -> writes STATUS; echoes frame count
 note "===== MATRIX START (pod=${POD_ID:-?}; models: qwen3-coder, minimax-m2) ====="
 # Clean slate, but KEEP a warm lilbeeserve if one is up (re-warm is cheap but
 # skipping it is cheaper). model_demo.sh relaunches the per-giant server itself.
+# Use -x (exact process name) NOT -f: this script's path contains "opencode", so
+# pkill -f opencode would kill the matrix runner itself.
 tmux kill-session -t giantsrv 2>/dev/null || true
-pkill -f vhs 2>/dev/null || true
-pkill -f ttyd 2>/dev/null || true
-pkill -f opencode 2>/dev/null || true
+pkill -x vhs 2>/dev/null || true
+pkill -x ttyd 2>/dev/null || true
+pkill -x opencode 2>/dev/null || true
+
+# Start the stall watchdog (powers off if everything goes idle for too long).
+watchdog & WD_PID=$!
 
 CANARY_OK=1
 for i in "${!MODELS[@]}"; do
@@ -133,4 +182,5 @@ done
   echo "Pod powering off now; bring it back up and re-launch run_matrix.sh to resume."
 } > "$RES/STATE.md"
 note "===== MATRIX DONE ====="
+kill "$WD_PID" 2>/dev/null || true   # stop the watchdog; we power off cleanly below
 poweroff_pod

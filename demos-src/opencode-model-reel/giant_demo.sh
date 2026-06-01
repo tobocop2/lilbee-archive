@@ -78,6 +78,30 @@ fi
 TOKEN=$(python3 -c "import json;print(json.load(open('$WS/.lilbee/data/server.json'))['token'])")
 echo "[prep] lilbee serve up; token read"
 
+# Pre-warm the embed engine and verify a real search returns hits BEFORE recording.
+# lilbee's fleet warms the embed role lazily and swallows warm-up failures, so the
+# first lilbee_search can hit a cold engine and 503 -- which the agent misreads as
+# "no embed model installed" and wastes the whole session bootstrapping search.
+# Force the embed role warm via the exact path the MCP tool uses (/api/search), and
+# abort rather than record a broken demo. (The proper fix is await-embed-warm in
+# lilbee itself; this gate guarantees a clean demo regardless.)
+echo "[prep] warming embed engine + verifying lilbee_search returns hits"
+WARM_OK=0
+for _ in $(seq 1 40); do
+  if curl -s -H "Authorization: Bearer $TOKEN" \
+       "http://127.0.0.1:8080/api/search?q=tool%20call%20parsing&top_k=3" 2>/dev/null \
+       | grep -qiE '"source"|\.py'; then
+    WARM_OK=1; break
+  fi
+  sleep 3
+done
+if [ "$WARM_OK" = "1" ]; then
+  echo "[prep] embed engine warm; lilbee_search returns hits -> safe to record"
+else
+  echo "[giant] ERROR: lilbee_search never returned hits (embed engine did not warm); aborting" >&2
+  exit 6
+fi
+
 # --- llama-server for the giant ---
 echo "[giant] launching llama-server for $FAMILY"
 tmux kill-session -t giantsrv 2>/dev/null || true

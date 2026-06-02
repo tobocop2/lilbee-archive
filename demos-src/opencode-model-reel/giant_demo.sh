@@ -38,11 +38,19 @@ embedding_model = "$EMBED_REF"
 TOML
   "$LILBEE" model pull "$EMBED_REF"
   "$LILBEE" model pull "$TINY_CHAT"
-  # Index lilbee's own source. A curated subset keeps CPU embedding quick and the
-  # demo answers focused on the interesting machinery.
-  for d in providers/worker/response_parser providers/llama_cpp providers/families \
-           server/chat_completions_api retrieval; do
-    [ -d "$LM/src/lilbee/$d" ] && "$LILBEE" add "$LM/src/lilbee/$d" || true
+  # Index the modules a coding agent needs to answer questions about lilbee's chat
+  # + tool-call handling. Paths are verified against the indexed branch's real
+  # layout (the old providers/worker, providers/llama_cpp, providers/families dirs
+  # were removed in the fleet/llama-server migration). A missing path is logged
+  # LOUDLY, never silently skipped, so a stale layout can't quietly empty the corpus
+  # and leave the demo asking for a file that was never indexed.
+  for d in providers server/chat_dispatch server/chat_completions_api retrieval; do
+    if [ -d "$LM/src/lilbee/$d" ]; then
+      echo "[prep] indexing src/lilbee/$d"
+      "$LILBEE" add "$LM/src/lilbee/$d"
+    else
+      echo "[prep] WARNING: index path missing on this branch, skipped: src/lilbee/$d" >&2
+    fi
   done
   touch "$WS/.lilbee/.demo_indexed"
 fi

@@ -39,7 +39,7 @@ QDIR="${QDIR:-/workspace/models/$FAMILY}"
 MULTIGPU="${MULTIGPU:-0}"
 STREAM_SLEEP="${STREAM_SLEEP:-150}"   # giants stream slowly; fast-forward in post
                                       # (>~200s starves VHS's headless-chromium gif capture)
-PROMPT="${PROMPT:-Using ONLY lilbee_search (the code is not on disk here), find the REAL lilbee response parser that extracts tool calls from raw model text output. Name the actual module path, the class or function, and which model families it special-cases. Then write tool_call_example.py that mirrors the real lilbee approach (not a generic OpenAI tool_calls dict reader) on a sample raw model-output string, citing the exact lilbee files as path:Lstart-Lend. If lilbee_search does not surface it, say so rather than inventing a generic parser.}"
+PROMPT="${PROMPT:-Using ONLY lilbee_search (the code is not on disk here), explain how lilbee turns an incoming chat request into a model call and how it handles tool calls. Name the REAL modules and functions for: (a) dispatching a chat request to the model, (b) parsing or normalizing tool-call arguments, and (c) translating tool calls to the OpenAI wire format. Cite each as path:Lstart-Lend. Then write lilbee_toolcall_walkthrough.py: a short annotated trace that references those exact lilbee functions (not a generic OpenAI tool_calls dict reader), with the path:Lstart-Lend citations inline. If lilbee_search does not surface a piece, say so rather than inventing it.}"
 
 LOG=/root/run-$FAMILY.log
 SUMMARY=/root/SUMMARY-$FAMILY.txt

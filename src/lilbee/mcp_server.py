@@ -8,6 +8,7 @@ import functools
 import inspect
 import logging
 import os
+import re
 import textwrap
 from collections.abc import Callable
 from pathlib import Path
@@ -16,6 +17,14 @@ from typing import Any, TypeVar, cast
 import anyio
 from mcp.server.fastmcp import Context, FastMCP
 
+from lilbee.app.memory import (
+    MEMORY_DISABLED_HINT,
+    forget,
+    list_memories,
+    memory_enabled,
+    recall,
+    remember,
+)
 from lilbee.app.search import clean_result
 from lilbee.app.services import get_services, reset_services, reset_store
 from lilbee.app.settings import (
@@ -31,7 +40,13 @@ from lilbee.core.settings import overlay_persisted_settings
 from lilbee.core.system import LOCAL_ROOT_DIRNAME
 from lilbee.crawler import crawler_available, is_url, require_valid_crawl_url
 from lilbee.crawler.task import get_task, start_crawl
-from lilbee.data.store import SearchScope, scope_to_chunk_type
+from lilbee.data.store import (
+    MemoryKind,
+    MemorySource,
+    SearchScope,
+    agent_owner,
+    scope_to_chunk_type,
+)
 from lilbee.wiki.shared import (
     WIKI_DISABLED_ERROR,
     WikiSubdir,
@@ -743,16 +758,17 @@ def model_rm(model: str, source: str = "") -> dict[str, Any]:
     """Remove an installed model.
 
     Args:
-        model: Model ref to remove.
-        source: Restrict to "native" or "remote"; empty = both.
+        model: Model ref to remove. lilbee removes only native models it
+            downloaded; Ollama and LM Studio models are read-only.
+        source: Restrict to a known source; empty = resolve from the ref.
     """
     from lilbee.app.models import remove_model_data
 
     try:
         src = ModelSource.parse(source)
+        return remove_model_data(model, source=src).model_dump()
     except ValueError as exc:
         return _error(str(exc))
-    return remove_model_data(model, source=src).model_dump()
 
 
 @_tool_if(cfg.wiki)
@@ -861,6 +877,93 @@ def _tune_search_scope_for_corpus() -> None:
         info.description = info.description.replace(_NO_WIKI_SCOPE_HINT, "")
     elif not cfg.wiki and not has_hint:
         info.description += _NO_WIKI_SCOPE_HINT
+
+
+def _client_name(ctx: Context | None) -> str:
+    """The MCP client's self-reported name from the initialize handshake, or empty."""
+    if ctx is None:
+        return ""
+    params = ctx.session.client_params
+    return params.clientInfo.name if params is not None else ""
+
+
+def _slug(value: str) -> str:
+    """Lowercase, hyphenated id fragment; falls back to ``generic`` when empty."""
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return slug or "generic"
+
+
+def _derive_owner(agent_id: str, ctx: Context | None) -> str:
+    """Resolve the calling agent's stable owner namespace.
+
+    Precedence: explicit ``agent_id`` argument, then the ``LILBEE_AGENT_ID`` env var
+    (pinned in the client's MCP config), then the MCP client name, then ``generic``.
+    """
+    explicit = agent_id or os.environ.get("LILBEE_AGENT_ID", "")
+    return agent_owner(_slug(explicit or _client_name(ctx)))
+
+
+@mcp.tool()
+def memory_remember(
+    text: str,
+    kind: MemoryKind = MemoryKind.FACT,
+    shared: bool = False,
+    agent_id: str = "",
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Store a durable memory in this agent's own namespace.
+
+    Args:
+        text: The fact or preference to remember.
+        kind: "fact" (recalled by similarity) or "preference" (always recalled).
+        shared: Set true to also expose this memory to the human's TUI/CLI.
+        agent_id: Stable id for this agent's namespace; otherwise derived from
+            LILBEE_AGENT_ID or the MCP client name.
+    """
+    if not memory_enabled():
+        return _error(MEMORY_DISABLED_HINT)
+    owner = _derive_owner(agent_id, ctx)
+    memory_id = remember(text, owner=owner, kind=kind, source=MemorySource.AGENT, shared=shared)
+    return {"ok": True, "id": memory_id, "owner": owner}
+
+
+@mcp.tool()
+def memory_recall(
+    query: str, limit: int = 0, agent_id: str = "", ctx: Context | None = None
+) -> dict[str, Any]:
+    """Recall this agent's memories (plus any the human shared) relevant to *query*."""
+    if not memory_enabled():
+        return _error(MEMORY_DISABLED_HINT)
+    owner = _derive_owner(agent_id, ctx)
+    memories = recall(query, owner, top_k=limit if limit > 0 else None)
+    return {
+        "memories": [
+            {"id": m.id, "text": m.text, "kind": m.kind.value, "owner": m.owner} for m in memories
+        ]
+    }
+
+
+@mcp.tool()
+def memory_list(agent_id: str = "", ctx: Context | None = None) -> dict[str, Any]:
+    """List every memory in this agent's namespace (any kind, newest first)."""
+    if not memory_enabled():
+        return _error(MEMORY_DISABLED_HINT)
+    owner = _derive_owner(agent_id, ctx)
+    memories = list_memories(owner)
+    return {
+        "memories": [
+            {"id": m.id, "text": m.text, "kind": m.kind.value, "shared": m.shared} for m in memories
+        ]
+    }
+
+
+@mcp.tool()
+def memory_forget(memory_id: str) -> dict[str, Any]:
+    """Delete a memory by id."""
+    if not memory_enabled():
+        return _error(MEMORY_DISABLED_HINT)
+    forget(memory_id)
+    return {"ok": True, "id": memory_id}
 
 
 _strip_schema_noise()

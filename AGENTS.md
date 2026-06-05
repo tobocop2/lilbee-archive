@@ -1,5 +1,28 @@
 # lilbee — Development Guide
 
+## Before You Write Code (read this every time)
+
+This file is long and the operational rules sit far down. These are the misses
+that have cost the most review cycles. Apply them BEFORE writing, not after:
+
+1. **Type external objects precisely.** Never `getattr(obj, "field", default)`
+   on a field the object's type guarantees. Annotate the parameter with the
+   real type and read the attribute directly. `getattr`-with-default is only
+   for attributes that genuinely may not exist (dynamic reflection).
+2. **Don't inherit the surrounding code's pattern without checking it against
+   these rules.** Nearby code may predate a rule. Copying an adjacent
+   `getattr` / `isinstance(self.app, ...)` / `: str` shape just propagates the
+   smell into your diff.
+3. **One-line docstrings by default.** Describe what the code IS, not how it
+   got there. No "previously", "now also", "some versions", "kept for".
+4. **The smell gate runs in `make lint`.** `scripts/check_style_rules.py` fails
+   on any NEW Code-Smell Trigger (see that section) on lines your diff adds vs
+   `main`. Run `make lint` before committing; a genuinely dynamic case opts out
+   inline with `# style-check: allow-smell` plus a written reason.
+
+The full rules follow; this block is the part that gets skipped under time
+pressure, so it leads.
+
 ## Project
 Local search engine you can talk to. Python 3.11+, pluggable LLM providers (a managed local `llama-server` fleet by default, Ollama/OpenAI via litellm), LanceDB for vectors. Managed with `uv`. Task tracking with `beads` (`bd`). Learned behaviors with `floop`.
 
@@ -49,6 +72,7 @@ All settings override via environment variables:
 - `LILBEE_CHUNK_SIZE` — tokens per chunk (default: `512`)
 - `LILBEE_CHUNK_OVERLAP` — overlap tokens (default: `100`)
 - `LILBEE_TOP_K` — retrieval result count (default: `5`)
+- `LILBEE_ANN_INDEX_THRESHOLD` — chunk count at/above which sync builds an approximate (ANN) vector index for fast search at scale (default: `50000`, `0` = always exact flat search)
 - `LILBEE_MAX_DISTANCE` — cosine distance threshold, 0-1 (default: `0.9`). Higher = more results, lower = stricter filtering
 - `LILBEE_ADAPTIVE_THRESHOLD` — enable adaptive threshold widening (default: `false`). When true, widens distance threshold if too few results found
 - `LILBEE_VISION_MODEL` — vision OCR model (default: none)
@@ -58,6 +82,8 @@ All settings override via environment variables:
 - `LILBEE_LLM_PROVIDER` — provider: `auto` (default; runs models locally on the managed `llama-server` fleet) or `remote` (external OpenAI-compatible endpoint; requires `pip install lilbee[remote]`).
 - `LILBEE_REMOTE_BASE_URL` — SDK backend endpoint (default: `http://localhost:11434`)
 - `LILBEE_LLAMA_SERVER_PATH` — path to a `llama-server` binary (default: the bundled wheel's binary, else PATH)
+- `LILBEE_OLLAMA_BASE_URL` — Ollama server URL (blank uses `http://localhost:11434`)
+- `LILBEE_LM_STUDIO_BASE_URL` — LM Studio server URL (blank uses `http://localhost:1234/v1`)
 - `LILBEE_DIVERSITY_MAX_PER_SOURCE` — max chunks per source in results (default: `3`)
 - `LILBEE_MMR_LAMBDA` — MMR relevance/diversity tradeoff, 0-1 (default: `0.5`)
 - `LILBEE_CANDIDATE_MULTIPLIER` — extra candidates for MMR reranking (default: `3`)
@@ -117,6 +143,7 @@ CLI also accepts `--model` / `-m` for chat model, `--data-dir` / `-d`, `--ocr-ti
 - Use literal unicode chars (`★`) not escapes (`\u2605`); extract to named constants
 - **No filterwarnings** without explicit user approval; fix warnings at the source
 - **Docstrings describe what the code IS, not how it got there.** Drop iteration-tracking phrasing like "Accepts X so callers don't have to import Y", "Used by Z as the on_complete callback", "Moved here because…", "Replaces the previous getattr fallback". That information is the *change description*, not the function's contract. Default to one-line docstrings; add detail only for non-obvious invariants (Big-O bounds, ordering guarantees, error semantics). The `grep -rnE "so callers don'?t|used by .* as the|replaces the|moved here because|previously" src/` sweep should return zero new hits in a diff.
+- **Inline comments state what, not a story.** A comment names a non-obvious invariant or constraint in one line. Cut the narration and justification: not "Best-effort convenience: a rejected swap must never be fatal, log it and keep the ref so the app boots", just "A rejected swap must not be fatal at startup". Not "the task is reclassified so the pick agrees with the validator that runs on the subsequent swap; a wrong-task model would be rejected downstream"; just "tasks are reclassified so the pick matches the role validator". Multi-sentence comment blocks that walk through the reasoning behind the code are the smell. Default to no comment; let names carry the meaning.
 
 ### Type-System Hygiene
 - **Don't fight the type system with `# type: ignore` for owned attributes.** A `# type: ignore[attr-defined]` on `self.app.task_bar` means mypy can't see `task_bar`. Fix the source: declare `app: LilbeeApp` on the host class, declare `task_bar: TaskBarController` on LilbeeApp's `__init__`, and the ignore goes away. The ignore was the symptom; the missing declaration was the bug.
@@ -342,6 +369,13 @@ Each of these is a fast-grep that surfaces the patterns we've burned cycles
 on in past reviews. A reviewer (and the author, before requesting review)
 runs them. A non-empty result is either fixed or has a written justification
 in the PR body.
+
+A subset is enforced automatically: `scripts/check_style_rules.py` (run by
+`make lint`) fails when a line ADDED in `src/` vs `main` introduces a
+getattr-by-name, getattr-with-default, owned-attribute `type: ignore`,
+`isinstance(self.app, LilbeeApp)`, string-typed closed set, or module-level
+`global`. It scopes to added lines so pre-existing hits don't block unrelated
+work; the greps below remain the full set a reviewer still runs by eye.
 
 - `grep -rnE "isinstance\(self\.app, LilbeeApp\)" src/` — production host-narrowing for tests. Fix via `app: LilbeeApp` declaration + LilbeeAppHost in tests.
 - `grep -rn "getattr(self, \"" src/` — getattr-by-name for owned attributes. Declare in `__init__`.

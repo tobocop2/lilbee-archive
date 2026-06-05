@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -13,6 +14,7 @@ import pyarrow.compute as pc
 from lilbee.core.config import (
     CHUNKS_TABLE,
     CITATIONS_TABLE,
+    MEMORIES_TABLE,
     META_TABLE,
     SOURCES_TABLE,
     Config,
@@ -22,8 +24,8 @@ from lilbee.runtime.lock import write_lock
 
 from .lance_helpers import (
     _chunk_type_predicate,
-    _embedding_mismatch_message,
     _has_fts_index,
+    _has_vector_index,
     _safe_delete_unlocked,
     _sources_search_filter,
     _table_names,
@@ -41,6 +43,8 @@ from .types import (
     ChunkWrite,
     CitationRecord,
     EmbeddingModelMismatchError,
+    MemoryKind,
+    MemoryRow,
     RemoveResult,
     SearchChunk,
     SourceRecord,
@@ -84,6 +88,13 @@ def _hybrid_search(
 
 _MAX_THRESHOLD = 1.0
 _MAX_FILTER_ITERATIONS = 20  # safety cap to prevent runaway loops
+
+# Vector ANN index. IVF_PQ compresses vectors so search scales to millions;
+# refine_factor re-ranks the PQ candidates against full vectors to recover recall.
+_VECTOR_METRIC = "cosine"
+_ANN_INDEX_TYPE = "IVF_PQ"
+_ANN_NPROBES = 20
+_ANN_REFINE_FACTOR = 10
 
 
 def _get_distance(chunk: SearchChunk) -> float:
@@ -241,12 +252,10 @@ class Store:
         ):
             return
         raise EmbeddingModelMismatchError(
-            _embedding_mismatch_message(
-                persisted_model=meta["embedding_model"],
-                persisted_dim=meta["embedding_dim"],
-                current_model=current_model,
-                current_dim=current_dim,
-            )
+            persisted_model=meta["embedding_model"],
+            persisted_dim=meta["embedding_dim"],
+            current_model=current_model,
+            current_dim=current_dim,
         )
 
     def _needs_canonical_meta_rewrite(
@@ -329,6 +338,34 @@ class Store:
             except Exception:
                 log.debug("FTS index ensure failed (empty table?)", exc_info=True)
 
+    def ensure_vector_index(self, *, force: bool = False) -> bool:
+        """Build or refresh the ANN vector index when the corpus is large enough.
+
+        Below ``cfg.ann_index_threshold`` (or when it is 0) the store keeps exact
+        flat search, which is faster and exact for small vaults and is all a
+        laptop needs. Once an index exists, ``optimize()`` folds new rows in.
+        Pass ``force=True`` to build regardless of the threshold (publish flow).
+        Returns True when an index was created or refreshed.
+        """
+        threshold = self._config.ann_index_threshold
+        with write_lock():
+            table = self.open_table(CHUNKS_TABLE)
+            if table is None:
+                return False
+            if _has_vector_index(table):
+                table.optimize()
+                log.debug("Vector index optimized on '%s'", CHUNKS_TABLE)
+                return True
+            if not force and (threshold <= 0 or table.count_rows() < threshold):
+                return False
+            try:
+                table.create_index(metric=_VECTOR_METRIC, index_type=_ANN_INDEX_TYPE)
+                log.info("Vector ANN index created on '%s'", CHUNKS_TABLE)
+                return True
+            except Exception:
+                log.debug("Vector index build failed (too few rows?)", exc_info=True)
+                return False
+
     def add_chunks(self, records: list[dict]) -> int:
         """Add chunk records to the store. Returns count added.
 
@@ -371,7 +408,7 @@ class Store:
         if not self._fts_ready:
             self.ensure_fts_index()
         if not self._fts_ready:
-            return []  # pragma: no cover
+            return []
         try:
             rows = table.search(query_text, query_type="fts").limit(top_k).to_list()
             return [SearchChunk(**r) for r in rows]
@@ -417,7 +454,11 @@ class Store:
                 log.debug("Hybrid search failed, falling back to vector-only", exc_info=True)
 
         candidate_k = top_k * self._config.candidate_multiplier
-        query = table.search(query_vector).metric("cosine").limit(candidate_k)
+        query = table.search(query_vector).metric(_VECTOR_METRIC).limit(candidate_k)
+        if _has_vector_index(table):
+            # IVF_PQ is lossy; probe more partitions and refine against full
+            # vectors so recall stays close to the exact flat scan.
+            query = query.nprobes(_ANN_NPROBES).refine_factor(_ANN_REFINE_FACTOR)
         if chunk_type:
             query = query.where(_chunk_type_predicate(chunk_type))
         rows = query.to_list()
@@ -739,16 +780,174 @@ class Store:
             f"wiki_source = '{escape_sql_string(wiki_source)}'",
         )
 
+    def _memories_schema(self) -> pa.Schema:
+        return pa.schema(
+            [
+                pa.field("id", pa.utf8()),
+                pa.field("owner", pa.utf8()),
+                pa.field("shared", pa.bool_()),
+                pa.field("kind", pa.utf8()),
+                pa.field("source", pa.utf8()),
+                pa.field("text", pa.utf8()),
+                pa.field("vector", pa.list_(pa.float32(), self._config.embedding_dim)),
+                pa.field("created_at", pa.utf8()),
+                pa.field("updated_at", pa.utf8()),
+            ]
+        )
+
+    def _duplicate_memory_id_unlocked(
+        self, table: lancedb.table.Table, record: MemoryRow
+    ) -> str | None:
+        """Return the id of a near-duplicate same-owner, same-kind memory, if any."""
+        if table.count_rows() == 0:
+            return None
+        predicate = (
+            f"owner = '{escape_sql_string(record.owner)}' "
+            f"AND kind = '{escape_sql_string(record.kind)}'"
+        )
+        rows = table.search(record.vector).metric("cosine").where(predicate).limit(1).to_list()
+        if rows and rows[0].get("_distance", 1.0) <= self._config.memory_dedup_distance:
+            return str(rows[0]["id"])
+        return None
+
+    def _evict_overflow_unlocked(self, table: lancedb.table.Table, owner: str) -> None:
+        """Delete oldest memories for *owner* so an incoming insert stays within the cap."""
+        cap = self._config.memory_max_per_owner
+        predicate = f"owner = '{escape_sql_string(owner)}'"
+        rows = table.search().where(predicate).limit(None).to_list()
+        if len(rows) < cap:
+            return
+        rows.sort(key=lambda r: r.get("created_at", ""))
+        for row in rows[: len(rows) - (cap - 1)]:
+            _safe_delete_unlocked(table, f"id = '{escape_sql_string(str(row['id']))}'")
+
+    def add_memory(self, record: MemoryRow) -> str:
+        """Insert *record*, or update the nearest same-owner duplicate in place.
+
+        Returns the stored id. Raises ``EmbeddingModelMismatchError`` when the store
+        was built under a different embedding model, and ``ValueError`` on a vector
+        dimension mismatch.
+        """
+        if len(record.vector) != self._config.embedding_dim:
+            raise ValueError(
+                f"Memory vector dimension mismatch: expected "
+                f"{self._config.embedding_dim}, got {len(record.vector)}"
+            )
+        with write_lock():
+            embedding_model = self._config.embedding_model
+            embedding_dim = self._config.embedding_dim
+            self._ensure_embedding_compat()
+            db = self.get_db()
+            table = ensure_table(db, MEMORIES_TABLE, self._memories_schema())
+            duplicate_id = self._duplicate_memory_id_unlocked(table, record)
+            if duplicate_id is not None:
+                _safe_delete_unlocked(table, f"id = '{escape_sql_string(duplicate_id)}'")
+                record.id = duplicate_id
+            self._evict_overflow_unlocked(table, record.owner)
+            table.add([record.model_dump(mode="json")])
+            if self.get_meta() is None:
+                self._write_meta_unlocked(
+                    embedding_model=embedding_model, embedding_dim=embedding_dim
+                )
+            return record.id
+
+    def get_memories(
+        self,
+        *,
+        owner_predicate: str,
+        kind: MemoryKind | None = None,
+    ) -> list[MemoryRow]:
+        """Return memories matching *owner_predicate* and optional *kind*, newest first."""
+        table = self.open_table(MEMORIES_TABLE)
+        if table is None:
+            return []
+        clauses = [f"({owner_predicate})"]
+        if kind is not None:
+            clauses.append(f"kind = '{escape_sql_string(kind)}'")
+        rows = table.search().where(" AND ".join(clauses)).limit(None).to_list()
+        memories = [MemoryRow(**r) for r in rows]
+        memories.sort(key=lambda m: m.created_at, reverse=True)
+        return memories
+
+    def search_memories(
+        self,
+        query_vector: list[float],
+        *,
+        owner_predicate: str,
+        top_k: int,
+        max_distance: float,
+    ) -> list[MemoryRow]:
+        """Vector-recall FACT memories within *max_distance*, best first."""
+        table = self.open_table(MEMORIES_TABLE)
+        if table is None or top_k <= 0:
+            return []
+        self._ensure_embedding_compat()
+        predicate = f"({owner_predicate}) AND kind = '{MemoryKind.FACT}'"
+        rows = table.search(query_vector).metric("cosine").where(predicate).limit(top_k).to_list()
+        return [MemoryRow(**r) for r in rows if r.get("_distance", 1.0) <= max_distance]
+
+    def update_memory(self, memory_id: str, *, shared: bool) -> bool:
+        """Set the *shared* flag on a memory by id. Returns True when found."""
+        with write_lock():
+            table = self.open_table(MEMORIES_TABLE)
+            if table is None:
+                return False
+            escaped = escape_sql_string(memory_id)
+            rows = table.search().where(f"id = '{escaped}'").limit(1).to_list()
+            if not rows:
+                return False
+            record = MemoryRow(**rows[0])
+            record.shared = shared
+            record.updated_at = datetime.now(UTC).isoformat()
+            _safe_delete_unlocked(table, f"id = '{escaped}'")
+            table.add([record.model_dump(mode="json")])
+            return True
+
+    def delete_memory(self, memory_id: str) -> None:
+        """Delete a memory by id."""
+        self.clear_table(MEMORIES_TABLE, f"id = '{escape_sql_string(memory_id)}'")
+
+    def rebuild_memory_embeddings(self, embed: Callable[[list[str]], list[list[float]]]) -> int:
+        """Re-embed every memory under the current model, recreating the table.
+
+        The vector column dimension is immutable, so a different-dim model needs a
+        fresh table; recreating unconditionally also covers the same-dim case. Memory
+        text is human-authored and re-embeddable, so no data is lost. Returns the count.
+        """
+        table = self.open_table(MEMORIES_TABLE)
+        if table is None:
+            return 0
+        rows = table.search().limit(None).to_list()
+        if not rows:
+            return 0
+        memories = [MemoryRow(**r) for r in rows]
+        vectors = embed([m.text for m in memories])
+        for memory, vector in zip(memories, vectors, strict=True):
+            memory.vector = vector
+        with write_lock():
+            db = self.get_db()
+            db.drop_table(MEMORIES_TABLE)
+            new_table = ensure_table(db, MEMORIES_TABLE, self._memories_schema())
+            new_table.add([m.model_dump(mode="json") for m in memories])
+        return len(memories)
+
     def close(self) -> None:
         """Release the database connection and reset state."""
         self._db = None
         self._fts_ready = False
 
     def drop_all(self) -> None:
-        """Drop all tables -- used by rebuild."""
+        """Drop every table except ``_memories`` -- used by rebuild.
+
+        Memory is user-authored data with no on-disk source, not derived from
+        documents, so a rebuild preserves it. Only a factory reset (which deletes
+        the data directory) clears it.
+        """
         with write_lock():
             self._fts_ready = False
             db = self.get_db()
             for name in _table_names(db):
+                if name == MEMORIES_TABLE:
+                    continue
                 db.drop_table(name)
         self._invalidate_source_cache()

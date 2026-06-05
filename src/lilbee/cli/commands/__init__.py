@@ -12,6 +12,7 @@ from lilbee.cli.app import app
 from lilbee.cli.commands import (
     agent_config,
     ingest_sync,
+    memory,
     meta,
     search_chat,
     servers,
@@ -25,11 +26,13 @@ from lilbee.cli.launchers import launch_app
 app.command()(search_chat.search)
 app.command(name="sync")(ingest_sync.sync_cmd)
 app.command()(ingest_sync.rebuild)
+app.command()(ingest_sync.index)
 app.command()(ingest_sync.add)
 app.command()(ingest_sync.chunks)
 app.command()(ingest_sync.remove)
 app.command()(search_chat.ask)
 app.command()(search_chat.chat)
+app.command(name="use-embedder")(search_chat.use_embedder)
 app.command()(meta.version)
 app.command(name="self-check")(setup_module.self_check_cmd)
 app.command(name="self-check-extras")(setup_module.self_check_extras_cmd)
@@ -48,5 +51,6 @@ app.add_typer(setup_module.setup_app, name="setup")
 app.add_typer(wiki.wiki_app, name="wiki")
 app.add_typer(agent_config.agent_config_app, name="agent-config")
 app.add_typer(launch_app, name="launch")
+app.add_typer(memory.memory_app, name="memory")
 
 __all__ = ["app"]

@@ -39,11 +39,17 @@ from lilbee.cli.tui.screens.chat_helpers import (
     build_add_progress_callback,
     build_sync_progress_callback,
     close_stream,
+    remember_from_input,
     remove_copied_files,
 )
 from lilbee.cli.tui.thread_safe import call_from_thread
 from lilbee.cli.tui.widgets.arg_hint import ArgHintLine
-from lilbee.cli.tui.widgets.autocomplete import CompletionOverlay, get_completions
+from lilbee.cli.tui.widgets.autocomplete import (
+    CompletionOverlay,
+    get_completions,
+    longest_common_prefix,
+    path_completion_prefix,
+)
 from lilbee.cli.tui.widgets.chat_input import ChatInput
 from lilbee.cli.tui.widgets.help_hint import HelpHint
 from lilbee.cli.tui.widgets.message import AssistantMessage, UserMessage
@@ -55,7 +61,7 @@ from lilbee.cli.tui.widgets.task_bar_controller import ProgressReporter
 from lilbee.core.config import cfg
 from lilbee.core.config.enums import ChatMode
 from lilbee.crawler import crawler_available, is_url, require_valid_crawl_url
-from lilbee.data.store import ChunkType, scope_to_chunk_type
+from lilbee.data.store import ChunkType, EmbeddingModelMismatchError, scope_to_chunk_type
 from lilbee.providers.model_ref import parse_model_ref
 from lilbee.retrieval.embedder import is_model_available
 from lilbee.retrieval.query import ChatMessage
@@ -216,7 +222,13 @@ class ChatScreen(Screen[None]):
         self._history: list[ChatMessage] = []
         self._history_lock = threading.Lock()
         self._insert_mode: bool = True
-        self._completing = False
+        # Count of programmatic input edits whose (async) Changed events should
+        # not re-filter the dropdown. The setter posts Changed after our flag
+        # window would close, so a counter consumed in the handler is used.
+        self._suppress_refresh = 0
+        # The user-typed text the open dropdown is filtering against. While
+        # navigating, the input holds a previewed candidate; Esc restores this.
+        self._completion_origin: str | None = None
         self._sync_active: bool = False
         self._input_history: list[str] = []
         self._history_index: int = -1
@@ -255,8 +267,10 @@ class ChatScreen(Screen[None]):
             ChatWelcome(id="chat-welcome"),
             id="chat-log",
         )
-        yield CompletionOverlay(id="completion-overlay")
         with BottomBars():
+            # Sits directly above the prompt area so it never covers the line
+            # you're typing (the input stays pinned to the bottom edge).
+            yield CompletionOverlay(id="completion-overlay")
             with PromptArea(id="chat-prompt-area"):
                 yield ScopeChip(id="scope-chip")
                 yield ChatInput(
@@ -309,17 +323,23 @@ class ChatScreen(Screen[None]):
     def _needs_setup(self) -> bool:
         """True when the setup wizard should run: fresh data dir or unresolved models.
 
-        Remote-prefixed refs skip the native probe since they resolve
-        through the SDK backend at call time.
+        Remote-prefixed refs (ollama/lm_studio/API) are validated against
+        current state instead of probed on disk: an ``ollama/`` ref whose
+        litellm extra is missing or whose server is down is unusable and
+        must route the user to setup, not be assumed live.
         """
         if not cfg.lancedb_dir.is_dir():
             log.debug("_needs_setup: lancedb_dir missing (%s)", cfg.lancedb_dir)
             return True
+        from lilbee.modelhub.model_manager import ValidationResult, validate_persisted_model
         from lilbee.providers.base import ProviderError
         from lilbee.providers.engine_params import resolve_model_path
 
         for label, model in (("chat", cfg.chat_model), ("embedding", cfg.embedding_model)):
             if parse_model_ref(model).is_remote:
+                if validate_persisted_model(model) != ValidationResult.OK:
+                    log.debug("_needs_setup: remote %s model %r not usable", label, model)
+                    return True
                 continue
             try:
                 resolve_model_path(model)
@@ -495,22 +515,27 @@ class ChatScreen(Screen[None]):
         return None
 
     def _accept_overlay_selection_on_enter(self) -> bool:
-        """Accept the highlight as ``<selection> ``; True if Enter was consumed."""
+        """Accept the highlighted completion on Enter; True if Enter was consumed.
+
+        If the input already holds the highlighted candidate (the user cycled
+        to it), Enter falls through to submit. Otherwise the candidate is
+        filled in and Enter is consumed so a second Enter submits.
+        """
         overlay = self._completion_overlay
         if not overlay.is_visible:
             return False
-        selection = overlay.get_current()
-        inp = self._chat_input
-        if not selection or selection == inp.value.rstrip():
+        display = overlay.get_current()
+        if display is None:
             overlay.hide()
+            self._completion_origin = None
             return False
-        cmd_prefix = inp.value.split()[0] + " " if " " in inp.value else ""
-        self._completing = True
-        inp.value = f"{cmd_prefix}{selection} "
-        self._completing = False
-        inp.action_end()
+        target = self._completion_value(display)
+        consumed = self._chat_input.value != target
+        if consumed:
+            self._set_input(target)
         overlay.hide()
-        return True
+        self._completion_origin = None
+        return consumed
 
     def _handle_slash(self, text: str) -> None:
         """Dispatch slash commands via the per-instance handler registry."""
@@ -1017,6 +1042,21 @@ class ChatScreen(Screen[None]):
 
         self.app.push_screen(SetupWizard(), self._on_setup_complete)
 
+    def _cmd_remember(self, args: str) -> None:
+        """Run /remember in a worker so embedding the text never blocks the UI."""
+        self._cmd_remember_worker(args)
+
+    @work(thread=True, name="chat_cmd_remember", exit_on_error=False)
+    def _cmd_remember_worker(self, raw: str) -> None:
+        """Store the memory off the UI thread; notify the outcome back on it."""
+        outcome = remember_from_input(raw)
+        call_from_thread(self, self.notify, outcome.message, severity=outcome.severity)
+
+    def _cmd_memories(self, _args: str) -> None:
+        from lilbee.cli.tui.screens.memories import MemoriesScreen
+
+        self.app.push_screen(MemoriesScreen())
+
     def _cmd_status(self, _args: str) -> None:
         self.app.switch_view("Status")
 
@@ -1082,7 +1122,13 @@ class ChatScreen(Screen[None]):
     def _stream_response(
         self, question: str, widget: AssistantMessage, chunk_type: ChunkType | None
     ) -> None:
-        """Stream LLM response in a background thread, coalescing UI updates."""
+        """Schedule the response stream on a background thread."""
+        self._do_stream_response(question, widget, chunk_type)
+
+    def _do_stream_response(
+        self, question: str, widget: AssistantMessage, chunk_type: ChunkType | None
+    ) -> None:
+        """Stream LLM response, coalescing UI updates. Worker thread."""
         response_parts: list[str] = []
         sources: list[str] = []
         stream: Any = None
@@ -1093,6 +1139,9 @@ class ChatScreen(Screen[None]):
                 question, history=history_snapshot, chunk_type=chunk_type
             )
             self._consume_stream(stream, widget, response_parts)
+        except EmbeddingModelMismatchError as exc:
+            with contextlib.suppress(Exception):
+                call_from_thread(self, self._on_embedding_mismatch, exc, question, widget)
         except Exception as exc:
             log.debug("Stream error", exc_info=True)
             with contextlib.suppress(Exception):
@@ -1100,6 +1149,81 @@ class ChatScreen(Screen[None]):
         finally:
             close_stream(stream)
             self._finalize_stream(widget, sources, response_parts)
+            call_from_thread(self, self._maybe_extract_memories, question, "".join(response_parts))
+
+    def _maybe_extract_memories(self, question: str, answer: str) -> None:
+        """Spawn auto-extraction for the finished turn, when enabled and idle.
+
+        Runs on the main thread (scheduled from the stream worker). Skips while
+        indexing so the extraction's embed call never contends with a sync.
+        """
+        from lilbee.app.memory import auto_extract_enabled
+
+        if not answer or not auto_extract_enabled() or self._indexing_active():
+            return
+        self._extract_memories_worker(question, answer)
+
+    def _indexing_active(self) -> bool:
+        """True while a sync/add task is running (embed worker is busy)."""
+        from lilbee.cli.tui.task_queue import TaskType
+
+        busy = {TaskType.SYNC.value, TaskType.ADD.value}
+        return any(task.task_type in busy for task in self._task_bar.queue.active_tasks)
+
+    @work(thread=True, name="chat_memory_extract", exit_on_error=False)
+    def _extract_memories_worker(self, question: str, answer: str) -> None:
+        """Extract durable memories off the UI thread; notify how many landed."""
+        from lilbee.app.memory import auto_extract
+
+        stored = auto_extract(question, answer)
+        if stored:
+            call_from_thread(self, self.notify, msg.MEMORY_AUTO_EXTRACTED.format(count=len(stored)))
+
+    def _on_embedding_mismatch(
+        self, exc: EmbeddingModelMismatchError, question: str, widget: AssistantMessage
+    ) -> None:
+        """Offer to adopt the index's embedder (same dim) or explain the rebuild path."""
+        if not exc.dims_match:
+            widget.append_content(msg.EMBED_ADOPT_REBUILD_NOTICE.format(dim=exc.persisted_dim))
+            return
+        widget.append_content(msg.EMBED_ADOPT_NOTICE.format(model=exc.persisted_model))
+        from lilbee.cli.tui.widgets.confirm_dialog import ConfirmDialog
+
+        self.app.push_screen(
+            ConfirmDialog(
+                msg.EMBED_ADOPT_CONFIRM_TITLE,
+                msg.EMBED_ADOPT_CONFIRM_MESSAGE.format(model=exc.persisted_model),
+            ),
+            lambda ok: self._on_adopt_confirm(ok, exc.persisted_model, question),
+        )
+
+    def _on_adopt_confirm(self, confirmed: bool | None, ref: str, question: str) -> None:
+        """Run the adopt+retry in a worker thread, or report the cancellation."""
+        if not confirmed:
+            self.notify(msg.EMBED_ADOPT_CANCELLED)
+            return
+        self.notify(msg.EMBED_ADOPTING.format(model=ref))
+        self._adopt_and_retry(ref, question)
+
+    @work(thread=True)
+    def _adopt_and_retry(self, ref: str, question: str) -> None:
+        """Schedule the adopt+retry on a worker thread (pull may be slow)."""
+        self._do_adopt_and_retry(ref, question)
+
+    def _do_adopt_and_retry(self, ref: str, question: str) -> None:
+        """Switch to embedder *ref* (downloading if needed), then re-ask. Worker thread."""
+        from lilbee.app.models import adopt_embedder
+
+        try:
+            adopt_embedder(ref)
+        except Exception as exc:  # surfaced to the user, never silently swallowed
+            log.debug("Embedder adopt failed", exc_info=True)
+            call_from_thread(
+                self, self.notify, msg.EMBED_ADOPT_FAILED.format(error=exc), severity="error"
+            )
+            return
+        call_from_thread(self, self.notify, msg.EMBED_ADOPTED.format(model=ref))
+        call_from_thread(self, self._send_message, question)
 
     def _consume_stream(
         self, stream: Any, widget: AssistantMessage, response_parts: list[str]
@@ -1224,6 +1348,12 @@ class ChatScreen(Screen[None]):
         """Esc dismisses the overlay if visible; otherwise drops into NORMAL mode."""
         overlay = self._completion_overlay
         if overlay.is_visible:
+            # Revert any previewed candidate back to what the user typed.
+            if self._completion_origin is not None and self._chat_input.value != (
+                self._completion_origin
+            ):
+                self._set_input(self._completion_origin)
+            self._completion_origin = None
             overlay.hide()
             return
         if isinstance(self.focused, (Select, ModelPickerButton)):
@@ -1370,12 +1500,15 @@ class ChatScreen(Screen[None]):
         chip.cycle_scope()
 
     def action_complete(self) -> None:
-        """Tab: cycle autocomplete, insert a literal tab, or advance focus.
+        """Tab: fill the shared prefix, then cycle matches (readline / vim style).
 
-        - Insert mode + chat input focused + completion overlay open:
-          cycle the next completion candidate.
-        - Insert mode + chat input focused + no completion: insert
-          ``\\t`` so users can type tab characters directly.
+        - Insert mode + chat input focused + dropdown closed but matches
+          exist: open it, fill the longest common prefix, else preview the
+          first match.
+        - Insert mode + chat input focused + dropdown open: fill any further
+          shared prefix, otherwise preview the next match.
+        - Insert mode + chat input focused + no matches: insert ``\\t`` so
+          users can type tab characters directly.
         - Normal mode or focus elsewhere: advance through the focus
           chain so Tab still walks every focusable widget.
         """
@@ -1383,75 +1516,100 @@ class ChatScreen(Screen[None]):
         if not self._insert_mode or not inp.has_focus:
             self.screen.focus_next()
             return
-        if self._cycle_completion_forward(inp):
+        overlay = self._completion_overlay
+        if not overlay.is_visible and not self._open_completions():
+            inp.insert("\t")
             return
-        inp.insert("\t")
+        if self._fill_common_prefix():
+            return
+        self._preview_next()
 
     def action_complete_next(self) -> None:
-        """Ctrl+N: highlight-only nav when open, else show + insert (vim ``<C-n>``)."""
-        inp = self._chat_input
-        if not inp.has_focus:
+        """Ctrl+N: preview the next match, opening the dropdown if it is closed (vim ``<C-n>``)."""
+        if not self._chat_input.has_focus:
             return
-        overlay = self._completion_overlay
-        if overlay.is_visible:
-            overlay.cycle_next()
-            return
-        self._cycle_completion_forward(inp)
-
-    def _cycle_completion_forward(self, inp: ChatInput) -> bool:
-        """Show or cycle forward through autocomplete; returns True if it acted."""
-        overlay = self._completion_overlay
-
-        if overlay.is_visible:
-            selection = overlay.cycle_next()
-            if selection:
-                cmd_prefix = inp.value.split()[0] + " " if " " in inp.value else ""
-                self._completing = True
-                inp.value = cmd_prefix + selection
-                self._completing = False
-                inp.action_end()
-            return True
-
-        options = get_completions(inp.value)
-        if options:
-            overlay.show_completions(options)
-            first = overlay.get_current()
-            self._completing = True
-            if first and " " in inp.value:
-                cmd_prefix = inp.value.split()[0] + " "
-                inp.value = cmd_prefix + first
-                inp.action_end()
-            elif first:
-                inp.value = first
-                inp.action_end()
-            self._completing = False
-            return True
-
-        return False
+        if self._completion_overlay.is_visible or self._open_completions():
+            self._preview_next()
 
     def action_complete_prev(self) -> None:
-        """Highlight-only nav when open, else show + insert (mirror of complete_next)."""
-        inp = self._chat_input
-        if not inp.has_focus:
+        """Ctrl+P: preview the previous match, opening the dropdown if it is closed."""
+        if not self._chat_input.has_focus:
             return
-        overlay = self._completion_overlay
-        if overlay.is_visible:
-            overlay.cycle_prev()
-            return
+        if self._completion_overlay.is_visible or self._open_completions():
+            self._preview_prev()
 
-        options = get_completions(inp.value)
-        if options:
-            overlay.show_completions(options)
-            last = overlay.get_current()
-            self._completing = True
-            if last and " " in inp.value:
-                cmd_prefix = inp.value.split()[0] + " "
-                inp.value = cmd_prefix + last
-                inp.action_end()
-            elif last:
-                inp.value = last
-                inp.action_end()
-            self._completing = False
+    def _preview_next(self) -> None:
+        """Preview the highlighted match if none is previewed yet, else step forward."""
+        overlay = self._completion_overlay
+        if self._chat_input.value == self._completion_origin:
+            display = overlay.get_current()
+        else:
+            display = overlay.cycle_next()
+        if display is not None:
+            self._preview_completion(display)
+
+    def _preview_prev(self) -> None:
+        """Step the highlight backward (wrapping to the last match) and preview it."""
+        display = self._completion_overlay.cycle_prev()
+        if display is not None:
+            self._preview_completion(display)
+
+    def _open_completions(self) -> bool:
+        """Show the dropdown for the current input and remember it as the origin."""
+        options = get_completions(self._chat_input.value)
+        if not options:
+            return False
+        self._completion_origin = self._chat_input.value
+        self._completion_overlay.show_completions(options)
+        return True
+
+    def _completion_value(self, display: str) -> str:
+        """Full input text produced by accepting ``display``, keeping the typed prefix.
+
+        Path completions are basenames, so the directory the user already
+        typed (``~/``, ``./``, absolute) is preserved and only the final
+        segment is replaced.
+        """
+        text = (
+            self._completion_origin
+            if self._completion_origin is not None
+            else (self._chat_input.value)
+        )
+        if " " not in text:
+            return display
+        cmd, _, partial = text.partition(" ")
+        if cmd.lower() == "/add":
+            head = path_completion_prefix(partial)
+            return f"{cmd} {head}{display}"
+        return f"{cmd} {display}"
+
+    def _set_input(self, value: str) -> None:
+        """Replace the input value without triggering the live-refresh of the dropdown."""
+        inp = self._chat_input
+        if inp.value == value:
+            return
+        # The setter posts Changed asynchronously; flag one event to ignore so
+        # the previewed candidate doesn't re-filter (and collapse) the dropdown.
+        # (The value setter already moves the cursor to the end.)
+        self._suppress_refresh += 1
+        inp.value = value
+
+    def _preview_completion(self, display: str) -> None:
+        """Write the highlighted candidate into the input, leaving the dropdown open."""
+        self._set_input(self._completion_value(display))
+
+    def _fill_common_prefix(self) -> bool:
+        """Extend the input to the longest prefix shared by all matches; True if it grew."""
+        overlay = self._completion_overlay
+        values = [self._completion_value(d) for d in overlay.options]
+        shared = longest_common_prefix(values)
+        if len(shared) <= len(self._chat_input.value):
+            return False
+        self._set_input(shared)
+        # Re-filter for the newly completed prefix (descends into a directory,
+        # narrows the model list, etc.).
+        self._refresh_completion_overlay()
+        return True
 
     def action_history_prev(self) -> None:
         """Up arrow: cycle the dropdown if visible, else recall previous history entry."""
@@ -1464,7 +1622,7 @@ class ChatScreen(Screen[None]):
         # (vim/Emacs-style) rather than recalling history.
         overlay = self._completion_overlay
         if overlay.is_visible:
-            overlay.cycle_prev()
+            self._preview_prev()
             return
         if not self._input_history:
             raise SkipAction()
@@ -1487,7 +1645,7 @@ class ChatScreen(Screen[None]):
         # When the completion dropdown is up, Down navigates the dropdown.
         overlay = self._completion_overlay
         if overlay.is_visible:
-            overlay.cycle_next()
+            self._preview_next()
             return
         if self._history_index == -1:
             raise SkipAction()
@@ -1502,33 +1660,33 @@ class ChatScreen(Screen[None]):
     @on(ChatInput.Changed, "#chat-input")
     def _on_chat_input_changed(self, event: ChatInput.Changed) -> None:
         """Refresh arg-hint and auto-show or hide the completion dropdown."""
-        if self._completing:
-            # Tab-completion is mid-flight; the cycler manages overlay state.
+        if self._suppress_refresh > 0:
+            # A programmatic edit (preview / accept / revert) is managing the
+            # overlay itself; consume one Changed and skip the live refresh.
+            self._suppress_refresh -= 1
             self._refresh_arg_hint()
             return
         self._refresh_completion_overlay()
         self._refresh_arg_hint()
 
     def _refresh_completion_overlay(self) -> None:
-        """Auto-show the dropdown for COMMAND discovery only; arg completions stay on Tab."""
+        """Live-filter the dropdown against the current input, in command and arg modes alike."""
         overlay = self._completion_overlay
         text = self._chat_input.value
-        # Once the user has typed a space, they are in arg-completion mode.
-        # Leave any Tab-triggered overlay alone and don't auto-pop one.
-        if " " in text:
-            return
         options = get_completions(text)
         if options:
+            self._completion_origin = text
             overlay.show_completions(options)
         elif overlay.is_visible:
             overlay.hide()
+            self._completion_origin = None
 
     def _refresh_arg_hint(self) -> None:
         """Push the current input value into the ArgHintLine."""
         self._arg_hint.update_for_input(self._chat_input.value)
 
     def refresh_model_bar(self) -> None:
-        """Re-scan installed models and refresh the dropdowns."""
+        """Re-scan installed models and refresh the model bar."""
         self.query_one("#model-bar", ModelBar).refresh_models()
 
     def action_vim_scroll_down(self) -> None:

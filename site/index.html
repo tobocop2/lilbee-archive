@@ -3,20 +3,37 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-G8F65BKGRJ"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-G8F65BKGRJ');
+</script>
+
 <title>lilbee: run local AI models and search your files, code, and the web</title>
-<meta name="description" content="Run local AI models on your own hardware and search your files, code, and the web, with answers that cite the source. Local-first, one install: CLI, TUI, and an MCP server.">
+<meta name="description" content="Run local AI models and search your files, code, and the web, with answers that cite the source. Works with your own models or your existing Ollama or LM Studio setup. Local-first, one install: CLI, TUI, and an MCP server.">
 <link rel="canonical" href="https://lilbee.sh/">
 
 <!-- Open Graph: rich link previews for any client that reads the protocol. -->
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="lilbee">
 <meta property="og:title" content="lilbee: run local AI models and search your files, code, and the web">
-<meta property="og:description" content="Run local AI models on your own hardware and search your files, code, and the web. Cited answers, local-first, one install. A web crawler and an MCP server built in.">
+<meta property="og:description" content="Run local AI models and search your files, code, and the web. Cited answers, local-first, one install. Works with your own models or your existing Ollama or LM Studio setup. A web crawler and an MCP server built in.">
 <meta property="og:url" content="https://lilbee.sh/">
 <meta property="og:image" content="https://raw.githubusercontent.com/tobocop2/lilbee/gh-pages/demos/tui-chat.png">
 <meta property="og:image:width" content="1400">
 <meta property="og:image:height" content="900">
 <meta property="og:image:alt" content="lilbee chat with cited answers from a Crown Victoria owner's manual, terminal UI on rose-pine theme">
+
+<!-- Twitter Card: rich previews on X and clients that read the Twitter tags. -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="lilbee: run local AI models and search your files, code, and the web">
+<meta name="twitter:description" content="Run local AI models and search your files, code, and the web. Cited answers, local-first, one install. Works with your own models or your existing Ollama or LM Studio setup.">
+<meta name="twitter:image" content="https://raw.githubusercontent.com/tobocop2/lilbee/gh-pages/demos/tui-chat.png">
+<meta name="twitter:image:alt" content="lilbee chat with cited answers from a Crown Victoria owner's manual, terminal UI on rose-pine theme">
 
 <!-- SoftwareApplication JSON-LD: helps Google attach a rich-result card and tells search engines what kind of thing this is. -->
 <script type="application/ld+json">
@@ -24,9 +41,10 @@
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
   "name": "lilbee",
-  "description": "lilbee runs local AI models on your own hardware and turns your files, code, and crawled websites into a searchable library you can talk to, with answers that cite the source. Local-first, with an MCP server for agent integration.",
+  "description": "lilbee runs local AI models on your own hardware and turns your files, code, and crawled websites into a searchable library you can talk to, with answers that cite the source. It works with its own models or your existing Ollama or LM Studio setup. Local-first, with an MCP server for agent integration.",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "macOS, Linux, Windows",
+  "keywords": "local AI, local LLM, RAG, retrieval-augmented generation, semantic search, cited answers, vector search, embeddings, llama.cpp, GGUF, MCP, Model Context Protocol, web crawler, self-hosted, privacy, Ollama, LM Studio",
   "url": "https://lilbee.sh/",
   "downloadUrl": "https://pypi.org/project/lilbee/",
   "license": "https://github.com/tobocop2/lilbee/blob/main/LICENSE",
@@ -77,108 +95,124 @@
     </section>
 
     <section>
-      <div class="label">install</div>
+      <h2 class="label">install</h2>
 
-      <div class="reel">
-        <div class="reel-watch"><a class="reel-cta" href="tutorial.html">▶&nbsp; watch the full tutorial reel</a></div>
-        <div class="reeltabs" role="tablist" aria-label="Demo reel">
-          <button type="button" class="reeltab" role="tab" id="reel-tab-setup"    aria-controls="reel-pane-setup"    aria-selected="true"  tabindex="0">first run</button>
-          <button type="button" class="reeltab" role="tab" id="reel-tab-tour"     aria-controls="reel-pane-tour"     aria-selected="false" tabindex="-1">tui-tour</button>
-          <button type="button" class="reeltab" role="tab" id="reel-tab-chat"     aria-controls="reel-pane-chat"     aria-selected="false" tabindex="-1">chat</button>
-          <button type="button" class="reeltab" role="tab" id="reel-tab-add"      aria-controls="reel-pane-add"      aria-selected="false" tabindex="-1">add files</button>
-          <button type="button" class="reeltab" role="tab" id="reel-tab-crawl"    aria-controls="reel-pane-crawl"    aria-selected="false" tabindex="-1">crawl</button>
-          <button type="button" class="reeltab" role="tab" id="reel-tab-catalog"  aria-controls="reel-pane-catalog"  aria-selected="false" tabindex="-1">catalog</button>
-          <button type="button" class="reeltab" role="tab" id="reel-tab-settings" aria-controls="reel-pane-settings" aria-selected="false" tabindex="-1">settings</button>
-          <button type="button" class="reeltab" role="tab" id="reel-tab-palette"  aria-controls="reel-pane-palette"  aria-selected="false" tabindex="-1">palette</button>
-          <div class="reeltabs-break" aria-hidden="true"></div>
-          <button type="button" class="reeltab" role="tab" id="reel-tab-agent"    aria-controls="reel-pane-agent"    aria-selected="false" tabindex="-1">agent: code</button>
-          <button type="button" class="reeltab" role="tab" id="reel-tab-pdf"      aria-controls="reel-pane-pdf"      aria-selected="false" tabindex="-1">agent: pdf</button>
-          <button type="button" class="reeltab" role="tab" id="reel-tab-index"    aria-controls="reel-pane-index"    aria-selected="false" tabindex="-1">agent: index</button>
-          <button type="button" class="reeltab" role="tab" id="reel-tab-godot"    aria-controls="reel-pane-godot"    aria-selected="false" tabindex="-1">agent: godot</button>
+      <div class="tutorial">
+        <div class="tutorial-watch"><a class="tutorial-cta" href="tutorial/">▶&nbsp; watch the full tutorial reel</a></div>
+        <div class="tutorialtabs" role="tablist" aria-label="Tutorial reel">
+          <button type="button" class="tutorialtab" role="tab" id="tutorial-tab-setup"    aria-controls="tutorial-pane-setup"    aria-selected="true"  tabindex="0">first run</button>
+          <button type="button" class="tutorialtab" role="tab" id="tutorial-tab-tour"     aria-controls="tutorial-pane-tour"     aria-selected="false" tabindex="-1">tui-tour</button>
+          <button type="button" class="tutorialtab" role="tab" id="tutorial-tab-chat"     aria-controls="tutorial-pane-chat"     aria-selected="false" tabindex="-1">chat</button>
+          <button type="button" class="tutorialtab" role="tab" id="tutorial-tab-add"      aria-controls="tutorial-pane-add"      aria-selected="false" tabindex="-1">add files</button>
+          <button type="button" class="tutorialtab" role="tab" id="tutorial-tab-crawl"    aria-controls="tutorial-pane-crawl"    aria-selected="false" tabindex="-1">crawl</button>
+          <button type="button" class="tutorialtab" role="tab" id="tutorial-tab-catalog"  aria-controls="tutorial-pane-catalog"  aria-selected="false" tabindex="-1">catalog</button>
+          <button type="button" class="tutorialtab" role="tab" id="tutorial-tab-ollama"   aria-controls="tutorial-pane-ollama"   aria-selected="false" tabindex="-1">ollama</button>
+          <button type="button" class="tutorialtab" role="tab" id="tutorial-tab-lmstudio" aria-controls="tutorial-pane-lmstudio" aria-selected="false" tabindex="-1">lm studio</button>
+          <button type="button" class="tutorialtab" role="tab" id="tutorial-tab-settings" aria-controls="tutorial-pane-settings" aria-selected="false" tabindex="-1">settings</button>
+          <button type="button" class="tutorialtab" role="tab" id="tutorial-tab-palette"  aria-controls="tutorial-pane-palette"  aria-selected="false" tabindex="-1">palette</button>
+          <div class="tutorialtabs-break" aria-hidden="true"></div>
+          <button type="button" class="tutorialtab" role="tab" id="tutorial-tab-agent"    aria-controls="tutorial-pane-agent"    aria-selected="false" tabindex="-1">agent: code</button>
+          <button type="button" class="tutorialtab" role="tab" id="tutorial-tab-pdf"      aria-controls="tutorial-pane-pdf"      aria-selected="false" tabindex="-1">agent: pdf</button>
+          <button type="button" class="tutorialtab" role="tab" id="tutorial-tab-index"    aria-controls="tutorial-pane-index"    aria-selected="false" tabindex="-1">agent: index</button>
+          <button type="button" class="tutorialtab" role="tab" id="tutorial-tab-godot"    aria-controls="tutorial-pane-godot"    aria-selected="false" tabindex="-1">agent: godot</button>
         </div>
 
-        <div class="reelpane" role="tabpanel" id="reel-pane-setup" aria-labelledby="reel-tab-setup">
-          <div class="reel-frame">
-            <img alt="lilbee first-run setup wizard pulling models" src="https://raw.githubusercontent.com/tobocop2/lilbee/gh-pages/demos/tui-setup.gif">
+        <div class="tutorialpane" role="tabpanel" id="tutorial-pane-setup" aria-labelledby="tutorial-tab-setup">
+          <div class="tutorial-clip">
+            <video src="https://raw.githubusercontent.com/tobocop2/lilbee/gh-pages/demos/tui-setup.mp4" controls loop muted autoplay playsinline preload="metadata"></video>
           </div>
-          <p class="reel-caption">First run: a setup wizard pulls a chat model and an embedder, then drops you straight into chat.</p>
+          <p class="tutorial-caption">First run: a setup wizard pulls a chat model and an embedder, then drops you straight into chat.</p>
         </div>
 
-        <div class="reelpane" role="tabpanel" id="reel-pane-tour" aria-labelledby="reel-tab-tour" hidden>
-          <div class="reel-frame">
-            <img alt="60-second sweep through every lilbee TUI screen" src="https://raw.githubusercontent.com/tobocop2/lilbee/gh-pages/demos/tui-tour.gif">
+        <div class="tutorialpane" role="tabpanel" id="tutorial-pane-tour" aria-labelledby="tutorial-tab-tour" hidden>
+          <div class="tutorial-clip">
+            <video src="https://raw.githubusercontent.com/tobocop2/lilbee/gh-pages/demos/tui-tour.mp4" controls loop muted autoplay playsinline preload="metadata"></video>
           </div>
-          <p class="reel-caption">One-minute sweep through every screen: setup wizard, chat with citations, model catalog, settings, task center, palette.</p>
+          <p class="tutorial-caption">One-minute sweep through every screen: setup wizard, chat with citations, model catalog, settings, task center, palette.</p>
         </div>
 
-        <div class="reelpane" role="tabpanel" id="reel-pane-chat" aria-labelledby="reel-tab-chat" hidden>
-          <div class="reel-frame">
-            <img alt="lilbee chat with cited answers" src="https://raw.githubusercontent.com/tobocop2/lilbee/gh-pages/demos/tui-chat.gif">
+        <div class="tutorialpane" role="tabpanel" id="tutorial-pane-chat" aria-labelledby="tutorial-tab-chat" hidden>
+          <div class="tutorial-clip">
+            <video src="https://raw.githubusercontent.com/tobocop2/lilbee/gh-pages/demos/tui-chat.mp4" controls loop muted autoplay playsinline preload="metadata"></video>
           </div>
-          <p class="reel-caption">Streaming replies with clickable citations back to the file and line.</p>
+          <p class="tutorial-caption">Streaming replies with clickable citations back to the file and line.</p>
         </div>
 
-        <div class="reelpane" role="tabpanel" id="reel-pane-add" aria-labelledby="reel-tab-add" hidden>
-          <div class="reel-frame">
-            <img alt="lilbee add documents and Task Center" src="https://raw.githubusercontent.com/tobocop2/lilbee/gh-pages/demos/tui-add.gif">
+        <div class="tutorialpane" role="tabpanel" id="tutorial-pane-add" aria-labelledby="tutorial-tab-add" hidden>
+          <div class="tutorial-clip">
+            <video src="https://raw.githubusercontent.com/tobocop2/lilbee/gh-pages/demos/tui-add.mp4" controls loop muted autoplay playsinline preload="metadata"></video>
           </div>
-          <p class="reel-caption"><code>/add &lt;path&gt;</code> copies a file or folder into your library and indexes it; ask questions while it syncs.</p>
+          <p class="tutorial-caption"><code>/add &lt;path&gt;</code> copies a file or folder into your library and indexes it; ask questions while it syncs.</p>
         </div>
 
-        <div class="reelpane" role="tabpanel" id="reel-pane-crawl" aria-labelledby="reel-tab-crawl" hidden>
-          <div class="reel-frame">
-            <img alt="lilbee crawl a Wikipedia page, then ask a cited question" src="https://raw.githubusercontent.com/tobocop2/lilbee/gh-pages/demos/tui-crawl.gif">
+        <div class="tutorialpane" role="tabpanel" id="tutorial-pane-crawl" aria-labelledby="tutorial-tab-crawl" hidden>
+          <div class="tutorial-clip">
+            <video src="https://raw.githubusercontent.com/tobocop2/lilbee/gh-pages/demos/tui-crawl.mp4" controls loop muted autoplay playsinline preload="metadata"></video>
           </div>
-          <p class="reel-caption"><code>/crawl &lt;url&gt;</code> fetches a page into your library, then answers against it with a page citation.</p>
+          <p class="tutorial-caption"><code>/crawl &lt;url&gt;</code> fetches a page into your library, then answers against it with a page citation.</p>
         </div>
 
-        <div class="reelpane" role="tabpanel" id="reel-pane-catalog" aria-labelledby="reel-tab-catalog" hidden>
-          <div class="reel-frame">
-            <img alt="lilbee model catalog with Hugging Face search" src="https://raw.githubusercontent.com/tobocop2/lilbee/gh-pages/demos/tui-catalog.gif">
+        <div class="tutorialpane" role="tabpanel" id="tutorial-pane-catalog" aria-labelledby="tutorial-tab-catalog" hidden>
+          <div class="tutorial-clip">
+            <video src="https://raw.githubusercontent.com/tobocop2/lilbee/gh-pages/demos/tui-catalog.mp4" controls loop muted autoplay playsinline preload="metadata"></video>
           </div>
-          <p class="reel-caption">Browse models on Hugging Face Hub, pull one live, switch a role without leaving the terminal.</p>
+          <p class="tutorial-caption">Browse models on Hugging Face Hub, pull one live, switch a role without leaving the terminal.</p>
         </div>
 
-        <div class="reelpane" role="tabpanel" id="reel-pane-settings" aria-labelledby="reel-tab-settings" hidden>
-          <div class="reel-frame">
-            <img alt="lilbee settings screen with tabbed sections" src="https://raw.githubusercontent.com/tobocop2/lilbee/gh-pages/demos/tui-settings.gif">
+        <div class="tutorialpane" role="tabpanel" id="tutorial-pane-ollama" aria-labelledby="tutorial-tab-ollama" hidden>
+          <div class="tutorial-clip">
+            <video src="https://raw.githubusercontent.com/tobocop2/lilbee/gh-pages/demos/tui-ollama-document.mp4" controls loop muted autoplay playsinline preload="metadata"></video>
           </div>
-          <p class="reel-caption">50+ settings: search depth, reranking, sampling, parsers. Sane defaults; tune the moment you want to.</p>
+          <p class="tutorial-caption">Already running Ollama? Point lilbee at it. The catalog labels the model "ollama"; index the Crown Victoria manual on camera, then get a cited answer.</p>
         </div>
 
-        <div class="reelpane" role="tabpanel" id="reel-pane-agent" aria-labelledby="reel-tab-agent" hidden>
-          <div class="reel-frame">
-            <img alt="an agent indexes lilbee's own source through lilbee's MCP server, then answers questions about how lilbee works with file:line citations" src="https://raw.githubusercontent.com/tobocop2/lilbee/gh-pages/demos/mcp-code.gif">
+        <div class="tutorialpane" role="tabpanel" id="tutorial-pane-lmstudio" aria-labelledby="tutorial-tab-lmstudio" hidden>
+          <div class="tutorial-clip">
+            <video src="https://raw.githubusercontent.com/tobocop2/lilbee/gh-pages/demos/tui-lmstudio-document.mp4" controls loop muted autoplay playsinline preload="metadata"></video>
           </div>
-          <p class="reel-caption">lilbee talking to lilbee. An agent indexes <em>lilbee's own source</em> through <em>lilbee's MCP server</em>, then answers questions about how lilbee works, with file:line citations.</p>
+          <p class="tutorial-caption">Same flow with LM Studio: lms ls shows the model, the catalog labels it "lm studio", and lilbee answers from the manual with a citation.</p>
         </div>
 
-        <div class="reelpane" role="tabpanel" id="reel-pane-pdf" aria-labelledby="reel-tab-pdf" hidden>
-          <div class="reel-frame">
-            <img alt="an agent reads a Crown Victoria owner's manual through lilbee's MCP server" src="https://raw.githubusercontent.com/tobocop2/lilbee/gh-pages/demos/mcp-manual.gif">
+        <div class="tutorialpane" role="tabpanel" id="tutorial-pane-settings" aria-labelledby="tutorial-tab-settings" hidden>
+          <div class="tutorial-clip">
+            <video src="https://raw.githubusercontent.com/tobocop2/lilbee/gh-pages/demos/tui-settings.mp4" controls loop muted autoplay playsinline preload="metadata"></video>
           </div>
-          <p class="reel-caption">Same setup, talking to a PDF: the agent asks lilbee to index <code>cv-manual.pdf</code>, then builds a fuse table with page citations.</p>
+          <p class="tutorial-caption">50+ settings: search depth, reranking, sampling, parsers. Sane defaults; tune the moment you want to.</p>
         </div>
 
-        <div class="reelpane" role="tabpanel" id="reel-pane-palette" aria-labelledby="reel-tab-palette" hidden>
-          <div class="reel-frame">
-            <img alt="lilbee command palette and slash-command catalog" src="https://raw.githubusercontent.com/tobocop2/lilbee/gh-pages/demos/tui-palette.gif">
+        <div class="tutorialpane" role="tabpanel" id="tutorial-pane-agent" aria-labelledby="tutorial-tab-agent" hidden>
+          <div class="tutorial-clip">
+            <video src="https://raw.githubusercontent.com/tobocop2/lilbee/gh-pages/demos/mcp-code.mp4" controls loop muted autoplay playsinline preload="metadata"></video>
           </div>
-          <p class="reel-caption"><kbd>Ctrl+P</kbd> opens the command palette; <code>/help</code> opens the slash-command catalog. Every action is discoverable.</p>
+          <p class="tutorial-caption">lilbee talking to lilbee. An agent indexes <em>lilbee's own source</em> through <em>lilbee's MCP server</em>, then answers questions about how lilbee works, with file:line citations.</p>
         </div>
 
-        <div class="reelpane" role="tabpanel" id="reel-pane-index" aria-labelledby="reel-tab-index" hidden>
-          <div class="reel-frame">
-            <img alt="an agent indexes a Godot 4 pathfinding subset live, then cites methods" src="https://raw.githubusercontent.com/tobocop2/lilbee/gh-pages/demos/mcp-godot-search.gif">
+        <div class="tutorialpane" role="tabpanel" id="tutorial-pane-pdf" aria-labelledby="tutorial-tab-pdf" hidden>
+          <div class="tutorial-clip">
+            <video src="https://raw.githubusercontent.com/tobocop2/lilbee/gh-pages/demos/mcp-manual.mp4" controls loop muted autoplay playsinline preload="metadata"></video>
           </div>
-          <p class="reel-caption">Agent indexes a small Godot 4 pathfinding subset live, then cites methods method-by-method against the local files.</p>
+          <p class="tutorial-caption">Same setup, talking to a PDF: the agent asks lilbee to index <code>cv-manual.pdf</code>, then builds a fuse table with page citations.</p>
         </div>
 
-        <div class="reelpane" role="tabpanel" id="reel-pane-godot" aria-labelledby="reel-tab-godot" hidden>
-          <div class="reel-frame">
-            <img alt="cited codegen against the full Godot class reference" src="https://raw.githubusercontent.com/tobocop2/lilbee/gh-pages/demos/mcp-godot.gif">
+        <div class="tutorialpane" role="tabpanel" id="tutorial-pane-palette" aria-labelledby="tutorial-tab-palette" hidden>
+          <div class="tutorial-clip">
+            <video src="https://raw.githubusercontent.com/tobocop2/lilbee/gh-pages/demos/tui-palette.mp4" controls loop muted autoplay playsinline preload="metadata"></video>
           </div>
-          <p class="reel-caption">Same shape against the full Godot class reference (810 XMLs, pre-indexed). Cited codegen for a procedural level generator.</p>
+          <p class="tutorial-caption"><kbd>Ctrl+P</kbd> opens the command palette; <code>/help</code> opens the slash-command catalog. Every action is discoverable.</p>
+        </div>
+
+        <div class="tutorialpane" role="tabpanel" id="tutorial-pane-index" aria-labelledby="tutorial-tab-index" hidden>
+          <div class="tutorial-clip">
+            <video src="https://raw.githubusercontent.com/tobocop2/lilbee/gh-pages/demos/mcp-godot-search.mp4" controls loop muted autoplay playsinline preload="metadata"></video>
+          </div>
+          <p class="tutorial-caption">Agent indexes a small Godot 4 pathfinding subset live, then cites methods method-by-method against the local files.</p>
+        </div>
+
+        <div class="tutorialpane" role="tabpanel" id="tutorial-pane-godot" aria-labelledby="tutorial-tab-godot" hidden>
+          <div class="tutorial-clip">
+            <video src="https://raw.githubusercontent.com/tobocop2/lilbee/gh-pages/demos/mcp-godot.mp4" controls loop muted autoplay playsinline preload="metadata"></video>
+          </div>
+          <p class="tutorial-caption">Same shape against the full Godot class reference (810 XMLs, pre-indexed). Cited codegen for a procedural level generator.</p>
         </div>
 
       </div>
@@ -360,12 +394,12 @@
     </section>
 
     <section>
-      <div class="label">your hardware, put to work</div>
+      <h2 class="label">your hardware, put to work</h2>
       <p class="lede">Your machine can do a lot more than you're using it for. lilbee runs local models on hardware you already own. No token budgets, no provider to depend on; the cloud's there when you want it.</p>
     </section>
 
     <section>
-      <div class="label">one program</div>
+      <h2 class="label">one program</h2>
       <p class="lede">It's the model, the search through your files, and the chat, all in one program. Run it when you want, close it when you're done; by default nothing's left running in the background, no container to keep alive. Want something long-running? Use the command line and manage it yourself.</p>
       <div class="shape">
         <div class="shape-box many">
@@ -395,18 +429,18 @@
     </section>
 
     <section>
-      <div class="label">what it does</div>
+      <h2 class="label">what it does</h2>
       <div class="caps">
         <div class="cap">
-          <h3>runs the models itself</h3>
+          <h3>runs local AI models itself</h3>
           <p>Browse Hugging Face, pull a model, assign it to a role. lilbee runs it on Metal, Vulkan, or CUDA; you never point it at a server you set up.</p>
         </div>
         <div class="cap">
-          <h3>a real retrieval pipeline</h3>
-          <p>A real search engine, built on published research: it ranks results by how well they answer you, so the best passage comes back first. 50+ settings to tune.</p>
+          <h3>a real retrieval pipeline (RAG)</h3>
+          <p>A real search engine, built on published research: it ranks results by how well they answer you, so the best match comes back first. 50+ settings to tune.</p>
         </div>
         <div class="cap">
-          <h3>feed it your files</h3>
+          <h3>search your files, code, and PDFs</h3>
           <p>Point it at a folder: your man pages, a pile of PDFs, your notes, a codebase. Then talk to them. Every answer tells you the file and line. Each project gets its own library, so nothing bleeds across.</p>
         </div>
         <div class="cap">
@@ -414,11 +448,11 @@
           <p>Prose and code get chunked differently, so each piece keeps its meaning instead of getting cut mid-thought. A search engine is only as good as the chunks underneath it.</p>
         </div>
         <div class="cap">
-          <h3>pair it with your agent</h3>
+          <h3>MCP server for your coding agent</h3>
           <p>Pair it with your favorite agent over MCP. It reads the real code and docs before it answers, cites the file and line, and says "I don't know" instead of guessing.</p>
         </div>
         <div class="cap">
-          <h3>websites, offline</h3>
+          <h3>crawl websites for offline search</h3>
           <p>Crawl a docs site or a wiki, turn it into markdown, and keep it. Search and chat with it offline, even after it goes down.</p>
         </div>
         <div class="cap">
@@ -429,12 +463,12 @@
     </section>
 
     <section>
-      <div class="label">a note on answers</div>
+      <h2 class="label">a note on answers</h2>
       <p class="note">Answers are only as good as the model you pick and the settings behind it. lilbee ships sane defaults, but exposes <strong>50+ settings</strong> you can tune: search, the answers, how your files get read.</p>
     </section>
 
     <section>
-      <div class="label">go deeper</div>
+      <h2 class="label">go deeper</h2>
       <div class="links">
         <a href="https://github.com/tobocop2/lilbee"><span class="num">[1]</span><span>GitHub</span><span class="dots">·······································</span><span class="desc">source</span></a>
         <a href="https://pypi.org/project/lilbee/"><span class="num">[2]</span><span>PyPI</span><span class="dots">·······································</span><span class="desc">package</span></a>
@@ -449,13 +483,13 @@
     </section>
 
     <section>
-      <div class="label">built on</div>
+      <h2 class="label">built on</h2>
       <p class="deps-flat">
+        <a href="https://github.com/kreuzberg-dev/kreuzberg">Kreuzberg</a> ·
         <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a> ·
         <a href="https://github.com/abetlen/llama-cpp-python">llama-cpp-python</a> ·
         <a href="https://huggingface.co">Hugging Face Hub</a> ·
         <a href="https://github.com/huggingface/huggingface_hub">huggingface_hub</a> ·
-        <a href="https://github.com/kreuzberg-dev/kreuzberg">Kreuzberg</a> ·
         <a href="https://lancedb.com">LanceDB</a> ·
         <a href="https://tree-sitter.github.io/tree-sitter/">tree-sitter</a> ·
         <a href="https://github.com/Goldziher/tree-sitter-language-pack">tree-sitter-language-pack</a> ·

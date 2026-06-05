@@ -41,10 +41,6 @@ def _patch_chat_setup():
             return_value=False,
         ),
         mock.patch(
-            "lilbee.cli.tui.widgets.model_bar._classify_installed_models",
-            return_value=([], []),
-        ),
-        mock.patch(
             "lilbee.cli.tui.widgets.model_bar.ModelBar.on_mount",
         ),
     ):
@@ -160,6 +156,7 @@ class TestRemoteClassification:
     @mock.patch("httpx.get")
     def test_classifies_models(self, mock_get: mock.MagicMock) -> None:
         from lilbee.modelhub.model_manager import classify_remote_models
+        from lilbee.providers.local_servers import OLLAMA
 
         mock_get.return_value = mock.MagicMock(
             status_code=200,
@@ -178,7 +175,7 @@ class TestRemoteClassification:
             },
         )
         mock_get.return_value.raise_for_status = lambda: None
-        result = classify_remote_models()
+        result = classify_remote_models("http://localhost:11434", OLLAMA)
         by_task = {m.task: m.name for m in result}
         assert by_task["embedding"] == "nomic-embed-text:latest"
         assert by_task["chat"] == "qwen3:8b"

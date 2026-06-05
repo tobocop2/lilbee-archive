@@ -35,7 +35,9 @@ class SettingGroup(StrEnum):
     RETRIEVAL = "Retrieval"
     INGEST = "Ingest"
     WIKI = "Wiki"
+    MEMORY = "Memory"
     CRAWLING = "Crawling"
+    LOCAL_SERVERS = "Local-Servers"
     API_KEYS = "API-Keys"
     SYSTEM = "System"
     DISPLAY = "Display"
@@ -457,6 +459,50 @@ SETTINGS_MAP: dict[str, SettingDef] = {
         group=SettingGroup.WIKI,
         help_text="Mutual-kNN neighborhood size for the clusterer (0 = auto)",
     ),
+    "memory_enabled": SettingDef(
+        bool,
+        nullable=False,
+        group=SettingGroup.MEMORY,
+        help_text="Master switch for long-term chat memory (off by default)",
+    ),
+    "memory_auto_extract": SettingDef(
+        bool,
+        nullable=False,
+        group=SettingGroup.MEMORY,
+        help_text="Auto-save durable facts and preferences from each TUI turn (needs memory on)",
+    ),
+    "memory_top_k": SettingDef(
+        int,
+        nullable=False,
+        group=SettingGroup.MEMORY,
+        help_text="Maximum facts recalled into context per turn",
+    ),
+    "memory_max_distance": SettingDef(
+        float,
+        nullable=False,
+        group=SettingGroup.MEMORY,
+        help_text="Recall cutoff distance, 0.0-1.0 (lower is stricter)",
+    ),
+    "memory_token_budget": SettingDef(
+        int,
+        nullable=False,
+        group=SettingGroup.MEMORY,
+        help_text="Token cap on the recalled-memory block added to the prompt",
+    ),
+    "memory_max_per_owner": SettingDef(
+        int,
+        nullable=False,
+        group=SettingGroup.MEMORY,
+        help_text="Soft cap before the oldest memories are evicted",
+        hidden=True,
+    ),
+    "memory_dedup_distance": SettingDef(
+        float,
+        nullable=False,
+        group=SettingGroup.MEMORY,
+        help_text="Near-duplicate distance below which a new memory updates the old",
+        hidden=True,
+    ),
     "crawl_max_depth": SettingDef(
         int,
         nullable=True,
@@ -665,6 +711,12 @@ SETTINGS_MAP: dict[str, SettingDef] = {
         group=SettingGroup.RETRIEVAL,
         help_text="Candidate-pool multiplier over top_k before reranking",
     ),
+    "ann_index_threshold": SettingDef(
+        int,
+        nullable=False,
+        group=SettingGroup.RETRIEVAL,
+        help_text="Chunk count to start building an ANN vector index (0 = always flat search)",
+    ),
     "max_distance": SettingDef(
         float,
         nullable=False,
@@ -798,11 +850,17 @@ SETTINGS_MAP: dict[str, SettingDef] = {
             "or remote (external OpenAI-compatible endpoint)"
         ),
     ),
-    "remote_base_url": SettingDef(
+    "ollama_base_url": SettingDef(
         str,
         nullable=False,
-        group=SettingGroup.API_KEYS,
-        help_text="OpenAI-compatible base URL (Ollama default: http://localhost:11434)",
+        group=SettingGroup.LOCAL_SERVERS,
+        help_text="Ollama server URL (blank uses http://localhost:11434)",
+    ),
+    "lm_studio_base_url": SettingDef(
+        str,
+        nullable=False,
+        group=SettingGroup.LOCAL_SERVERS,
+        help_text="LM Studio server URL (blank uses http://localhost:1234/v1)",
     ),
     "llama_server_path": SettingDef(
         str,

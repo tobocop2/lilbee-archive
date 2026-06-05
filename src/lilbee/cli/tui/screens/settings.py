@@ -52,6 +52,7 @@ from lilbee.cli.tui.screens.settings_widgets import (
     title_content,
 )
 from lilbee.cli.tui.widgets.list_text_area import ListTextArea
+from lilbee.cli.tui.widgets.model_pick import apply_model_pick
 from lilbee.core.config import DEFAULT_CRAWL_EXCLUDE_PATTERNS, cfg
 from lilbee.providers.roles import MODEL_FIELD_TO_ROLE
 
@@ -484,57 +485,17 @@ class SettingsScreen(Screen[None]):
         )
 
     def _on_model_picker_dismissed(self, key: str, ref: str | None) -> None:
-        """Persist the picker selection and refresh the button label.
+        """Persist the picker selection, refresh the button, and reload the role's server."""
+        apply_model_pick(self, key=key, ref=ref, on_done=lambda: self._after_model_pick(key))
 
-        ``ref is None`` means the user cancelled (Esc); leave the field
-        alone. ``ref == ""`` for a nullable field means the user picked
-        the explicit "disabled" row; clear the field. Any other value is
-        a real model ref. Embedding-model swaps against a populated store
-        route through a confirm modal first so the user is not surprised
-        by the rebuild requirement.
-        """
-        if ref is None:
-            return
-        defn = SETTINGS_MAP.get(key)
-        if not ref and (defn is None or not defn.nullable):
-            return
-        if key == "embedding_model" and ref:
-            self._maybe_confirm_embedding_swap(key, ref)
-            return
-        self._apply_picker_choice(key, ref, True)
-
-    @work(thread=True, name="settings_has_chunks_check", exit_on_error=False)
-    def _maybe_confirm_embedding_swap(self, key: str, ref: str) -> None:
-        """Run ``store.has_chunks`` off the UI thread; confirm-modal if non-empty."""
-        from lilbee.cli.tui.thread_safe import call_from_thread
-
-        if get_services().store.has_chunks():
-            call_from_thread(self, self._push_embed_swap_confirm, key, ref)
-        else:
-            call_from_thread(self, self._apply_picker_choice, key, ref, True)
-
-    def _push_embed_swap_confirm(self, key: str, ref: str) -> None:
-        """Push the embed-swap confirm dialog if the screen is still mounted."""
-        if not self.is_mounted:
-            return
-        from lilbee.cli.tui.widgets.confirm_dialog import ConfirmDialog
-
-        self.app.push_screen(
-            ConfirmDialog(msg.EMBED_SWAP_CONFIRM_TITLE, msg.EMBED_SWAP_CONFIRM_MESSAGE),
-            lambda confirmed: self._apply_picker_choice(key, ref, confirmed),
-        )
-
-    def _apply_picker_choice(self, key: str, ref: str, confirmed: bool | None) -> None:
-        """Commit the picker choice or notify cancel; ``confirmed`` mirrors ConfirmDialog."""
-        if not confirmed:
-            self.app.notify(msg.EMBED_SWAP_CANCELLED)
-            return
-        from lilbee.cli.tui.app import apply_active_model
-
-        apply_active_model(self.app, key, ref)
+    def _after_model_pick(self, key: str) -> None:
+        """Refresh the picker button and reload the role's fleet server after a swap."""
+        self._refresh_picker_button(key)
         role = MODEL_FIELD_TO_ROLE.get(key)
         if role is not None:
             get_services().reload_role(role)
+
+    def _refresh_picker_button(self, key: str) -> None:
         try:
             button = self.query_one(f"#{MODEL_PICKER_BUTTON_PREFIX}{key}", Button)
             button.label = model_picker_label(key)

@@ -21,9 +21,18 @@ CMD_CRAWL_USAGE = "Usage: /crawl <url> [--depth N] [--max-pages N]"
 CMD_CRAWL_STARTED = "Crawling {url}..."
 CMD_CRAWL_PAGE = "Crawling [{current}/{total}]: {url}"
 CMD_CRAWL_PAGE_INDETERMINATE = "Crawling... ({current} pages so far): {url}"
+MODEL_REASON_DEFAULT = "it could not be resolved"
 MODEL_FALLBACK_NOTICE = (
-    "{label} model {original!r} is unavailable; using {effective!r} for this session. "
+    "{label} model {original!r} is unavailable ({reason}); using {effective!r} for this session. "
     "Pick a different model or restore the original to clear this notice."
+)
+MODEL_FALLBACK_FAILED = (
+    "{label} model {original!r} is unavailable ({reason}) and the fallback {effective!r} was "
+    "rejected; keeping {original!r}. Pick a working {label} model in settings."
+)
+MODEL_UNUSABLE_OPENING_SETUP = (
+    "{label} model {original!r} is unavailable ({reason}) and nothing is installed to fall back "
+    "to. Opening setup so you can pick one."
 )
 CMD_CRAWL_SUCCESS = "Crawled {count} page(s) from {url}"
 CMD_CRAWL_FAILED = "Crawl failed: {error}"
@@ -69,6 +78,10 @@ CMD_DELETE_NO_DOCS = "No documents indexed"
 CMD_DELETE_USAGE = "Documents: {names}\nUsage: /delete <filename>"
 CMD_DELETE_NOT_FOUND = "Not found: {name}"
 CMD_DELETE_SUCCESS = "Deleted {name}"
+CMD_REMEMBER_USAGE = "Usage: /remember <text>  (prefix with 'pref:' for a preference)"
+CMD_REMEMBER_SUCCESS = "Remembered ({kind})."
+CMD_REMEMBER_NO_EMBED = "Set an embedding model before saving memories."
+MEMORY_AUTO_EXTRACTED = "Noted {count} memory(s) to review in /memories"
 CMD_RESET_SUCCESS = "Knowledge base reset"
 CMD_RESET_PARTIAL = "Knowledge base reset ({skipped} item(s) could not be deleted)"
 CMD_RESET_FAILED = "Reset failed: {error}"
@@ -201,6 +214,21 @@ EMBED_SWAP_CONFIRM_MESSAGE = (
 EMBED_SWAP_CANCELLED = "Embedding model swap cancelled"
 MODEL_ASSIGN_REJECTED = "Model not set: {error}"
 
+EMBED_ADOPT_CONFIRM_TITLE = "Use this index's embedder?"
+EMBED_ADOPT_CONFIRM_MESSAGE = (
+    "This index was built with embedding model '{model}'. Use it for this vault? "
+    "lilbee will download it if needed and switch to it. No rebuild is required."
+)
+EMBED_ADOPT_NOTICE = "This index was built with a different embedder ('{model}')."
+EMBED_ADOPT_REBUILD_NOTICE = (
+    "This index needs a {dim}-dim embedder. Rebuild it (press S to sync, or run "
+    "`lilbee rebuild`) to use your current model."
+)
+EMBED_ADOPTING = "Switching to embedder '{model}'..."
+EMBED_ADOPTED = "Now embedding with '{model}'."
+EMBED_ADOPT_FAILED = "Could not adopt embedder: {error}"
+EMBED_ADOPT_CANCELLED = "Kept the current embedder."
+
 SETTINGS_RESET_ALL_LABEL = "Reset all defaults"
 SETTINGS_RESET_ALL_CONFIRM_TITLE = "Reset all settings?"
 SETTINGS_RESET_ALL_CONFIRM_MESSAGE = (
@@ -278,6 +306,22 @@ WIKI_DRAFTS_REJECT_FAILED = "Reject failed: {error}"
 WIKI_DRAFTS_PUBLISHED_YES = "yes"
 WIKI_DRAFTS_PUBLISHED_NO = "no"
 WIKI_DRAFTS_SEARCH_PLACEHOLDER = "Filter drafts..."
+MEMORIES_EMPTY = "No memories stored. Use /remember to add one."
+MEMORIES_DISABLED = "Memory is off. Enable it with /set memory_enabled true."
+MEMORIES_LOAD_FAILED = "Failed to load memories: {error}"
+MEMORIES_COLUMN_KIND = "Kind"
+MEMORIES_COLUMN_SHARED = "Shared"
+MEMORIES_COLUMN_TEXT = "Memory"
+MEMORIES_FLAG_YES = "yes"
+MEMORIES_FLAG_NO = "no"
+MEMORIES_SEARCH_PLACEHOLDER = "Filter memories..."
+MEMORIES_DELETE_CONFIRM_TITLE = "Delete memory?"
+MEMORIES_DELETE_CONFIRM_MESSAGE = "Delete this memory? This cannot be undone."
+MEMORIES_DELETED = "Deleted memory"
+MEMORIES_DELETE_FAILED = "Delete failed: {error}"
+MEMORIES_SHARED_ON = "Shared with agents"
+MEMORIES_SHARED_OFF = "No longer shared with agents"
+MEMORIES_FLAG_FAILED = "Update failed: {error}"
 # Re-export the shared heading map with string keys so callers can
 # look up by raw ``page_type`` string without coercion.
 WIKI_TYPE_HEADINGS: dict[str, str] = {
@@ -393,5 +437,20 @@ MODEL_PICKER_CHAT_TOOLTIP = "Model used to answer your questions. Click to pick 
 MODEL_PICKER_EMBED_TOOLTIP = (
     "Model used to vectorize search queries (Search mode). Click to pick a different one."
 )
+MODEL_PICKER_VISION_TOOLTIP = (
+    "Optional. Model used to read scanned PDFs and images. Click to pick one or browse the catalog."
+)
+MODEL_PICKER_RERANK_TOOLTIP = (
+    "Optional. Model used to sharpen search results. Click to pick one or browse the catalog."
+)
+MODEL_PICKER_BROWSE_CATALOG = "Browse catalog to download..."
 MODEL_PICKER_SEARCH_PLACEHOLDER = "Search models..."
+
+# Model bar (chat-screen, below the input)
+MODEL_BAR_CHAT_LABEL = "Chat"
+MODEL_BAR_EMBED_LABEL = "Embed"
+MODEL_BAR_VISION_LABEL = "Vision"
+MODEL_BAR_RERANK_LABEL = "Rerank"
+MODEL_BAR_DISABLED = "disabled"
+MODEL_PICKER_TURN_OFF = "Turn off this model"
 MODEL_PICKER_HINT = "Enter to pick · Esc to cancel · / to search"

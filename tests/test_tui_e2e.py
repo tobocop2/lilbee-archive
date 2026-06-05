@@ -147,7 +147,8 @@ class TestModelClassification:
 
     def test_registry_based_classification(self):
         """Models classified by registry manifest task field."""
-        from lilbee.cli.tui.widgets.model_bar import _classify_installed_models
+        from lilbee.catalog.types import ModelTask
+        from lilbee.cli.tui.widgets.model_bar import classify_installed_models_full
 
         # Mock registry manifests by task. Each carries a canonical
         # ``hf_repo/filename`` ref since that's the new identity.
@@ -176,7 +177,8 @@ class TestModelClassification:
                 mock.patch("lilbee.cli.tui.widgets.model_bar._collect_remote_models"),
                 mock.patch("lilbee.cli.tui.widgets.model_bar._collect_api_models"),
             ):
-                chat, embed = _classify_installed_models()
+                _buckets = classify_installed_models_full()
+                chat, embed = _buckets[ModelTask.CHAT], _buckets[ModelTask.EMBEDDING]
 
         chat_refs = [o.ref for o in chat]
         embed_refs = [o.ref for o in embed]
@@ -185,7 +187,8 @@ class TestModelClassification:
 
     def test_no_loose_gguf_scanning(self):
         """Loose ``.gguf`` files NOT in registry must NOT appear in dropdowns."""
-        from lilbee.cli.tui.widgets.model_bar import _classify_installed_models
+        from lilbee.catalog.types import ModelTask
+        from lilbee.cli.tui.widgets.model_bar import classify_installed_models_full
 
         # Create loose files that should be ignored
         (cfg.models_dir / "loose-chat.gguf").touch()
@@ -196,7 +199,8 @@ class TestModelClassification:
             mock.patch("lilbee.cli.tui.widgets.model_bar._collect_remote_models"),
             mock.patch("lilbee.cli.tui.widgets.model_bar._collect_api_models"),
         ):
-            chat, embed = _classify_installed_models()
+            _buckets = classify_installed_models_full()
+            chat, embed = _buckets[ModelTask.CHAT], _buckets[ModelTask.EMBEDDING]
 
         all_models = chat + embed
         assert "loose-chat.gguf" not in all_models
@@ -216,7 +220,7 @@ class TestModelSwitchSafety:
             screen = app.screen
             screen.streaming = True
 
-            chat_btn = screen.query_one("#chat-model-button", ModelPickerButton)
+            chat_btn = screen.query_one("#model-pick-chat", ModelPickerButton)
             ref = "ollama/new-model:latest"
             with (
                 mock.patch("lilbee.app.settings.persistent_settings.update_values"),
@@ -439,9 +443,9 @@ def _mock_catalog_deps():
 
 
 def _mock_remote_models():
-    """Mock classify_remote_models to return empty list."""
+    """Mock classify_all_remote_models to return empty list."""
     return mock.patch(
-        "lilbee.cli.tui.screens.catalog.classify_remote_models",
+        "lilbee.cli.tui.screens.catalog.classify_all_remote_models",
         return_value=[],
     )
 
@@ -3243,11 +3247,15 @@ class TestChatEmbeddingReadyCoverage:
         set_services(mock_svc)
         try:
             app = ChatTestApp()
-            async with app.run_test(size=(120, 40)) as pilot:
-                await pilot.pause()
-                screen = app.screen
-                assert isinstance(screen, ChatScreen)
-                assert screen._embedding_ready() is True
+            # Keep the ChatScreen mounted; wizard routing is covered separately.
+            with mock.patch(
+                "lilbee.cli.tui.screens.chat.ChatScreen._needs_setup", return_value=False
+            ):
+                async with app.run_test(size=(120, 40)) as pilot:
+                    await pilot.pause()
+                    screen = app.screen
+                    assert isinstance(screen, ChatScreen)
+                    assert screen._embedding_ready() is True
         finally:
             set_services(None)
             cfg.embedding_model = snapshot_embed
@@ -3266,13 +3274,17 @@ class TestChatEmbeddingReadyCoverage:
         set_services(mock_svc)
         try:
             app = ChatTestApp()
-            async with app.run_test(size=(120, 40)) as pilot:
-                await pilot.pause()
-                screen = app.screen
-                assert isinstance(screen, ChatScreen)
-                with mock.patch("lilbee.providers.engine_params.resolve_model_path") as resolve:
-                    assert screen._embedding_ready() is False
-                    resolve.assert_not_called()
+            # Keep the ChatScreen mounted; wizard routing is covered separately.
+            with mock.patch(
+                "lilbee.cli.tui.screens.chat.ChatScreen._needs_setup", return_value=False
+            ):
+                async with app.run_test(size=(120, 40)) as pilot:
+                    await pilot.pause()
+                    screen = app.screen
+                    assert isinstance(screen, ChatScreen)
+                    with mock.patch("lilbee.providers.engine_params.resolve_model_path") as resolve:
+                        assert screen._embedding_ready() is False
+                        resolve.assert_not_called()
         finally:
             set_services(None)
             cfg.embedding_model = snapshot_embed

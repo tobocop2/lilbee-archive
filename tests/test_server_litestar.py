@@ -432,47 +432,59 @@ class TestStreamSingleFlightGate:
         with contextlib.suppress(Exception):
             client.post("/api/ask/stream", json={"question": "boom"})
         assert chat_gate().in_flight == 0
-
-
 class TestEmbeddingMismatchSurfacing:
-    """A stale index (embedder changed without a rebuild) surfaces as an actionable
+    """A downloaded index built with a different embedder surfaces as an actionable
     error, not a generic 503/stream failure. The store raises
-    EmbeddingModelMismatchError; routes translate it to 409 and the streaming path
-    emits an SSE error carrying the INDEX_EMBEDDER_MISMATCH code."""
+    EmbeddingModelMismatchError; non-stream routes translate it to a 409 whose
+    ``extra`` carries the index's embedder so the client can offer to adopt it,
+    and the streaming path emits an SSE error carrying the INDEX_EMBEDDER_MISMATCH
+    code plus that embedder in ``detail``."""
 
-    MESSAGE = "built with model A (dim 768), now configured for B (dim 384). Run `lilbee rebuild`."
+    PERSISTED = "orgA/repoA/modelA.gguf"
 
-    def _mismatch(self):
+    def _mismatch(self, *, dims_match: bool = True):
         from lilbee.data.store import EmbeddingModelMismatchError
 
-        return EmbeddingModelMismatchError(self.MESSAGE)
+        return EmbeddingModelMismatchError(
+            persisted_model=self.PERSISTED,
+            persisted_dim=768,
+            current_model="orgB/repoB/modelB.gguf",
+            current_dim=768 if dims_match else 384,
+        )
 
     @mock.patch("lilbee.server.handlers.search", new_callable=AsyncMock)
-    def test_search_route_returns_409(self, mock_search, client):
+    def test_search_route_returns_structured_409(self, mock_search, client):
         mock_search.side_effect = self._mismatch()
         resp = client.get("/api/search", params={"q": "x"})
         assert resp.status_code == 409
-        assert "rebuild" in resp.json()["detail"].lower()
+        body = resp.json()
+        assert self.PERSISTED in body["detail"]
+        assert body["extra"]["persisted_model"] == self.PERSISTED
+        assert body["extra"]["adoptable"] is True
 
     @mock.patch("lilbee.server.handlers.ask", new_callable=AsyncMock)
-    def test_ask_route_returns_409(self, mock_ask, client):
+    def test_ask_route_returns_structured_409(self, mock_ask, client):
         mock_ask.side_effect = self._mismatch()
         resp = client.post("/api/ask", json={"question": "q"})
         assert resp.status_code == 409
-        assert "rebuild" in resp.json()["detail"].lower()
+        assert resp.json()["extra"]["persisted_model"] == self.PERSISTED
 
     @mock.patch("lilbee.server.handlers.chat", new_callable=AsyncMock)
-    def test_chat_route_returns_409(self, mock_chat, client):
+    def test_chat_route_returns_structured_409(self, mock_chat, client):
         mock_chat.side_effect = self._mismatch()
         resp = client.post("/api/chat", json={"question": "q", "history": []})
         assert resp.status_code == 409
-        assert "rebuild" in resp.json()["detail"].lower()
+        assert resp.json()["extra"]["persisted_model"] == self.PERSISTED
 
-    def _collect_error_payloads(self, events):
-        return [json.loads(e.split("data: ", 1)[1]) for e in events if e.startswith("event: error")]
+    @mock.patch("lilbee.server.handlers.search", new_callable=AsyncMock)
+    def test_dim_incompatible_index_is_not_adoptable(self, mock_search, client):
+        mock_search.side_effect = self._mismatch(dims_match=False)
+        resp = client.get("/api/search", params={"q": "x"})
+        assert resp.status_code == 409
+        assert resp.json()["extra"]["adoptable"] is False
 
-    def test_chat_stream_emits_index_embedder_mismatch_code(self):
-        """chat_stream (_stream_chat_response) emits a coded SSE error on mismatch."""
+    def test_stream_emits_mismatch_code_and_embedder(self):
+        """_stream_rag_response catches the mismatch and emits a coded SSE error."""
         from lilbee.runtime.progress import SseErrorCode
         from lilbee.server.handlers import rag
 
@@ -481,25 +493,13 @@ class TestEmbeddingMismatchSurfacing:
                 mock_services.return_value.searcher.build_rag_context.side_effect = self._mismatch()
                 return [event async for event in rag.chat_stream(question="q", history=[])]
 
-        payloads = self._collect_error_payloads(asyncio.run(_collect()))
+        events = asyncio.run(_collect())
+        payloads = [
+            json.loads(e.split("data: ", 1)[1]) for e in events if e.startswith("event: error")
+        ]
         assert len(payloads) == 1
         assert payloads[0]["code"] == SseErrorCode.INDEX_EMBEDDER_MISMATCH
-        assert "rebuild" in payloads[0]["message"].lower()
-
-    def test_ask_stream_emits_index_embedder_mismatch_code(self):
-        """ask_stream (_stream_rag_response) emits a coded SSE error on mismatch."""
-        from lilbee.runtime.progress import SseErrorCode
-        from lilbee.server.handlers import rag
-
-        async def _collect():
-            with mock.patch.object(rag, "get_services") as mock_services:
-                mock_services.return_value.searcher.build_rag_context.side_effect = self._mismatch()
-                return [event async for event in rag.ask_stream(question="q")]
-
-        payloads = self._collect_error_payloads(asyncio.run(_collect()))
-        assert len(payloads) == 1
-        assert payloads[0]["code"] == SseErrorCode.INDEX_EMBEDDER_MISMATCH
-        assert "rebuild" in payloads[0]["message"].lower()
+        assert payloads[0]["detail"] == self.PERSISTED
 
 
 class TestSyncRoute:

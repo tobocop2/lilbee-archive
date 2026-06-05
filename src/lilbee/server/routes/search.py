@@ -30,6 +30,25 @@ from lilbee.server.models import (
 _SERVICE_UNAVAILABLE_STATUS = 503
 
 
+def _embedding_mismatch_http(exc: EmbeddingModelMismatchError) -> HTTPException:
+    """Translate an embedder mismatch into a 409 carrying the facts to adopt.
+
+    The client renders its own confirm-to-adopt prompt from ``extra`` and, on
+    confirm, sets the embedder via ``PUT /api/models/embedding`` then retries.
+    The server never switches embedder unprompted.
+    """
+    return HTTPException(
+        status_code=409,
+        detail=str(exc),
+        extra={
+            "persisted_model": exc.persisted_model,
+            "persisted_dim": exc.persisted_dim,
+            "current_model": exc.current_model,
+            "adoptable": exc.dims_match,
+        },
+    )
+
+
 def _raise_chat_http_error(exc: Exception) -> NoReturn:
     """Translate a chat/RAG failure into the Litestar HTTP envelope.
 
@@ -87,7 +106,7 @@ async def search_route(
     try:
         return await handlers.search(q, top_k=top_k, chunk_type=chunk_type)
     except EmbeddingModelMismatchError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise _embedding_mismatch_http(exc) from exc
     except ValueError as exc:
         raise ValidationException(str(exc)) from exc
     except Exception as exc:
@@ -105,6 +124,10 @@ async def ask_route(data: AskRequest) -> AskResponse:
             options=data.options,
             chunk_type=data.chunk_type,
         )
+    except EmbeddingModelMismatchError as exc:
+        raise _embedding_mismatch_http(exc) from exc
+    except ValueError as exc:
+        raise ValidationException(str(exc)) from exc
     except Exception as exc:
         _raise_chat_http_error(exc)
     finally:
@@ -143,6 +166,8 @@ async def chat_route(data: ChatRequest) -> AskResponse:
             options=data.options,
             chunk_type=data.chunk_type,
         )
+    except EmbeddingModelMismatchError as exc:
+        raise _embedding_mismatch_http(exc) from exc
     except Exception as exc:
         _raise_chat_http_error(exc)
     finally:

@@ -103,10 +103,6 @@ def _patch_chat_setup():
             "lilbee.cli.tui.screens.chat.ChatScreen._embedding_ready",
             return_value=False,
         ),
-        patch(
-            "lilbee.cli.tui.widgets.model_bar._classify_installed_models",
-            return_value=([], []),
-        ),
         patch.object(ModelBar, "_scan_models"),
     ):
         yield
@@ -2470,7 +2466,7 @@ async def test_app_switch_to_catalog():
     async with app.run_test(size=(120, 40)) as _pilot:
         with (
             patch("lilbee.catalog.get_catalog", return_value=_EMPTY_CATALOG),
-            patch("lilbee.modelhub.model_manager.classify_remote_models", return_value=[]),
+            patch("lilbee.modelhub.model_manager.classify_all_remote_models", return_value=[]),
         ):
             app.switch_view("Catalog")
             await _pilot.pause()
@@ -2689,7 +2685,7 @@ async def test_chat_slash_model_no_arg():
     async with app.run_test(size=(120, 40)) as _pilot:
         with (
             patch("lilbee.catalog.get_catalog", return_value=_EMPTY_CATALOG),
-            patch("lilbee.modelhub.model_manager.classify_remote_models", return_value=[]),
+            patch("lilbee.modelhub.model_manager.classify_all_remote_models", return_value=[]),
         ):
             app.screen._handle_slash("/model")
             await _pilot.pause()
@@ -3055,7 +3051,7 @@ async def test_chat_slash_models():
     async with app.run_test(size=(120, 40)) as _pilot:
         with (
             patch("lilbee.catalog.get_catalog", return_value=_EMPTY_CATALOG),
-            patch("lilbee.modelhub.model_manager.classify_remote_models", return_value=[]),
+            patch("lilbee.modelhub.model_manager.classify_all_remote_models", return_value=[]),
         ):
             app.screen._handle_slash("/models")
             await _pilot.pause()
@@ -3247,15 +3243,15 @@ async def test_chat_refresh_model_bar():
 
 async def test_model_bar_refreshes_on_chat_model_signal():
     """bb-q6zh: external activations (Catalog, /set chat_model, settings UI) publish on
-    settings_changed_signal; the bottom model-bar button must repaint without a
+    settings_changed_signal; the rail's chat picker must repaint without a
     manual refresh."""
     app = ChatTestApp()
     async with app.run_test(size=(120, 40)) as _pilot:
         from lilbee.cli.tui.widgets.model_bar import ModelBar, ModelPickerButton
 
         bar = app.screen.query_one("#model-bar", ModelBar)
-        chat_btn = bar.query_one("#chat-model-button", ModelPickerButton)
-        with patch.object(chat_btn, "_refresh") as mock_refresh:
+        chat_btn = bar.query_one("#model-pick-chat", ModelPickerButton)
+        with patch.object(chat_btn, "repaint") as mock_refresh:
             app.settings_changed_signal.publish(("chat_model", "qwen3:0.6b"))
             await _pilot.pause()
             mock_refresh.assert_called()
@@ -3268,8 +3264,8 @@ async def test_model_bar_refreshes_on_embedding_model_signal():
         from lilbee.cli.tui.widgets.model_bar import ModelBar, ModelPickerButton
 
         bar = app.screen.query_one("#model-bar", ModelBar)
-        embed_btn = bar.query_one("#embed-model-button", ModelPickerButton)
-        with patch.object(embed_btn, "_refresh") as mock_refresh:
+        embed_btn = bar.query_one("#model-pick-embed", ModelPickerButton)
+        with patch.object(embed_btn, "repaint") as mock_refresh:
             app.settings_changed_signal.publish(("embedding_model", "nomic-embed-text:latest"))
             await _pilot.pause()
             mock_refresh.assert_called()
@@ -3314,7 +3310,7 @@ async def test_chat_slash_m():
     async with app.run_test(size=(120, 40)) as _pilot:
         with (
             patch("lilbee.catalog.get_catalog", return_value=_EMPTY_CATALOG),
-            patch("lilbee.modelhub.model_manager.classify_remote_models", return_value=[]),
+            patch("lilbee.modelhub.model_manager.classify_all_remote_models", return_value=[]),
         ):
             app.screen._handle_slash("/m")
             await _pilot.pause()
@@ -3353,7 +3349,8 @@ async def test_chat_action_complete_no_options_inserts_tab():
         assert inp.value == "hello\t"
 
 
-async def test_chat_action_complete_with_options():
+async def test_chat_action_complete_fills_prefix():
+    """Tab completes the longest shared prefix straight to a unique match."""
     app = ChatTestApp()
     async with app.run_test(size=(120, 40)) as _pilot:
         inp = app.screen.query_one("#chat-input", ChatInput)
@@ -3366,7 +3363,7 @@ async def test_chat_action_complete_with_options():
             assert inp.value == "/help"
 
 
-async def test_chat_action_complete_with_space():
+async def test_chat_action_complete_with_space_fills_prefix():
     app = ChatTestApp()
     async with app.run_test(size=(120, 40)) as _pilot:
         inp = app.screen.query_one("#chat-input", ChatInput)
@@ -3379,30 +3376,41 @@ async def test_chat_action_complete_with_space():
             assert inp.value == "/model qwen:latest"
 
 
-async def test_chat_action_complete_cycle():
+async def test_chat_action_complete_previews_then_steps():
+    """With no further shared prefix, Tab previews the first match and Ctrl+N steps on."""
     app = ChatTestApp()
     async with app.run_test(size=(120, 40)) as _pilot:
-        from lilbee.cli.tui.widgets.autocomplete import CompletionOverlay
-
         inp = app.screen.query_one("#chat-input", ChatInput)
-        overlay = app.screen.query_one("#completion-overlay", CompletionOverlay)
+        inp.value = "/model "
+        with patch(
+            "lilbee.cli.tui.screens.chat.get_completions",
+            return_value=["qwen:8b", "mistral:7b"],
+        ):
+            app.screen.action_complete()
+            assert inp.value == "/model qwen:8b"
+            app.screen.action_complete_next()
+            assert inp.value == "/model mistral:7b"
 
+
+async def test_chat_preview_same_single_match_is_noop():
+    """Re-previewing the only match (Ctrl+N wrapping to it) leaves the input unchanged."""
+    app = ChatTestApp()
+    async with app.run_test(size=(120, 40)) as _pilot:
+        inp = app.screen.query_one("#chat-input", ChatInput)
         inp.value = "/he"
         with patch(
             "lilbee.cli.tui.screens.chat.get_completions",
             return_value=["/help"],
         ):
-            app.screen.action_complete()
-
-        if overlay.is_visible:
-            inp.value = "/model "
-            with patch.object(overlay, "cycle_next", return_value="qwen:latest"):
-                app.screen.action_complete()
-                assert "qwen:latest" in inp.value
+            app.screen.action_complete_next()
+            assert inp.value == "/help"
+            # Wrapping back onto the same single match is a no-op set.
+            app.screen.action_complete_next()
+            assert inp.value == "/help"
 
 
 async def test_chat_tab_completes_alias_prefix():
-    """Pressing Tab on '/cat' expands to the /catalog alias."""
+    """Pressing Tab on '/cat' completes the /catalog alias."""
     app = ChatTestApp()
     async with app.run_test(size=(120, 40)) as pilot:
         inp = app.screen.query_one("#chat-input", ChatInput)
@@ -3416,19 +3424,63 @@ async def test_chat_tab_completes_alias_prefix():
         assert inp.value == "/catalog"
 
 
-async def test_chat_action_complete_cycle_no_selection():
+async def test_chat_accept_on_enter_with_no_highlight_hides():
+    """Enter on a visible overlay whose highlight is None hides it and falls through to submit."""
     app = ChatTestApp()
     async with app.run_test(size=(120, 40)) as _pilot:
         from lilbee.cli.tui.widgets.autocomplete import CompletionOverlay
 
         overlay = app.screen.query_one("#completion-overlay", CompletionOverlay)
         overlay.show_completions(["a", "b"])
+        with patch.object(overlay, "get_current", return_value=None):
+            consumed = app.screen._accept_overlay_selection_on_enter()
+        assert consumed is False
+        assert not overlay.is_visible
 
-        inp = app.screen.query_one("#chat-input", ChatInput)
-        original = inp.value
-        with patch.object(overlay, "cycle_next", return_value=None):
-            app.screen.action_complete()
-            assert inp.value == original
+
+async def test_chat_completion_value_preserves_windows_directory():
+    """Accepting an /add path completion keeps the typed Windows directory.
+
+    Regression for the windows-latest integration failure: a backslash path
+    must rebuild to the same full path so Enter falls through to submit
+    instead of being consumed as a completion-accept.
+    """
+    app = ChatTestApp()
+    async with app.run_test(size=(120, 40)) as _pilot:
+        app.screen._completion_origin = r"/add C:\Users\me\docs\quantum_test.md"
+        assert (
+            app.screen._completion_value("quantum_test.md")
+            == r"/add C:\Users\me\docs\quantum_test.md"
+        )
+
+
+async def test_chat_completion_value_preserves_posix_directory():
+    """Accepting an /add path completion keeps the typed POSIX directory."""
+    app = ChatTestApp()
+    async with app.run_test(size=(120, 40)) as _pilot:
+        app.screen._completion_origin = "/add /var/tmp/docs/quantum_test.md"
+        assert (
+            app.screen._completion_value("quantum_test.md") == "/add /var/tmp/docs/quantum_test.md"
+        )
+
+
+async def test_chat_accept_on_enter_falls_through_for_full_windows_path():
+    """A fully-typed backslash /add path must not be consumed by the overlay.
+
+    The highlighted completion (basename) rebuilds to the same full path, so
+    Enter falls through to submit the command rather than re-filling the input.
+    """
+    app = ChatTestApp()
+    async with app.run_test(size=(120, 40)) as _pilot:
+        from lilbee.cli.tui.widgets.autocomplete import CompletionOverlay
+
+        full_path = r"/add C:\Users\me\docs\quantum_test.md"
+        app.screen._set_input(full_path)
+        overlay = app.screen.query_one("#completion-overlay", CompletionOverlay)
+        app.screen._completion_origin = full_path
+        overlay.show_completions(["quantum_test.md"])
+        consumed = app.screen._accept_overlay_selection_on_enter()
+        assert consumed is False
 
 
 async def test_chat_send_message():
@@ -3890,7 +3942,7 @@ def _patch_catalog():
     """Context manager to patch catalog screen's network calls."""
     return (
         patch("lilbee.cli.tui.screens.catalog.get_catalog", return_value=_EMPTY_CATALOG),
-        patch("lilbee.cli.tui.screens.catalog.classify_remote_models", return_value=[]),
+        patch("lilbee.cli.tui.screens.catalog.classify_all_remote_models", return_value=[]),
         patch(
             "lilbee.cli.tui.screens.catalog.get_services",
             return_value=MagicMock(
@@ -5536,6 +5588,35 @@ async def test_chat_stream_response_error_worker(mock_svc):
         assert app.screen.streaming is False
 
 
+async def test_chat_stream_embedder_mismatch_adopt_worker(mock_svc):
+    """A downloaded-index mismatch routes to the adopt prompt; confirming runs
+    the real adopt+retry worker instead of failing the stream."""
+    from lilbee.data.store import EmbeddingModelMismatchError
+
+    exc = EmbeddingModelMismatchError(
+        persisted_model="orgA/repoA/built.gguf",
+        persisted_dim=768,
+        current_model="orgB/repoB/configured.gguf",
+        current_dim=768,
+    )
+    app = ChatTestApp()
+    async with app.run_test(size=(120, 40)) as _pilot:
+        chat = app.screen  # the mismatch pushes a ConfirmDialog on top later
+        mock_svc.searcher.ask_stream = MagicMock(side_effect=exc)
+        inp = chat.query_one("#chat-input", ChatInput)
+        inp.value = "test"
+        await _pilot.press("enter")
+        await _pilot.pause()
+        while chat.workers:
+            await _pilot.pause()
+        with patch("lilbee.app.models.adopt_embedder") as adopt:
+            chat._on_adopt_confirm(True, "orgA/repoA/built.gguf", "test")
+            await _pilot.pause()
+            while chat.workers:
+                await _pilot.pause()
+        adopt.assert_called_once_with("orgA/repoA/built.gguf")
+
+
 async def test_chat_stream_response_reasoning_worker(mock_svc):
     """Cover the reasoning token branch in _stream_response."""
     from dataclasses import dataclass
@@ -6020,7 +6101,7 @@ def test_check_embedding_model_remote_available():
         manager = get_services().model_manager
         assert not manager.is_installed(cfg.embedding_model)
 
-        remote_embeds = detect_remote_embedding_models(cfg.remote_base_url)
+        remote_embeds = detect_remote_embedding_models()
         assert cfg.embedding_model in remote_embeds
 
 
@@ -6038,7 +6119,7 @@ def test_check_embedding_model_not_found():
         manager = get_services().model_manager
         assert not manager.is_installed(cfg.embedding_model)
 
-        remote_embeds = detect_remote_embedding_models(cfg.remote_base_url)
+        remote_embeds = detect_remote_embedding_models()
         assert cfg.embedding_model not in remote_embeds
 
 
@@ -6281,7 +6362,7 @@ async def test_catalog_delete_installed_model_confirmation():
     async with app.run_test(size=(120, 40)) as _pilot:
         with (
             patch("lilbee.cli.tui.screens.catalog.get_catalog", return_value=_EMPTY_CATALOG),
-            patch("lilbee.modelhub.model_manager.classify_remote_models", return_value=[]),
+            patch("lilbee.modelhub.model_manager.classify_all_remote_models", return_value=[]),
             patch("lilbee.cli.tui.screens.catalog.get_services") as mock_mgr,
         ):
             mock_mgr.return_value.model_manager.is_installed.return_value = True
@@ -6317,7 +6398,7 @@ async def test_catalog_action_show_info_toasts_with_no_highlight():
     async with app.run_test(size=(120, 40)) as _pilot:
         with (
             patch("lilbee.cli.tui.screens.catalog.get_catalog", return_value=_EMPTY_CATALOG),
-            patch("lilbee.modelhub.model_manager.classify_remote_models", return_value=[]),
+            patch("lilbee.modelhub.model_manager.classify_all_remote_models", return_value=[]),
         ):
             screen = CatalogScreen()
             app.push_screen(screen)
@@ -6342,7 +6423,7 @@ async def test_catalog_action_show_info_pushes_modal_for_local_row():
     async with app.run_test(size=(120, 40)) as _pilot:
         with (
             patch("lilbee.cli.tui.screens.catalog.get_catalog", return_value=_EMPTY_CATALOG),
-            patch("lilbee.modelhub.model_manager.classify_remote_models", return_value=[]),
+            patch("lilbee.modelhub.model_manager.classify_all_remote_models", return_value=[]),
         ):
             screen = CatalogScreen()
             app.push_screen(screen)
@@ -6381,7 +6462,7 @@ async def test_catalog_delete_with_no_highlight_warns():
     async with app.run_test(size=(120, 40)) as _pilot:
         with (
             patch("lilbee.cli.tui.screens.catalog.get_catalog", return_value=_EMPTY_CATALOG),
-            patch("lilbee.modelhub.model_manager.classify_remote_models", return_value=[]),
+            patch("lilbee.modelhub.model_manager.classify_all_remote_models", return_value=[]),
         ):
             screen = CatalogScreen()
             app.push_screen(screen)
@@ -6426,7 +6507,7 @@ async def test_catalog_grid_renders_hf_overflow_cta():
     async with app.run_test(size=(120, 40)) as _pilot:
         with (
             patch("lilbee.cli.tui.screens.catalog.get_catalog", return_value=_EMPTY_CATALOG),
-            patch("lilbee.modelhub.model_manager.classify_remote_models", return_value=[]),
+            patch("lilbee.modelhub.model_manager.classify_all_remote_models", return_value=[]),
         ):
             screen = CatalogScreen()
             app.push_screen(screen)
@@ -6458,7 +6539,7 @@ async def test_catalog_delete_second_press_confirms():
     async with app.run_test(size=(120, 40)) as _pilot:
         with (
             patch("lilbee.cli.tui.screens.catalog.get_catalog", return_value=_EMPTY_CATALOG),
-            patch("lilbee.modelhub.model_manager.classify_remote_models", return_value=[]),
+            patch("lilbee.modelhub.model_manager.classify_all_remote_models", return_value=[]),
             patch("lilbee.cli.tui.screens.catalog.get_services") as mock_mgr,
         ):
             mock_mgr.return_value.model_manager.is_installed.return_value = True
@@ -6522,7 +6603,7 @@ async def test_catalog_delete_accepts_bare_hf_repo_row():
                 downloaded_at=datetime.now(UTC).isoformat(),
             ),
         )
-        mgr = ModelManager(models_dir, "http://localhost:11434")
+        mgr = ModelManager(models_dir)
         services = MagicMock()
         services.model_manager = mgr
 
@@ -6531,7 +6612,7 @@ async def test_catalog_delete_accepts_bare_hf_repo_row():
             with (
                 patch("lilbee.cli.tui.screens.catalog.get_catalog", return_value=_EMPTY_CATALOG),
                 patch(
-                    "lilbee.modelhub.model_manager.classify_remote_models",
+                    "lilbee.modelhub.model_manager.classify_all_remote_models",
                     return_value=[],
                 ),
                 patch(
@@ -6565,7 +6646,7 @@ async def test_catalog_resolve_delete_ref_picks_one_quant():
     async with app.run_test(size=(120, 40)) as _pilot:
         with (
             patch("lilbee.cli.tui.screens.catalog.get_catalog", return_value=_EMPTY_CATALOG),
-            patch("lilbee.modelhub.model_manager.classify_remote_models", return_value=[]),
+            patch("lilbee.modelhub.model_manager.classify_all_remote_models", return_value=[]),
         ):
             screen = CatalogScreen()
             app.push_screen(screen)
@@ -6593,7 +6674,7 @@ async def test_catalog_delete_not_installed():
     async with app.run_test(size=(120, 40)) as _pilot:
         with (
             patch("lilbee.cli.tui.screens.catalog.get_catalog", return_value=_EMPTY_CATALOG),
-            patch("lilbee.modelhub.model_manager.classify_remote_models", return_value=[]),
+            patch("lilbee.modelhub.model_manager.classify_all_remote_models", return_value=[]),
             patch("lilbee.cli.tui.screens.catalog.get_services") as mock_mgr,
         ):
             mock_mgr.return_value.model_manager.is_installed.return_value = False
@@ -7359,16 +7440,20 @@ async def test_chat_sync_gating_rejects_sync():
 
 
 async def test_chat_action_complete_next():
-    """Ctrl+N (action_complete_next) delegates to action_complete."""
+    """Ctrl+N opens the dropdown and previews the first match into the input."""
     app = ChatTestApp()
     async with app.run_test(size=(120, 40)) as _pilot:
+        from lilbee.cli.tui.widgets.autocomplete import CompletionOverlay
+
         inp = app.screen.query_one("#chat-input", ChatInput)
+        overlay = app.screen.query_one("#completion-overlay", CompletionOverlay)
         inp.value = "/he"
         with patch(
             "lilbee.cli.tui.screens.chat.get_completions",
             return_value=["/help"],
         ):
             app.screen.action_complete_next()
+            assert overlay.is_visible
             assert inp.value == "/help"
 
 
@@ -7382,7 +7467,7 @@ async def test_chat_action_complete_next_noop_when_input_unfocused():
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
         screen = app.screen
-        chat_btn = screen.query_one("#chat-model-button", ModelPickerButton)
+        chat_btn = screen.query_one("#model-pick-chat", ModelPickerButton)
         chat_btn.focus()
         await pilot.pause()
         screen.action_complete_next()
@@ -7391,7 +7476,7 @@ async def test_chat_action_complete_next_noop_when_input_unfocused():
 
 
 async def test_chat_action_complete_prev_opens_overlay():
-    """Ctrl+P (action_complete_prev) opens overlay when not visible."""
+    """Ctrl+P opens the dropdown when closed and previews the last match."""
     app = ChatTestApp()
     async with app.run_test(size=(120, 40)) as _pilot:
         from lilbee.cli.tui.widgets.autocomplete import CompletionOverlay
@@ -7432,17 +7517,21 @@ async def test_chat_action_complete_prev_cycles_backward():
 
 
 async def test_chat_action_complete_prev_with_space():
-    """Ctrl+P with argument completions sets cmd + selection."""
+    """Ctrl+P in arg mode opens the dropdown and previews the last match."""
     app = ChatTestApp()
     async with app.run_test(size=(120, 40)) as _pilot:
+        from lilbee.cli.tui.widgets.autocomplete import CompletionOverlay
+
         inp = app.screen.query_one("#chat-input", ChatInput)
+        overlay = app.screen.query_one("#completion-overlay", CompletionOverlay)
         inp.value = "/model q"
         with patch(
             "lilbee.cli.tui.screens.chat.get_completions",
             return_value=["qwen:latest", "qwen:8b"],
         ):
             app.screen.action_complete_prev()
-            assert "qwen" in inp.value
+            assert overlay.is_visible
+            assert inp.value == "/model qwen:8b"
 
 
 async def test_app_switch_to_tasks():
@@ -7639,27 +7728,27 @@ async def test_chat_tab_in_input_inserts_literal_tab():
         assert inp.has_focus
 
 
-async def test_chat_tab_cycles_between_model_buttons():
-    """Tab on a focused chat-model button advances to the embed-model button."""
+async def test_chat_tab_cycles_through_all_four_model_buttons():
+    """Tab walks all four role buttons in order: chat -> embed -> vision -> rerank."""
     from lilbee.cli.tui.widgets.model_bar import ModelPickerButton
 
     cfg.chat_model = TEST_LOCAL_REF
     cfg.embedding_model = TEST_EMBED_REF
     app = ChatTestApp()
-    async with app.run_test(size=(120, 40)) as pilot:
+    async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         screen = app.screen
-        screen.query_one("#chat-model-button", ModelPickerButton).focus()
-        embed_btn = screen.query_one("#embed-model-button", ModelPickerButton)
-        await pilot.press("tab")
-        # Poll: the tab keypress travels through several refresh ticks
-        # before the focus watcher updates has_focus on a slow xdist
-        # shard. A single pilot.pause() is not enough.
-        for _ in range(10):
-            await pilot.pause()
-            if embed_btn.has_focus:
-                break
-        assert embed_btn.has_focus
+        screen.query_one("#model-pick-chat", ModelPickerButton).focus()
+        for next_id in ("model-pick-embed", "model-pick-vision", "model-pick-rerank"):
+            target = screen.query_one(f"#{next_id}", ModelPickerButton)
+            await pilot.press("tab")
+            # Poll: the tab keypress travels through several refresh ticks
+            # before the focus watcher updates has_focus on a slow xdist shard.
+            for _ in range(10):
+                await pilot.pause()
+                if target.has_focus:
+                    break
+            assert target.has_focus, f"Tab did not reach #{next_id}"
 
 
 async def test_chat_tab_in_normal_mode_advances_focus():
@@ -7700,7 +7789,7 @@ async def test_chat_enter_on_focused_picker_button_does_not_enter_insert_mode():
         assert isinstance(screen, ChatScreen)
         await pilot.press("escape")
         await pilot.pause()
-        screen.query_one("#chat-model-button", ModelPickerButton).focus()
+        screen.query_one("#model-pick-chat", ModelPickerButton).focus()
         await pilot.pause()
         assert screen._insert_mode is False
         await pilot.press("enter")
@@ -10102,21 +10191,22 @@ async def test_chat_enter_normal_mode_while_streaming_drops_to_normal():
         assert app.screen._insert_mode is False
 
 
-async def test_chat_on_chat_input_changed_completing():
-    """_on_chat_input_changed is no-op when _completing is True."""
+async def test_chat_on_chat_input_changed_suppressed():
+    """A suppressed Changed (programmatic edit) skips the live refresh and is consumed."""
     app = ChatTestApp()
     async with app.run_test(size=(120, 40)) as pilot:
         from lilbee.cli.tui.widgets.autocomplete import CompletionOverlay
 
         overlay = app.screen.query_one("#completion-overlay", CompletionOverlay)
         overlay.show_completions(["/help"])
-        app.screen._completing = True
+        app.screen._suppress_refresh = 1
 
         inp = app.screen.query_one("#chat-input", ChatInput)
         inp.value = "/test"
         await pilot.pause()
-        # Overlay should still be visible since _completing skips hide
+        # The overlay stays as-is (refresh skipped) and the counter is consumed.
         assert overlay.is_visible
+        assert app.screen._suppress_refresh == 0
 
 
 # ---------------------------------------------------------------------------
@@ -12065,7 +12155,7 @@ async def test_settings_model_picker_dismissed_persists_and_refreshes_label():
     app = SettingsTestApp()
     async with app.run_test(size=(120, 40)) as _pilot:
         screen = app.screen
-        with patch("lilbee.cli.tui.app.apply_active_model") as mock_apply:
+        with patch("lilbee.cli.tui.widgets.model_pick.apply_active_model") as mock_apply:
             screen._on_model_picker_dismissed("chat_model", "fake/new-model.gguf")
             mock_apply.assert_called_once()
         button = app.screen.query_one(f"#{MODEL_PICKER_BUTTON_PREFIX}chat_model", Button)
@@ -12093,36 +12183,14 @@ async def test_settings_model_picker_dismissed_reloads_worker_for_role():
     async with app.run_test(size=(120, 40)) as _pilot:
         screen = app.screen
         with (
-            patch("lilbee.cli.tui.app.apply_active_model"),
+            patch("lilbee.cli.tui.widgets.model_pick.apply_active_model"),
             patch(
-                "lilbee.cli.tui.screens.settings.get_services",
+                "lilbee.cli.tui.widgets.model_pick.get_services",
                 return_value=services_mock,
             ),
         ):
             screen._on_model_picker_dismissed("vision_model", "fake/vision.gguf")
         services_mock.reload_role.assert_called_once_with(WorkerRole.VISION)
-
-
-async def test_settings_embed_swap_confirm_cancel_leaves_cfg_untouched():
-    """Cancelling the embed-swap confirm modal does NOT call apply_active_model or reload_role."""
-    from unittest.mock import patch
-
-    services_mock = MagicMock()
-    services_mock.store.has_chunks.return_value = True
-    app = SettingsTestApp()
-    async with app.run_test(size=(120, 40)) as _pilot:
-        screen = app.screen
-        with (
-            patch("lilbee.cli.tui.app.apply_active_model") as mock_apply,
-            patch(
-                "lilbee.cli.tui.screens.settings.get_services",
-                return_value=services_mock,
-            ),
-        ):
-            # Direct path: caller invokes _apply_picker_choice with confirmed=False.
-            screen._apply_picker_choice("embedding_model", "fake/new.gguf", False)
-        mock_apply.assert_not_called()
-        services_mock.reload_role.assert_not_called()
 
 
 async def test_settings_embed_picker_against_populated_store_pushes_confirm():
@@ -12137,9 +12205,9 @@ async def test_settings_embed_picker_against_populated_store_pushes_confirm():
     async with app.run_test(size=(120, 40)) as pilot:
         screen = app.screen
         with (
-            patch("lilbee.cli.tui.app.apply_active_model") as mock_apply,
+            patch("lilbee.cli.tui.widgets.model_pick.apply_active_model") as mock_apply,
             patch(
-                "lilbee.cli.tui.screens.settings.get_services",
+                "lilbee.cli.tui.widgets.model_pick.get_services",
                 return_value=services_mock,
             ),
         ):
@@ -12160,33 +12228,18 @@ async def test_settings_embed_picker_against_empty_store_applies_directly():
     async with app.run_test(size=(120, 40)) as pilot:
         screen = app.screen
         with (
-            patch("lilbee.cli.tui.app.apply_active_model") as mock_apply,
+            patch("lilbee.cli.tui.widgets.model_pick.apply_active_model") as mock_apply,
             patch(
-                "lilbee.cli.tui.screens.settings.get_services",
+                "lilbee.cli.tui.widgets.model_pick.get_services",
                 return_value=services_mock,
             ),
         ):
             screen._on_model_picker_dismissed("embedding_model", "fake/new-embed.gguf")
-            await screen.workers.wait_for_complete()
             await pilot.pause()
             mock_apply.assert_called_once()
             args = mock_apply.call_args.args
             assert args[1] == "embedding_model"
             assert args[2] == "fake/new-embed.gguf"
-
-
-def test_settings_push_embed_swap_confirm_no_op_when_unmounted():
-    """``_push_embed_swap_confirm`` short-circuits if the screen unmounted."""
-    from lilbee.cli.tui.screens.settings import SettingsScreen
-
-    screen = SettingsScreen.__new__(SettingsScreen)
-    # No ``app`` attribute and no DOM means push_screen would crash; the
-    # ``is_mounted`` guard returns before reaching it.
-    SettingsScreen.is_mounted = property(lambda self: False)
-    try:
-        screen._push_embed_swap_confirm("embedding_model", "fake/new.gguf")
-    finally:
-        del SettingsScreen.is_mounted
 
 
 def test_settings_model_picker_dismissed_no_op_on_blank_ref():
@@ -12196,7 +12249,7 @@ def test_settings_model_picker_dismissed_no_op_on_blank_ref():
     from lilbee.cli.tui.screens.settings import SettingsScreen
 
     screen = SettingsScreen.__new__(SettingsScreen)
-    with patch("lilbee.cli.tui.app.apply_active_model") as mock_apply:
+    with patch("lilbee.cli.tui.widgets.model_pick.apply_active_model") as mock_apply:
         screen._on_model_picker_dismissed("chat_model", None)
         screen._on_model_picker_dismissed("chat_model", "")
         mock_apply.assert_not_called()
@@ -12215,7 +12268,7 @@ def test_settings_model_picker_dismissed_clears_nullable_field_on_empty_ref(monk
 
     screen.query_one = _raise
     monkeypatch.setattr(SettingsScreen, "app", property(lambda self: type("_A", (), {})()))
-    with patch("lilbee.cli.tui.app.apply_active_model") as mock_apply:
+    with patch("lilbee.cli.tui.widgets.model_pick.apply_active_model") as mock_apply:
         screen._on_model_picker_dismissed("vision_model", None)
         mock_apply.assert_not_called()
         screen._on_model_picker_dismissed("vision_model", "")
@@ -12330,7 +12383,7 @@ def test_settings_on_model_picker_dismissed_swallows_query_failures(monkeypatch)
     screen.query_one = _raise
     fake_app = type("FakeApp", (), {})()
     monkeypatch.setattr(SettingsScreen, "app", property(lambda self: fake_app))
-    with patch("lilbee.cli.tui.app.apply_active_model"):
+    with patch("lilbee.cli.tui.widgets.model_pick.apply_active_model"):
         screen._on_model_picker_dismissed("chat_model", "fake/x.gguf")
 
 

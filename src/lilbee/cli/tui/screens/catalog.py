@@ -77,7 +77,7 @@ from lilbee.cli.tui.widgets.status_bar import ViewTabs
 from lilbee.cli.tui.widgets.task_bar import TaskBar
 from lilbee.cli.tui.widgets.top_bars import TopBars
 from lilbee.core.config import cfg
-from lilbee.modelhub.model_manager import RemoteModel, classify_remote_models
+from lilbee.modelhub.model_manager import RemoteModel, classify_all_remote_models
 from lilbee.providers.sdk_backend import get_provider_api_key
 from lilbee.runtime.hardware import available_memory_for_fit, compute_fit
 
@@ -232,8 +232,9 @@ class CatalogScreen(Screen[None]):
 
     _search_input = getters.query_one("#catalog-search", Input)
 
-    def __init__(self) -> None:
+    def __init__(self, *, focus_task: str | None = None) -> None:
         super().__init__()
+        self._focus_task: str | None = focus_task
         self._families: list[ModelFamily] = get_families()
         self._hf_models: list[CatalogModel] = []
         self._remote_models: list[RemoteModel] = []
@@ -409,7 +410,12 @@ class CatalogScreen(Screen[None]):
         except Exception:
             self._activation_settled = True
             return
-        if self._active_tab_id_cache == TAB_CHAT and tabs.active != TAB_CHAT:
+        if self._focus_task is not None:
+            # On-ramp: land directly on the requested task tab.
+            self._active_tab_id_cache = self._focus_task
+            if tabs.active != self._focus_task:
+                tabs.active = self._focus_task
+        elif self._active_tab_id_cache == TAB_CHAT and tabs.active != TAB_CHAT:
             tabs.active = TAB_CHAT
         if not self._activation_settled:
             self._activation_settled = True
@@ -702,7 +708,7 @@ class CatalogScreen(Screen[None]):
 
     @work(thread=True, name=_WORKER_FETCH_REMOTE)
     def _fetch_remote_models(self) -> list[RemoteModel]:
-        return classify_remote_models(cfg.remote_base_url)
+        return classify_all_remote_models()
 
     @work(thread=True, name=_WORKER_FETCH_FRONTIER, exit_on_error=False)
     def _fetch_frontier_models(self) -> list[FrontierCatalogRow]:

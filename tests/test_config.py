@@ -67,6 +67,18 @@ class TestFromEnvDefaults:
             # Wiki is opt-in: the Wiki view tab and the chat ModelBar's
             # scope picker only appear when the user explicitly enables it.
             assert c.wiki is False
+            # Local-server URLs default blank; the resolver fills the spec
+            # default so the literal lives only in the spec.
+            assert c.ollama_base_url == ""
+            assert c.lm_studio_base_url == ""
+
+    def test_local_server_urls_strip_trailing_slash(self):
+        c = Config(
+            ollama_base_url="http://box:11434/",
+            lm_studio_base_url="http://lm:1234/v1/",
+        )
+        assert c.ollama_base_url == "http://box:11434"
+        assert c.lm_studio_base_url == "http://lm:1234/v1"
 
     def test_constants_unchanged(self):
         assert CHUNKS_TABLE == "chunks"
@@ -91,6 +103,15 @@ class TestEnvVarOverrides:
             assert c.documents_dir == tmp_path / "documents"
             assert c.data_dir == tmp_path / "data"
             assert c.lancedb_dir == tmp_path / "data" / "lancedb"
+
+    def test_local_server_urls_from_env(self, tmp_path):
+        env = _clean_env(tmp_path)
+        env["LILBEE_OLLAMA_BASE_URL"] = "http://box:11434"
+        env["LILBEE_LM_STUDIO_BASE_URL"] = "http://lm:1234/v1"
+        with mock.patch.dict(os.environ, env, clear=True):
+            c = Config()
+            assert c.ollama_base_url == "http://box:11434"
+            assert c.lm_studio_base_url == "http://lm:1234/v1"
 
     def test_data_root_default_uses_platform(self):
         env = _clean_env()
@@ -669,6 +690,18 @@ class TestSemanticChunkingConfig:
         assert parse(0) is False
         assert parse([1]) is True
         assert parse([]) is False
+
+
+class TestResolveDefaultsValidator:
+    def test_non_dict_input_passes_through(self) -> None:
+        """The before-validator hands non-dict input straight back; pydantic
+        then rejects it as not a valid model."""
+        from pydantic import ValidationError
+
+        from lilbee.core.config import Config
+
+        with pytest.raises(ValidationError, match="valid dict"):
+            Config.model_validate(["not", "a", "dict"])
 
     def test_from_toml(self, tmp_path) -> None:
         toml_path = tmp_path / "config.toml"

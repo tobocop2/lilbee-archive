@@ -144,6 +144,11 @@ class Config(BaseSettings):
     # Path to a llama-server binary. Empty = use the bundled lilbee-engine
     # wheel binary, else a llama-server on PATH.
     llama_server_path: str = ConfigField(default="", writable=True)
+    # Per-server local model-manager URLs. Blank means "use the server's spec
+    # default" (resolved in providers.local_servers.config_urls); the default
+    # URL literal lives only in the spec, which core must not import.
+    ollama_base_url: str = ConfigField(default="", writable=True)
+    lm_studio_base_url: str = ConfigField(default="", writable=True)
     llm_api_key: str = ConfigField(default="", writable=True, write_only=True)
     openrouter_api_key: str = ConfigField(default="", writable=True, write_only=True)
     gemini_api_key: str = ConfigField(default="", writable=True, write_only=True)
@@ -164,6 +169,11 @@ class Config(BaseSettings):
 
     # Extra candidates retrieved for MMR reranking (multiplies top_k).
     candidate_multiplier: int = ConfigField(default=3, ge=1, writable=True)
+
+    # Chunk count at/above which sync builds an approximate (ANN) vector index
+    # so search stays fast at millions of vectors. Below this, search uses exact
+    # flat scan (faster and exact for small vaults). 0 disables the ANN index.
+    ann_index_threshold: int = ConfigField(default=50_000, ge=0, writable=True)
 
     # LLM-generated alternative queries for expansion. 0 disables.
     query_expansion_count: int = ConfigField(default=3, ge=0, writable=True)
@@ -208,6 +218,31 @@ class Config(BaseSettings):
     # llama-cpp rank pooling; hosted refs (cohere/voyage/jina/together/hf-tei)
     # need the backend extra.
     reranker_model: str = ConfigField(default="", public=True)
+
+    # Long-term chat memory. Off by default (opt-in): when disabled the whole
+    # subsystem is dormant and the write surfaces respond with an enable hint.
+    memory_enabled: bool = ConfigField(default=False, writable=True)
+
+    # Facts recalled by similarity per turn (preferences are always injected).
+    memory_top_k: int = ConfigField(default=5, ge=0, writable=True)
+
+    # Cosine-distance ceiling for fact recall; stricter than the document default
+    # because a tiny memory corpus floods at the wider document threshold.
+    memory_max_distance: float = ConfigField(default=0.6, ge=0.0, le=1.0, writable=True)
+
+    # Char/4 token budget for the injected memory block.
+    memory_token_budget: int = ConfigField(default=512, ge=0, writable=True)
+
+    # Per-owner soft cap; oldest memories evicted past it (runaway-write guard).
+    memory_max_per_owner: int = ConfigField(default=200, ge=1, writable=True)
+
+    # Cosine distance below which a new memory is treated as a duplicate of an
+    # existing same-owner memory and updates it in place instead of inserting.
+    memory_dedup_distance: float = ConfigField(default=0.05, ge=0.0, le=1.0, writable=True)
+
+    # LLM pass that extracts memories from the chat loop. Off by default; extracted
+    # memories are saved directly and recalled like any other memory.
+    memory_auto_extract: bool = ConfigField(default=False, writable=True)
 
     # Candidate count sent to the reranker.
     rerank_candidates: int = ConfigField(default=60, ge=1, writable=True, public=True)
@@ -707,6 +742,12 @@ class Config(BaseSettings):
 
         return parse_model_ref(v).for_openai_prefix()
 
+    @field_validator("ollama_base_url", "lm_studio_base_url", mode="after")
+    @classmethod
+    def _strip_trailing_slash(cls, v: str) -> str:
+        """Canonicalize a local-server URL once at the write boundary."""
+        return v.rstrip("/")
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def _split_cors_origins(cls, v: Any) -> Any:
@@ -781,7 +822,7 @@ class Config(BaseSettings):
     def _resolve_defaults(cls, data: Any) -> Any:
         from lilbee.core.system import canonical_models_dir, default_data_dir, find_local_root
 
-        if not isinstance(data, dict):  # pragma: no cover
+        if not isinstance(data, dict):
             return data
 
         if data.get("data_root") in (None, _UNSET_PATH):

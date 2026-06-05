@@ -43,7 +43,7 @@ from lilbee.providers.sdk_backend import (
 
 log = logging.getLogger(__name__)
 
-_PROVIDER_NAME = "litellm"
+_PROVIDER_NAME = "remote"
 
 # Substrings dropped from the "LiteLLM" logger before they reach the user's
 # terminal. Two classes of noise: (1) the model-cost-map fetch failure that

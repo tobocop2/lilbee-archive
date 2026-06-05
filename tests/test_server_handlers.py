@@ -675,8 +675,12 @@ class TestMemoryExtractedEvent:
 
     async def test_emitted_after_done_when_enabled(self, mock_svc):
         mock_svc.searcher.build_rag_context.return_value = _rag_return()
-        mock_svc.provider.chat.return_value = iter(["I noted that."])
         with (
+            patch.object(
+                _rag_h,
+                "dispatch_chat_stream",
+                lambda req: _canonical_text_stream(["I noted that."]),
+            ),
             patch("lilbee.server.handlers.rag.auto_extract_enabled", return_value=True),
             patch("lilbee.server.handlers.rag.auto_extract", return_value=self._saved()) as extract,
         ):

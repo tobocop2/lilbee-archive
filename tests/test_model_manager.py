@@ -1139,7 +1139,7 @@ class TestKnownModelCache:
             RemoteModel(name=name, task="chat", family="", parameter_size="", provider=prov)
             for name, prov in (remote or [])
         ]
-        monkeypatch.setattr(discovery, "classify_remote_models", lambda _url: remote_models)
+        monkeypatch.setattr(discovery, "classify_all_remote_models", lambda **_kw: remote_models)
         monkeypatch.setattr(discovery, "discover_api_models", lambda: api or {})
 
     def test_refs_unions_all_three_sources(self, monkeypatch) -> None:
@@ -1173,13 +1173,13 @@ class TestKnownModelCache:
 
         from lilbee.modelhub.model_manager import discovery
 
-        real_classify = discovery.classify_remote_models
+        real_classify = discovery.classify_all_remote_models
 
-        def counting_classify(url):
+        def counting_classify(**_kw):
             call_count["remote"] += 1
-            return real_classify(url)
+            return real_classify(**_kw)
 
-        monkeypatch.setattr(discovery, "classify_remote_models", counting_classify)
+        monkeypatch.setattr(discovery, "classify_all_remote_models", counting_classify)
 
         cache = KnownModelCache(ttl_s=60.0)
         cache.refs()
@@ -1197,13 +1197,13 @@ class TestKnownModelCache:
         monkeypatch.setattr(discovery.time, "monotonic", lambda: clock["t"])
 
         call_count = {"remote": 0}
-        real_classify = discovery.classify_remote_models
+        real_classify = discovery.classify_all_remote_models
 
-        def counting_classify(url):
+        def counting_classify(**_kw):
             call_count["remote"] += 1
-            return real_classify(url)
+            return real_classify(**_kw)
 
-        monkeypatch.setattr(discovery, "classify_remote_models", counting_classify)
+        monkeypatch.setattr(discovery, "classify_all_remote_models", counting_classify)
 
         cache = KnownModelCache(ttl_s=30.0)
         cache.refs()
@@ -1217,13 +1217,13 @@ class TestKnownModelCache:
 
         self._stub_compose(monkeypatch, remote=[("a:1", "Ollama")])
         call_count = {"remote": 0}
-        real_classify = discovery.classify_remote_models
+        real_classify = discovery.classify_all_remote_models
 
-        def counting_classify(url):
+        def counting_classify(**_kw):
             call_count["remote"] += 1
-            return real_classify(url)
+            return real_classify(**_kw)
 
-        monkeypatch.setattr(discovery, "classify_remote_models", counting_classify)
+        monkeypatch.setattr(discovery, "classify_all_remote_models", counting_classify)
 
         cache = KnownModelCache(ttl_s=600.0)
         cache.refs()

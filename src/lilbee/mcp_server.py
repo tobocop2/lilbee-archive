@@ -903,7 +903,7 @@ def _derive_owner(agent_id: str, ctx: Context | None) -> str:
     return agent_owner(_slug(explicit or _client_name(ctx)))
 
 
-@mcp.tool()
+@_tool_if(memory_enabled())
 def memory_remember(
     text: str,
     kind: MemoryKind = MemoryKind.FACT,
@@ -927,7 +927,7 @@ def memory_remember(
     return {"ok": True, "id": memory_id, "owner": owner}
 
 
-@mcp.tool()
+@_tool_if(memory_enabled())
 def memory_recall(
     query: str, limit: int = 0, agent_id: str = "", ctx: Context | None = None
 ) -> dict[str, Any]:
@@ -943,7 +943,7 @@ def memory_recall(
     }
 
 
-@mcp.tool()
+@_tool_if(memory_enabled())
 def memory_list(agent_id: str = "", ctx: Context | None = None) -> dict[str, Any]:
     """List every memory in this agent's namespace (any kind, newest first)."""
     if not memory_enabled():
@@ -957,7 +957,7 @@ def memory_list(agent_id: str = "", ctx: Context | None = None) -> dict[str, Any
     }
 
 
-@mcp.tool()
+@_tool_if(memory_enabled())
 def memory_forget(memory_id: str) -> dict[str, Any]:
     """Delete a memory by id."""
     if not memory_enabled():

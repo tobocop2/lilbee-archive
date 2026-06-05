@@ -218,10 +218,10 @@ async def _stream_rag_response(
         rag = get_services().searcher.build_rag_context(
             question, top_k=top_k, history=history, chunk_type=chunk_type
         )
-    except EmbeddingModelMismatchError as exc:
+    except EmbeddingModelMismatchError as mismatch:
         # detail carries the index's embedder so the client can offer to adopt it.
-        detail = exc.persisted_model if exc.dims_match else None
-        yield sse_error(str(exc), code=SseErrorCode.INDEX_EMBEDDER_MISMATCH, detail=detail)
+        detail = mismatch.persisted_model if mismatch.dims_match else None
+        yield sse_error(str(mismatch), code=SseErrorCode.INDEX_EMBEDDER_MISMATCH, detail=detail)
         return
     if rag is None:
         yield sse_error("No relevant documents found.")
@@ -330,8 +330,11 @@ async def _stream_chat_response(
     sources, messages = rag
 
     req = _build_canonical_request(messages, options)
+    answer_parts: list[str] = []
     try:
         async for event in _cap_aware_chat_events(req):
+            if isinstance(event, StreamToken) and not event.is_reasoning:
+                answer_parts.append(event.content)
             yield _sse_for_chat_event(event)
     except Exception as exc:
         raw = str(exc)
@@ -342,6 +345,8 @@ async def _stream_chat_response(
 
     yield sse_event(SseEvent.SOURCES, [clean_result(s) for s in sources])
     yield sse_done({})
+    async for mem_event in _emit_extracted_memories(question, "".join(answer_parts)):
+        yield mem_event
 
 
 async def _cap_aware_chat_events(

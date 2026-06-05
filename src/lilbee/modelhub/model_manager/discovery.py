@@ -276,3 +276,4 @@ class KnownModelCache:
         """Force the next ``refs()`` call to re-probe."""
         with self._lock:
             self._expires_at = 0.0
+            self._generation += 1

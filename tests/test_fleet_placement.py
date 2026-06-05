@@ -6,52 +6,11 @@ from lilbee.providers.fleet.placement import (
     InstancePlan,
     ModelPlacementInput,
     Placement,
-    estimate_model_vram,
     plan_placement,
 )
 from lilbee.providers.roles import WorkerRole
 
 _GB = 1024**3
-
-
-class TestEstimateModelVram:
-    def test_includes_weights_kv_and_overhead(self) -> None:
-        meta = {"block_count": "32", "embedding_length": "4096"}
-        est = estimate_model_vram(_GB, meta, ctx=4096, slots=4, kv_elem_bytes=2)
-        kv = 2 * 32 * 4096 * 2 * 4096 * 4
-        assert est == _GB + kv + _GB  # weights + kv + overhead
-
-    def test_zero_kv_when_meta_none(self) -> None:
-        assert estimate_model_vram(_GB, None, ctx=4096, slots=4, kv_elem_bytes=2) == _GB + _GB
-
-    def test_zero_kv_when_shape_fields_missing(self) -> None:
-        assert estimate_model_vram(_GB, {}, ctx=4096, slots=4, kv_elem_bytes=2) == _GB + _GB
-
-    def test_unparseable_field_treated_as_zero(self) -> None:
-        meta = {"block_count": "garbage", "embedding_length": "4096"}
-        assert estimate_model_vram(_GB, meta, ctx=4096, slots=4, kv_elem_bytes=2) == _GB + _GB
-
-    def test_gqa_kv_scales_by_kv_heads_not_embedding_length(self) -> None:
-        # GQA: kv_dim = head_count_kv * head_dim (head_dim = embedding_length /
-        # head_count), far smaller than the full embedding width. Mirrors the
-        # Qwen3-Coder-30B shape (8x fewer KV heads than query heads).
-        meta = {
-            "block_count": "48",
-            "embedding_length": "2048",
-            "head_count": "32",
-            "head_count_kv": "4",
-        }
-        est = estimate_model_vram(_GB, meta, ctx=4096, slots=1, kv_elem_bytes=1)
-        head_dim = 2048 // 32
-        kv = 2 * 48 * (4 * head_dim) * 4096 * 1 * 1
-        assert est == _GB + kv + _GB
-
-    def test_kv_falls_back_to_embedding_length_without_head_metadata(self) -> None:
-        # No GQA head fields -> assume full attention (kv_dim = embedding_length).
-        meta = {"block_count": "32", "embedding_length": "4096"}
-        est = estimate_model_vram(_GB, meta, ctx=4096, slots=1, kv_elem_bytes=1)
-        kv = 2 * 32 * 4096 * 4096 * 1 * 1
-        assert est == _GB + kv + _GB
 
 
 class TestPlanPlacement:
@@ -145,8 +104,10 @@ class TestPlanPlacement:
         assert plan.instances == ()
         assert plan.unplaceable_roles == (WorkerRole.CHAT,)
 
-    def test_unified_budget_is_one_shared_pool_across_roles(self) -> None:
-        # Largest-first: chat fits the 12 GB pool, leaving too little for embed.
+    def test_shared_pool_reserves_search_roles_before_chat(self) -> None:
+        # Search-first: embed is reserved before the elastic chat, so a chat that
+        # would consume the whole 12 GB pool is dropped instead of starving search
+        # (the proven embed-starvation bug on Apple Silicon).
         plan = plan_placement(
             [
                 ModelPlacementInput(WorkerRole.CHAT, 10 * _GB),
@@ -155,8 +116,8 @@ class TestPlanPlacement:
             [],
             unified_budget=12 * _GB,
         )
-        assert {i.role for i in plan.instances} == {WorkerRole.CHAT}
-        assert plan.unplaceable_roles == (WorkerRole.EMBED,)
+        assert {i.role for i in plan.instances} == {WorkerRole.EMBED}
+        assert plan.unplaceable_roles == (WorkerRole.CHAT,)
 
     def test_first_fit_decreasing_places_largest_first(self) -> None:
         plan = plan_placement(
@@ -171,3 +132,81 @@ class TestPlanPlacement:
         # now-emptier device 1. Each is a single-GPU instance.
         assert by_role == {WorkerRole.CHAT: (0,), WorkerRole.EMBED: (1,)}
         assert plan.unplaceable_roles == ()
+
+
+class TestReplicas:
+    """Data-parallel replicas: N instances of a role spread one-per-GPU for throughput."""
+
+    def _embeds(self, plan: Placement) -> list[InstancePlan]:
+        return [i for i in plan.instances if i.role is WorkerRole.EMBED]
+
+    def test_replicas_spread_one_per_distinct_gpu(self) -> None:
+        plan = plan_placement(
+            [ModelPlacementInput(WorkerRole.EMBED, 1 * _GB, replicas=3)],
+            [(0, 24 * _GB), (1, 24 * _GB), (2, 24 * _GB)],
+        )
+        embeds = self._embeds(plan)
+        assert len(embeds) == 3
+        assert {i.devices[0] for i in embeds} == {0, 1, 2}  # one per distinct card
+        assert {i.replica for i in embeds} == {0, 1, 2}  # distinct replica indices
+        assert plan.unplaceable_roles == ()
+
+    def test_replicas_wrap_to_colocate_when_more_than_gpus(self) -> None:
+        # embed ~10GB, 2x24GB (21.6 usable) fits 2 per card -> 4 of 8 requested place.
+        plan = plan_placement(
+            [ModelPlacementInput(WorkerRole.EMBED, 10 * _GB, replicas=8)],
+            [(0, 24 * _GB), (1, 24 * _GB)],
+        )
+        embeds = self._embeds(plan)
+        assert len(embeds) == 4  # two per card, then no room
+        assert sorted(i.devices[0] for i in embeds) == [0, 0, 1, 1]
+        assert {i.replica for i in embeds} == {0, 1, 2, 3}
+
+    def test_replicated_role_unplaceable_when_no_gpu_fits_one(self) -> None:
+        plan = plan_placement(
+            [ModelPlacementInput(WorkerRole.EMBED, 100 * _GB, replicas=2)],
+            [(0, 24 * _GB)],
+        )
+        assert plan.instances == ()
+        assert plan.unplaceable_roles == (WorkerRole.EMBED,)
+
+    def test_chat_placed_before_replicas_then_replicas_fill_remaining(self) -> None:
+        plan = plan_placement(
+            [
+                ModelPlacementInput(WorkerRole.CHAT, 20 * _GB),  # single, claims a card first
+                ModelPlacementInput(WorkerRole.EMBED, 1 * _GB, replicas=2),
+            ],
+            [(0, 24 * _GB), (1, 24 * _GB)],
+        )
+        assert len([i for i in plan.instances if i.role is WorkerRole.CHAT]) == 1
+        assert len(self._embeds(plan)) == 2
+        assert plan.unplaceable_roles == ()
+
+    def test_unified_budget_runs_replicas_as_coresident_processes(self) -> None:
+        plan = plan_placement(
+            [ModelPlacementInput(WorkerRole.EMBED, 2 * _GB, replicas=3)],
+            [],
+            unified_budget=10 * _GB,
+        )
+        embeds = self._embeds(plan)
+        assert len(embeds) == 3  # 3x2GB <= 10GB
+        assert all(i.devices == () for i in embeds)
+        assert {i.replica for i in embeds} == {0, 1, 2}
+
+    def test_unified_budget_caps_replicas_to_what_fits(self) -> None:
+        plan = plan_placement(
+            [ModelPlacementInput(WorkerRole.EMBED, 4 * _GB, replicas=5)],
+            [],
+            unified_budget=10 * _GB,
+        )
+        assert len(self._embeds(plan)) == 2  # 2x4=8<=10; a third (12) overruns
+
+    def test_no_gpu_no_budget_expands_every_replica(self) -> None:
+        # GPU-less + ungated legacy path: each replica becomes an un-pinned instance.
+        plan = plan_placement(
+            [ModelPlacementInput(WorkerRole.EMBED, 1 * _GB, replicas=2)],
+            [],
+        )
+        embeds = self._embeds(plan)
+        assert len(embeds) == 2
+        assert {i.replica for i in embeds} == {0, 1}

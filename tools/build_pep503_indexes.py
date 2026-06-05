@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Emit PEP 503 simple-repository indexes for the per-backend engine wheels.
 
-Reads the ``lilbee-llama-server`` wheels produced by build-multigpu.yml, groups
+Reads the ``lilbee-engine`` wheels produced by build-multigpu.yml, groups
 them by backend, and writes per-directory ``index.html`` files. Each wheel link
 is an absolute URL into the GitHub release assets, so the static site need not
 host multi-gigabyte wheels (GitHub Pages caps a deployment at 1 GB; releases do
@@ -18,15 +18,15 @@ because they also ship to PyPI, where a build tag would break the pin.
 
 Input layout (artifact-dir mode):
 
-    <input>/wheel-multigpu-<os>-<backend>/lilbee_llama_server-*.whl
+    <input>/wheel-multigpu-<os>-<backend>/lilbee_engine-*.whl
 
 Backend is the last dash-segment of the artifact dir name; the wheel's version
 is parsed from its filename so the release URL needs no extra CLI flag.
 
 Output layout:
 
-    <site>/<backend>/lilbee-llama-server/index.html   # hrefs to <release>/<whl>
-    <site>/<backend>/index.html                       # link to lilbee-llama-server/
+    <site>/<backend>/lilbee-engine/index.html   # hrefs to <release>/<whl>
+    <site>/<backend>/index.html                 # link to lilbee-engine/
 
 Usage:
     python tools/build_pep503_indexes.py <artifacts-dir> <site-dir> \\
@@ -40,13 +40,13 @@ import re
 import sys
 from pathlib import Path
 
-# The per-backend index serves the engine wheel, lilbee-llama-server. Its
-# artifacts are wheel-multigpu-<os>-<backend> (no per-CPython axis: the binary
-# is Python-version-independent). The pure lilbee wheel is backend-agnostic and
+# The per-backend index serves the engine wheel, lilbee-engine. Its
+# artifacts are wheel-multigpu-<os>-<backend> (no per-CPython axis: the binaries
+# are Python-version-independent). The pure lilbee wheel is backend-agnostic and
 # ships only to PyPI, so it has no per-backend index.
 ARTIFACT_DIR_RE = re.compile(r"^wheel-multigpu-(?P<rest>.+)$")
-WHEEL_FILENAME_RE = re.compile(r"^lilbee_llama_server-(?P<version>[^-]+)-")
-_PROJECT = "lilbee-llama-server"
+WHEEL_FILENAME_RE = re.compile(r"^lilbee_engine-(?P<version>[^-]+)-")
+_PROJECT = "lilbee-engine"
 _DEFAULT_RELEASE_BASE_URL = "https://github.com/tobocop2/lilbee/releases/download"
 
 # Backends whose wheels ship under the default filename (also on PyPI; renaming
@@ -71,7 +71,7 @@ def backend_from_artifact_dir(name: str) -> str | None:
 
 
 def version_from_wheel_filename(name: str) -> str | None:
-    """Extract the version from ``lilbee_llama_server-<version>-<rest>.whl``."""
+    """Extract the version from ``lilbee_engine-<version>-<rest>.whl``."""
     m = WHEEL_FILENAME_RE.match(name)
     return m.group("version") if m else None
 
@@ -111,7 +111,7 @@ def collect_wheels(input_dir: Path) -> dict[str, list[Path]]:
         backend = backend_from_artifact_dir(child.name)
         if backend is None:
             continue
-        wheels = sorted(child.glob("lilbee_llama_server-*.whl"))
+        wheels = sorted(child.glob("lilbee_engine-*.whl"))
         if not wheels:
             continue
         by_backend.setdefault(backend, []).extend(wheels)

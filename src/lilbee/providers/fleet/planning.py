@@ -199,15 +199,13 @@ def _role_ctx(
     """
     from lilbee.core.config import cfg
     from lilbee.providers.engine_params import (
-        EMBED_FALLBACK_CTX,
         resolve_chat_ctx,
+        resolve_embed_ctx,
         resolve_vision_ctx,
     )
 
     if role in _EMBED_ROLES:
-        from lilbee.providers.gguf_meta import train_ctx_from_meta
-
-        return train_ctx_from_meta(meta, fallback=EMBED_FALLBACK_CTX, model_path=model_path)
+        return resolve_embed_ctx(meta, model_path)
     if role is WorkerRole.VISION:
         return resolve_vision_ctx(model_path)
     if cfg.num_ctx is not None:

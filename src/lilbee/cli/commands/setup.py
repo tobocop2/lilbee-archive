@@ -117,8 +117,8 @@ def _self_check_server(role: WorkerRole, model_path: Path) -> tuple[SwapManager,
     """
     from lilbee.core.config.enums import KvCacheType
     from lilbee.providers.engine_params import (
-        EMBED_FALLBACK_CTX,
         resolve_chat_ctx,
+        resolve_embed_ctx,
         resolve_n_gpu_layers,
     )
     from lilbee.providers.fleet.adapters import ROLE_SPECS, build_server_argv
@@ -129,12 +129,12 @@ def _self_check_server(role: WorkerRole, model_path: Path) -> tuple[SwapManager,
     from lilbee.providers.fleet.client import LlamaServerClient
     from lilbee.providers.fleet.launch import InstanceLaunch
     from lilbee.providers.fleet.swap_manager import SwapManager
-    from lilbee.providers.gguf_meta import read_gguf_metadata, train_ctx_from_meta
+    from lilbee.providers.gguf_meta import read_gguf_metadata
 
     meta = read_gguf_metadata(model_path)
     is_embed = role is WorkerRole.EMBED
     if is_embed:
-        ctx = train_ctx_from_meta(meta, fallback=EMBED_FALLBACK_CTX, model_path=model_path)
+        ctx = resolve_embed_ctx(meta, model_path)
     else:
         ctx = cfg.num_ctx or resolve_chat_ctx(model_path, meta)
     argv = build_server_argv(

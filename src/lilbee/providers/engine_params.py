@@ -28,6 +28,13 @@ log = logging.getLogger(__name__)
 EMBED_FALLBACK_CTX = 2048
 """Context used for embed/rerank when a GGUF reports junk (e.g. context_length=0)."""
 
+
+def resolve_embed_ctx(meta: dict[str, str] | None, model_path: Path) -> int:
+    """Embed/rerank context: the configured chunk length, capped by the model's trained context."""
+    train_ctx = train_ctx_from_meta(meta, fallback=EMBED_FALLBACK_CTX, model_path=model_path)
+    return min(train_ctx, cfg.chunk_size)
+
+
 _VISION_FALLBACK_N_CTX = 4096
 """Context for a vision load when the GGUF reports no usable context_length."""
 

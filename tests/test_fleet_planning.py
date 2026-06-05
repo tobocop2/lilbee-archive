@@ -83,12 +83,26 @@ def test_role_ctx_chat_uses_dynamic_picker_when_unset(monkeypatch) -> None:
     assert planning_mod._role_ctx(WorkerRole.CHAT, Path("/m/c.gguf"), None) == 4096
 
 
-def test_role_ctx_embed_uses_model_training_context(monkeypatch) -> None:
+def test_role_ctx_embed_caps_to_chunk_size(monkeypatch) -> None:
+    # A 32K-trained embedder is sized to the chunk length, not its full context, so its
+    # placement estimate doesn't balloon (200GB+) and starve the role alongside a giant.
     monkeypatch.setattr(
-        "lilbee.providers.gguf_meta.train_ctx_from_meta",
-        lambda _meta, *, fallback, model_path: 512,
+        "lilbee.providers.engine_params.train_ctx_from_meta",
+        lambda _meta, *, fallback, model_path: 32768,
     )
+    monkeypatch.setattr(cfg, "chunk_size", 512)
     assert planning_mod._role_ctx(WorkerRole.EMBED, Path("/m/e.gguf"), {}) == 512
+    assert planning_mod._role_ctx(WorkerRole.RERANK, Path("/m/r.gguf"), {}) == 512
+
+
+def test_role_ctx_embed_uses_train_ctx_when_below_chunk_size(monkeypatch) -> None:
+    # A small-context embedder caps at what it was trained for, never above it.
+    monkeypatch.setattr(
+        "lilbee.providers.engine_params.train_ctx_from_meta",
+        lambda _meta, *, fallback, model_path: 256,
+    )
+    monkeypatch.setattr(cfg, "chunk_size", 512)
+    assert planning_mod._role_ctx(WorkerRole.EMBED, Path("/m/e.gguf"), {}) == 256
 
 
 def test_role_gpu_layers_marks_embed_roles(monkeypatch) -> None:

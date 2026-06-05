@@ -239,9 +239,9 @@ def _isolate_cfg(tmp_path, request):
     # key makes a cloud model "available" and leaks into model discovery and
     # the chat-model availability fallback, breaking tests that assume a clean
     # environment. Tests that exercise key-dependent paths set the key themselves.
-    from lilbee.providers.sdk_backend import API_KEY_FIELDS
+    from lilbee.providers.sdk_backend import PROVIDER_API_KEY_FIELD
 
-    for field in API_KEY_FIELDS:
+    for field in PROVIDER_API_KEY_FIELD.values():
         setattr(cfg, field, "")
     if "integration" not in request.node.nodeid.split("/"):
         cfg.documents_dir = tmp_path / "documents"

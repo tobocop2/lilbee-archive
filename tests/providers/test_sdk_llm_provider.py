@@ -167,7 +167,7 @@ class TestChatNonStream:
         from lilbee.providers.base import ChatResult, FinishReason
 
         backend = FakeBackend(complete_result=CompletionResult(content="hi", finish_reason="stop"))
-        provider = SdkLLMProvider(backend, base_url="http://localhost:11434")
+        provider = SdkLLMProvider(backend)
         result = provider.chat([{"role": "user", "content": "hey"}])
         assert isinstance(result, ChatResult)
         assert result.text == "hi"
@@ -185,7 +185,7 @@ class TestChatNonStream:
                 tool_calls=(SdkToolCall(id="c1", name="get_weather", arguments='{"city":"SF"}'),),
             ),
         )
-        provider = SdkLLMProvider(backend, base_url="https://api.openai.com")
+        provider = SdkLLMProvider(backend)
         result = provider.chat(
             [{"role": "user", "content": "weather?"}],
             model="openai/gpt-4o",
@@ -200,7 +200,7 @@ class TestChatNonStream:
 
     def test_tools_and_tool_choice_threaded_into_request_options(self) -> None:
         backend = FakeBackend(supports_tools_result=True)
-        provider = SdkLLMProvider(backend, base_url="https://api.openai.com")
+        provider = SdkLLMProvider(backend)
         tools = [{"type": "function", "function": {"name": "get_weather"}}]
         provider.chat(
             [{"role": "user", "content": "x"}],
@@ -214,7 +214,7 @@ class TestChatNonStream:
 
     def test_tools_against_unsupported_model_raises_before_calling_backend(self) -> None:
         backend = FakeBackend(supports_tools_result=False)
-        provider = SdkLLMProvider(backend, base_url="https://api.openai.com")
+        provider = SdkLLMProvider(backend)
         with pytest.raises(ProviderError, match="does not support tool calls"):
             provider.chat(
                 [{"role": "user", "content": "x"}],
@@ -369,7 +369,7 @@ class TestChatStream:
                 ),
             ],
         )
-        provider = SdkLLMProvider(backend, base_url="https://api.openai.com")
+        provider = SdkLLMProvider(backend)
         items = list(
             provider.chat(
                 [{"role": "user", "content": "weather?"}],

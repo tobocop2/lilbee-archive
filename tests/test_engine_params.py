@@ -192,6 +192,15 @@ class TestResolveVisionCtx:
         monkeypatch.setattr(ep, "train_ctx_from_meta", lambda _meta, **_k: 4321)
         assert ep.resolve_vision_ctx(model) == 4321
 
+    def test_caps_long_context_vlm_to_page_ceiling(self, tmp_path, monkeypatch) -> None:
+        # A 256K-context VLM is capped so it stays placeable beside a chat giant; one
+        # OCR page never needs more than the per-page ceiling.
+        model = tmp_path / "v.gguf"
+        model.write_bytes(b"x")
+        monkeypatch.setattr(ep, "read_gguf_metadata", lambda _p: {"arch": "y"})
+        monkeypatch.setattr(ep, "train_ctx_from_meta", lambda _meta, **_k: 262144)
+        assert ep.resolve_vision_ctx(model) == ep._VISION_PAGE_CTX_CAP
+
     def test_falls_back_when_metadata_unreadable(self, tmp_path, monkeypatch) -> None:
         model = tmp_path / "v.gguf"
         model.write_bytes(b"x")

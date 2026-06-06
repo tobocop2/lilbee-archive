@@ -389,9 +389,12 @@ class LlamaServerClient:
         return text, max(1, len(tokens))
 
     def _tokenize(self, text: str) -> list[int]:
+        # ``model`` is required even on the native /tokenize route: llama-swap
+        # selects the upstream by it, and omitting it 404s the request.
         resp = self._http.post(
             _TOKENIZE_PATH,
             json={
+                "model": self._model,
                 "content": text,
                 "add_special": _TOKENIZE_ADD_SPECIAL,
                 "parse_special": _TOKENIZE_PARSE_SPECIAL,
@@ -401,7 +404,7 @@ class LlamaServerClient:
         return list(resp.json()["tokens"])
 
     def _detokenize(self, tokens: list[int]) -> str:
-        resp = self._http.post(_DETOKENIZE_PATH, json={"tokens": tokens})
+        resp = self._http.post(_DETOKENIZE_PATH, json={"model": self._model, "tokens": tokens})
         _raise_for_status(resp)
         return str(resp.json()["content"])
 

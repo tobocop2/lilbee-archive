@@ -717,3 +717,23 @@ def test_parse_sse_stream_items_skips_empty_choices() -> None:
     from lilbee.providers.fleet.client import _parse_sse_stream_items
 
     assert list(_parse_sse_stream_items('data: {"choices": []}')) == []
+
+
+def test_tokenize_and_detokenize_carry_model_for_swap_routing() -> None:
+    """llama-swap routes by the request's model field, so the native /tokenize and
+    /detokenize calls must include it or the request 404s (bb-4pw)."""
+    seen: dict[str, dict] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen[request.url.path] = json.loads(request.content)
+        if request.url.path == "/tokenize":
+            return httpx.Response(200, json={"tokens": [1, 2, 3]})
+        if request.url.path == "/detokenize":
+            return httpx.Response(200, json={"content": "hi"})
+        return httpx.Response(404)
+
+    client = _client(handler)
+    client._tokenize("hello")
+    client._detokenize([1, 2, 3])
+    assert seen["/tokenize"]["model"] == "test-model"
+    assert seen["/detokenize"]["model"] == "test-model"

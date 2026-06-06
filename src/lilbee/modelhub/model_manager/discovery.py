@@ -57,18 +57,23 @@ def _classify_remote_task(name: str, family: str) -> ModelTask:
 
 
 def reclassify_by_name(ref: str, declared_task: str) -> str:
-    """Override declared_task to RERANK / VISION when ref names a known role.
+    """Override declared_task to RERANK / VISION / EMBEDDING when ref names a known role.
 
-    Defends against pre-fix manifests that stored ``task="chat"`` for
-    models whose ref obviously identifies them as rerankers (e.g.
-    ``bge-reranker-*``) or vision loaders. The model bar uses this so a
-    historical mis-tag does not surface a reranker in the chat picker.
+    Defends against manifests that stored ``task="chat"`` for models whose ref
+    obviously identifies them as rerankers (e.g. ``bge-reranker-*``), vision
+    loaders, or embedders. Embedders on a chat decoder arch (e.g.
+    ``Qwen3-Embedding-*``, a qwen3 backbone + pooling head) classify as chat by
+    architecture, so the name is the only signal short of probing the GGUF
+    pooling type. Reranker is checked before embedding so ``bge-reranker`` (which
+    also matches the ``bge-`` embedder pattern) stays a reranker.
     """
     name_lower = ref.lower()
     if any(rp in name_lower for rp in _RERANKER_NAME_PATTERNS):
         return ModelTask.RERANK
     if any(vp in name_lower for vp in _VISION_NAME_PATTERNS):
         return ModelTask.VISION
+    if any(ep in name_lower for ep in _EMBEDDING_NAME_PATTERNS):
+        return ModelTask.EMBEDDING
     return declared_task
 
 

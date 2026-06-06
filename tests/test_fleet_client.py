@@ -737,3 +737,41 @@ def test_tokenize_and_detokenize_use_upstream_route() -> None:
     client._detokenize([1, 2, 3])
     assert "/upstream/test-model/tokenize" in seen
     assert "/upstream/test-model/detokenize" in seen
+
+
+def test_embed_retries_with_exact_tokenize_on_context_overflow() -> None:
+    """A token-dense input the char estimate trusts can overflow the context; embed
+    retries that batch with exact server-side tokenization so it truncates (bb-54r)."""
+    calls = {"embed": 0, "tokenize": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/tokenize"):
+            calls["tokenize"] += 1
+            return httpx.Response(200, json={"tokens": list(range(20))})
+        if path.endswith("/detokenize"):
+            return httpx.Response(200, json={"content": "t"})
+        if path == "/v1/embeddings":
+            calls["embed"] += 1
+            if calls["embed"] == 1:
+                return httpx.Response(400, text='{"error":{"message":"exceed_context_size_error"}}')
+            return httpx.Response(200, json={"data": [{"embedding": [0.5]}]})
+        return httpx.Response(404)
+
+    # cap=10 so "dense" (est 2) is trusted and sent untruncated on the first try.
+    out = _capped_client(handler, 10).embed(["dense"])
+    assert out == [[0.5]]
+    assert calls["embed"] == 2  # first overflowed, retry succeeded
+    assert calls["tokenize"] >= 1  # retry used exact tokenization
+
+
+def test_embed_does_not_retry_on_non_overflow_error() -> None:
+    """A non-overflow embed error propagates without a tokenize-retry."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/embeddings":
+            return httpx.Response(500, text="boom")
+        return httpx.Response(404)
+
+    with pytest.raises(ProviderError, match="500"):
+        _capped_client(handler, 10).embed(["x"])

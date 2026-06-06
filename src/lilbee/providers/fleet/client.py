@@ -299,9 +299,27 @@ class LlamaServerClient:
             return []
         vectors: list[list[float]] = []
         for sub_batch in self._truncate_and_subbatch(texts, estimate=True):
-            data = self._embeddings_call(sub_batch)
+            data = self._embed_subbatch(sub_batch)
             vectors.extend(list(item["embedding"]) for item in data)
         return vectors
+
+    def _embed_subbatch(self, sub_batch: list[str]) -> list[dict[str, Any]]:
+        """Embed one estimate-budgeted sub-batch, re-truncating exactly on overflow.
+
+        ``_estimate_tokens`` is char-based and can under-count token-dense inputs
+        (XML, code), so an estimate-trusted input may still exceed the server's
+        context. On that error -- and only that -- redo the batch with exact
+        server-side tokenization, which truncates the oversize input to the cap.
+        """
+        try:
+            return self._embeddings_call(sub_batch)
+        except ProviderError as exc:
+            if exc.kind is not ProviderErrorKind.CONTEXT_OVERFLOW:
+                raise
+            data: list[dict[str, Any]] = []
+            for exact in self._truncate_and_subbatch(sub_batch, estimate=False):
+                data.extend(self._embeddings_call(exact))
+            return data
 
     def rerank(self, query: str, candidates: list[str]) -> list[float]:
         """Relevance scores via rank-pooling embeddings (mirrors the in-process path).

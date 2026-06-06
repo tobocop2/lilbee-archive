@@ -147,7 +147,7 @@ def real_models():
 
 @pytest.fixture(autouse=True)
 def isolated_env(tmp_path, real_models):
-    """Redirect config to temp dirs, configure real llama-cpp models."""
+    """Redirect config to temp dirs, configure real local models."""
     snapshot = {name: getattr(cfg, name) for name in type(cfg).model_fields}
 
     cfg.documents_dir = tmp_path / "documents"
@@ -157,7 +157,7 @@ def isolated_env(tmp_path, real_models):
     cfg.lancedb_dir = tmp_path / "data" / "lancedb"
     cfg.data_root = tmp_path
 
-    cfg.llm_provider = "llama-cpp"
+    cfg.llm_provider = "auto"
     cfg.models_dir = canonical_models_dir()
     from tests.integration.conftest import _resolve_installed_ref
 

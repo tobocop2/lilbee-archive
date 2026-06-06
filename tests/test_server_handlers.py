@@ -708,14 +708,19 @@ class TestMemoryExtractedEvent:
         extract.assert_not_called()
 
     async def test_not_emitted_when_nothing_extracted(self, mock_svc):
+        # A real (non-empty) answer reaches the extraction pass, which returns nothing;
+        # the stream must emit no memory_extracted event.
         mock_svc.searcher.build_rag_context.return_value = _rag_return()
-        mock_svc.provider.chat.return_value = iter(["answer"])
         with (
+            patch.object(
+                _rag_h, "dispatch_chat_stream", lambda req: _canonical_text_stream(["an answer"])
+            ),
             patch("lilbee.server.handlers.rag.auto_extract_enabled", return_value=True),
-            patch("lilbee.server.handlers.rag.auto_extract", return_value=[]),
+            patch("lilbee.server.handlers.rag.auto_extract", return_value=[]) as extract,
         ):
             events = [e async for e in handlers.chat_stream("q", [])]
         assert "memory_extracted" not in _event_types(events)
+        extract.assert_called_once_with("q", "an answer")
 
     async def test_not_emitted_on_empty_answer(self, mock_svc):
         mock_svc.searcher.build_rag_context.return_value = _rag_return()

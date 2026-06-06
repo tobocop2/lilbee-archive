@@ -184,23 +184,6 @@ async def _emit_extracted_memories(question: str, answer: str) -> AsyncGenerator
     yield sse_event(SseEvent.MEMORY_EXTRACTED, event.model_dump(mode="json"))
 
 
-def _error_event(exc: Exception) -> str:
-    """Build the SSE error event for a stream failure.
-
-    Provider errors already carry a user-facing message (rate limits, auth,
-    bad model), so surface it verbatim. Everything else goes through the
-    llama.cpp OOM classifier and otherwise collapses to a generic message.
-    """
-    if isinstance(exc, ProviderError):
-        log.warning("Provider error during stream: %s", exc)
-        kind_code = exc.kind if exc.kind is not ProviderErrorKind.UNKNOWN else None
-        return sse_error(str(exc), code=kind_code)
-    raw = str(exc)
-    code, user_message = classify_load_error(raw)
-    log.warning("Stream error: %s", raw)
-    return sse_error(user_message, code=code, detail=raw if code else None)
-
-
 async def _stream_rag_response(
     question: str,
     history: list[ChatMessage] | None = None,
@@ -415,11 +398,10 @@ def _nudged_request(req: CanonicalChatRequest) -> CanonicalChatRequest:
 
 async def _aclose(stream: AsyncIterator[Any]) -> None:
     """Best-effort close for async-generator-shaped streams."""
-    closer = getattr(stream, "aclose", None)
-    if closer is None:
+    if not isinstance(stream, AsyncGenerator):
         return
     with contextlib.suppress(Exception):
-        await closer()
+        await stream.aclose()
 
 
 def _sse_for_chat_event(event: StreamToken | CapNotice) -> str:
@@ -480,7 +462,11 @@ def _direct_messages(question: str, history: list[ChatMessage]) -> list[ChatMess
     return msgs
 
 
-_CANONICAL_ROLES: frozenset[str] = frozenset({"user", "assistant", "tool"})
+_CANONICAL_ROLE_BY_WIRE: dict[str, Literal["user", "assistant", "tool"]] = {
+    "user": "user",
+    "assistant": "assistant",
+    "tool": "tool",
+}
 
 
 def _build_canonical_request(
@@ -504,11 +490,12 @@ def _build_canonical_request(
     )
 
 
-def _canonical_role(role: str) -> Literal["user", "assistant", "tool"]:
+def _canonical_role(wire_role: str) -> Literal["user", "assistant", "tool"]:
     """Narrow a raw wire role string to the canonical literal set or raise."""
-    if role not in _CANONICAL_ROLES:
-        raise ValueError(f"Unsupported message role {role!r}")
-    return cast("Literal['user', 'assistant', 'tool']", role)
+    try:
+        return _CANONICAL_ROLE_BY_WIRE[wire_role]
+    except KeyError:
+        raise ValueError(f"Unsupported message role {wire_role!r}") from None
 
 
 def _split_system(

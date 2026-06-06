@@ -58,8 +58,6 @@ def _raise_chat_http_error(exc: Exception) -> NoReturn:
     """
     if isinstance(exc, ValueError):
         raise ValidationException(str(exc)) from exc
-    if isinstance(exc, EmbeddingModelMismatchError):
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
     classified = classify_provider_error(exc)
     status = classified.http_status if classified is not None else _SERVICE_UNAVAILABLE_STATUS
     raise HTTPException(status_code=status, detail=str(exc)) from exc

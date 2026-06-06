@@ -289,7 +289,9 @@ class FleetProvider:
         if swap is not None:
             swap.shutdown()
 
-    def _require_configured_model(self, model: str | None, configured: str, role: str) -> None:
+    def _require_configured_model(
+        self, model: str | None, configured: str, role: WorkerRole
+    ) -> None:
         """Reject a per-call model that differs from the server's configured one.
 
         The fleet serves the configured model for each role; switching models is
@@ -350,7 +352,7 @@ class FleetProvider:
         from lilbee.core.config import cfg
         from lilbee.providers.engine_params import chat_options_to_kwargs
 
-        self._require_configured_model(model, str(cfg.chat_model), "chat")
+        self._require_configured_model(model, str(cfg.chat_model), WorkerRole.CHAT)
         client = _least_in_flight(self._require_clients(WorkerRole.CHAT))
         # Translate options exactly as the in-process path did (validate via
         # LLMOptions, num_predict -> max_tokens, drop num_ctx) so the server
@@ -379,7 +381,7 @@ class FleetProvider:
         from lilbee.core.config import cfg
         from lilbee.providers.engine_params import chat_options_to_kwargs
 
-        self._require_configured_model(model, str(cfg.chat_model), "chat")
+        self._require_configured_model(model, str(cfg.chat_model), WorkerRole.CHAT)
         clients = self._require_clients(WorkerRole.CHAT)
         server_options = chat_options_to_kwargs(options) or None
         return _least_in_flight(clients).chat_tools(
@@ -395,7 +397,7 @@ class FleetProvider:
         from lilbee.core.config import cfg
         from lilbee.vision import OCR_PROMPT, build_vision_messages
 
-        self._require_configured_model(model, str(cfg.vision_model), "vision")
+        self._require_configured_model(model, str(cfg.vision_model), WorkerRole.VISION)
         clients = self._require_clients(WorkerRole.VISION)
         messages = build_vision_messages(prompt or OCR_PROMPT, png_bytes)
         return _vision_call(_least_in_flight(clients), messages, timeout)
@@ -431,7 +433,7 @@ class FleetProvider:
         )
 
         del quiet  # protocol parity; no server-side Rich progress to suppress.
-        self._require_configured_model(model, str(cfg.vision_model), "vision")
+        self._require_configured_model(model, str(cfg.vision_model), WorkerRole.VISION)
         clients = self._require_clients(WorkerRole.VISION)
         total = pdf_page_count(path)
         # One document-wide deadline (pages*per_page + load grace), not a per-page

@@ -432,6 +432,8 @@ class TestStreamSingleFlightGate:
         with contextlib.suppress(Exception):
             client.post("/api/ask/stream", json={"question": "boom"})
         assert chat_gate().in_flight == 0
+
+
 class TestEmbeddingMismatchSurfacing:
     """A downloaded index built with a different embedder surfaces as an actionable
     error, not a generic 503/stream failure. The store raises
@@ -483,15 +485,22 @@ class TestEmbeddingMismatchSurfacing:
         assert resp.status_code == 409
         assert resp.json()["extra"]["adoptable"] is False
 
-    def test_stream_emits_mismatch_code_and_embedder(self):
-        """_stream_rag_response catches the mismatch and emits a coded SSE error."""
+    def test_chat_stream_emits_mismatch_code_and_embedder(self):
+        """The chat stream catches the mismatch and emits a coded SSE error."""
+        self._assert_stream_emits_mismatch(lambda rag: rag.chat_stream(question="q", history=[]))
+
+    def test_ask_stream_emits_mismatch_code_and_embedder(self):
+        """The ask stream catches the mismatch and emits the same coded SSE error."""
+        self._assert_stream_emits_mismatch(lambda rag: rag.ask_stream(question="q"))
+
+    def _assert_stream_emits_mismatch(self, make_stream):
         from lilbee.runtime.progress import SseErrorCode
         from lilbee.server.handlers import rag
 
         async def _collect():
             with mock.patch.object(rag, "get_services") as mock_services:
                 mock_services.return_value.searcher.build_rag_context.side_effect = self._mismatch()
-                return [event async for event in rag.chat_stream(question="q", history=[])]
+                return [event async for event in make_stream(rag)]
 
         events = asyncio.run(_collect())
         payloads = [

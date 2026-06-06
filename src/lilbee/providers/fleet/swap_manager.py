@@ -46,8 +46,15 @@ _KEY_RUNNING = "running"
 _KEY_MODEL = "model"
 _KEY_STATE = "state"
 _STATE_READY = "ready"
-_CREATE_NEW_PROCESS_GROUP: int = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-_SIGKILL: int = getattr(signal, "SIGKILL", signal.SIGTERM)
+
+
+def _platform_const(module: object, name: str, default: int) -> int:
+    """A platform-conditional stdlib constant (absent on some OSes -> default)."""
+    return getattr(module, name, default)
+
+
+_CREATE_NEW_PROCESS_GROUP: int = _platform_const(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+_SIGKILL: int = _platform_const(signal, "SIGKILL", signal.SIGTERM)
 
 
 class SwapManager:

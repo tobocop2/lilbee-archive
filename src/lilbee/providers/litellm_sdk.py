@@ -89,6 +89,15 @@ def install_litellm_log_filter() -> None:
 install_litellm_log_filter()
 
 
+def _sdk_attr(obj: object, name: str) -> Any:
+    """Read an optional attribute off a litellm response/chunk object (absent -> None).
+
+    The single dynamic-read boundary for the SDK's loosely-typed objects, whose tool-call
+    fields are absent (not just ``None``) across litellm chunk shapes.
+    """
+    return getattr(obj, name, None)
+
+
 class _LitellmResponseView:
     """Typed read-only view over a litellm completion-response object.
 
@@ -146,10 +155,10 @@ class _LitellmResponseView:
         choice = self._first_choice()
         if choice is None:
             return ()
-        message = getattr(choice, "message", None)
+        message = _sdk_attr(choice, "message")
         if message is None:
             return ()
-        raw_calls = getattr(message, "tool_calls", None) or []
+        raw_calls = _sdk_attr(message, "tool_calls") or []
         return tuple(_extract_tool_call(call) for call in raw_calls)
 
     @property
@@ -158,10 +167,10 @@ class _LitellmResponseView:
         choice = self._first_choice()
         if choice is None:
             return ()
-        delta = getattr(choice, "delta", None)
+        delta = _sdk_attr(choice, "delta")
         if delta is None:
             return ()
-        raw_calls = getattr(delta, "tool_calls", None) or []
+        raw_calls = _sdk_attr(delta, "tool_calls") or []
         return tuple(
             _extract_tool_call_delta(call, fallback_index=i) for i, call in enumerate(raw_calls)
         )
@@ -169,10 +178,10 @@ class _LitellmResponseView:
 
 def _extract_tool_call(call: Any) -> SdkToolCall:
     """Pull one ``SdkToolCall`` out of a litellm tool-call object."""
-    call_id = str(getattr(call, "id", "") or "")
-    function = getattr(call, "function", None)
-    name = str(getattr(function, "name", "") or "") if function is not None else ""
-    arguments = str(getattr(function, "arguments", "") or "") if function is not None else ""
+    call_id = str(_sdk_attr(call, "id") or "")
+    function = _sdk_attr(call, "function")
+    name = str(_sdk_attr(function, "name") or "") if function is not None else ""
+    arguments = str(_sdk_attr(function, "arguments") or "") if function is not None else ""
     return SdkToolCall(id=call_id, name=name, arguments=arguments)
 
 
@@ -184,12 +193,12 @@ def _extract_tool_call_delta(call: Any, *, fallback_index: int) -> SdkToolCallDe
     ``_StreamState`` gates on ``is not None``; emitting ``""`` produces a
     spurious empty ContentBlockDelta on every opener).
     """
-    raw_index = getattr(call, "index", None)
+    raw_index = _sdk_attr(call, "index")
     index = int(raw_index) if isinstance(raw_index, int) else fallback_index
-    call_id = getattr(call, "id", None)
-    function = getattr(call, "function", None)
-    raw_name = getattr(function, "name", None) if function is not None else None
-    raw_args = getattr(function, "arguments", None) if function is not None else None
+    call_id = _sdk_attr(call, "id")
+    function = _sdk_attr(call, "function")
+    raw_name = _sdk_attr(function, "name") if function is not None else None
+    raw_args = _sdk_attr(function, "arguments") if function is not None else None
     return SdkToolCallDelta(
         index=index,
         id=str(call_id) if call_id else None,

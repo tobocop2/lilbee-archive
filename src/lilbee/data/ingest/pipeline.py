@@ -49,9 +49,27 @@ from lilbee.runtime.progress import (
 
 log = logging.getLogger(__name__)
 
-# Limit concurrent ingestion. Sourced from cpu_quota() so worker storms
-# can't starve the TUI's asyncio main thread on macOS.
-_MAX_CONCURRENT = cpu_quota()
+def _max_concurrent() -> int:
+    """Files allowed in their compute phase at once.
+
+    ``cpu_quota()`` (cpu_count // 2) keeps worker storms from starving the TUI's asyncio
+    main thread. But with a data-parallel fleet (N vision/embed servers, one per GPU), a
+    few-core box would cap file concurrency below the GPU count and starve the extra
+    cards, so the bottleneck role's total slots set the floor: vision OCR (replicas x
+    per-server pages) when a vision model is configured, else the embed replicas.
+    """
+    from lilbee.core.config import cfg
+
+    # Only a multi-replica (multi-GPU) fleet scales above cpu_quota; with one replica per
+    # role the cpu_quota cap is untouched, so single-GPU/CPU hosts and the macOS TUI see
+    # exactly the previous behavior.
+    vision_slots = (
+        cfg.vision_replicas * cfg.vision_ocr_concurrency
+        if cfg.vision_model and cfg.vision_replicas > 1
+        else 0
+    )
+    embed_slots = cfg.embed_replicas if cfg.embed_replicas > 1 else 0
+    return max(cpu_quota(), vision_slots, embed_slots)
 
 
 async def _rebuild_concept_clusters() -> None:
@@ -362,7 +380,7 @@ async def ingest_batch(
     ingesting new ones so the two operations are atomic per file.
     When *cancel* is set, pending files raise CancelledError before starting.
     """
-    semaphore = asyncio.Semaphore(_MAX_CONCURRENT)
+    semaphore = asyncio.Semaphore(_max_concurrent())
     total_files = len(files_to_process)
 
     async def _process_one(

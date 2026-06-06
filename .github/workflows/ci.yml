@@ -226,6 +226,42 @@ jobs:
             echo "DYLD_LIBRARY_PATH=${bindir}:${DYLD_LIBRARY_PATH:-}" >> "${GITHUB_ENV}"
           fi
 
+      # The engine also needs llama-swap (process supervisor / OpenAI proxy) and
+      # gguf-parser (footprint estimator), introduced with the llama-swap engine.
+      # The lilbee-engine wheel ships these only in the release build, so build the
+      # pinned versions from source here; resolve_llama_swap()/resolve_gguf_parser()
+      # then find them on PATH. Same Go toolchain the release wheel uses.
+      - name: Set up Go (engine helpers)
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Install llama-swap + gguf-parser (engine helpers)
+        shell: bash
+        env:
+          # Keep in sync with tools/wheel-build/build_llama_server.sh.
+          LLAMA_SWAP_VERSION: v223
+          GGUF_PARSER_REF: main
+        run: |
+          set -euxo pipefail
+          helperdir="${HOME}/engine-helpers"
+          mkdir -p "${helperdir}"
+          exe=""
+          if [ "${{ runner.os }}" = "Windows" ]; then exe=".exe"; fi
+          work="$(mktemp -d)"
+          git clone -q --depth 1 --branch "${LLAMA_SWAP_VERSION}" \
+            https://github.com/mostlygeek/llama-swap.git "${work}/llama-swap"
+          ( cd "${work}/llama-swap" && go build -trimpath -o "${helperdir}/llama-swap${exe}" . )
+          # gguf-parser's CLI lives under a nested go.mod in cmd/gguf-parser.
+          git clone -q --depth 1 --branch "${GGUF_PARSER_REF}" \
+            https://github.com/gpustack/gguf-parser-go.git "${work}/gguf-parser-go"
+          ( cd "${work}/gguf-parser-go/cmd/gguf-parser" && go build -trimpath -o "${helperdir}/gguf-parser${exe}" . )
+          if command -v cygpath >/dev/null 2>&1; then
+            cygpath -w "${helperdir}" >> "${GITHUB_PATH}"
+          else
+            echo "${helperdir}" >> "${GITHUB_PATH}"
+          fi
+
       - name: Restore Ollama binary cache (Windows)
         if: runner.os == 'Windows'
         id: ollama-bin-cache

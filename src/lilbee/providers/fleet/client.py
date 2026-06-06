@@ -91,6 +91,10 @@ _CHAT_PATH = "/v1/chat/completions"
 _EMBED_PATH = "/v1/embeddings"
 _TOKENIZE_PATH = "/tokenize"
 _DETOKENIZE_PATH = "/detokenize"
+# llama-swap proxies native (non-OpenAI) llama.cpp routes only under
+# /upstream/<model>/...; the bare /tokenize path 404s (it routes /v1/* by the
+# body's model field, but a native route carries no such field).
+_UPSTREAM_PREFIX = "/upstream"
 # Match the in-process tokenizer call (llm.tokenize(text, add_bos=True, special=False)):
 # the server adds BOS via add_special and leaves special-token strings unparsed.
 _TOKENIZE_ADD_SPECIAL = True
@@ -388,13 +392,18 @@ class LlamaServerClient:
             return self._detokenize(tokens[:cap]), cap
         return text, max(1, len(tokens))
 
+    def _native_route(self, suffix: str) -> str:
+        """Path for a native (non-OpenAI) llama-server route through llama-swap.
+
+        llama-swap proxies these only under ``/upstream/<model>/...``; the model
+        is carried in the path, not the body (unlike the ``/v1`` OpenAI routes).
+        """
+        return f"{_UPSTREAM_PREFIX}/{self._model}{suffix}"
+
     def _tokenize(self, text: str) -> list[int]:
-        # ``model`` is required even on the native /tokenize route: llama-swap
-        # selects the upstream by it, and omitting it 404s the request.
         resp = self._http.post(
-            _TOKENIZE_PATH,
+            self._native_route(_TOKENIZE_PATH),
             json={
-                "model": self._model,
                 "content": text,
                 "add_special": _TOKENIZE_ADD_SPECIAL,
                 "parse_special": _TOKENIZE_PARSE_SPECIAL,
@@ -404,7 +413,7 @@ class LlamaServerClient:
         return list(resp.json()["tokens"])
 
     def _detokenize(self, tokens: list[int]) -> str:
-        resp = self._http.post(_DETOKENIZE_PATH, json={"model": self._model, "tokens": tokens})
+        resp = self._http.post(self._native_route(_DETOKENIZE_PATH), json={"tokens": tokens})
         _raise_for_status(resp)
         return str(resp.json()["content"])
 

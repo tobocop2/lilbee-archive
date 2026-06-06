@@ -200,10 +200,10 @@ def test_embed_truncates_oversize_input_via_server_tokenizer() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
-        if request.url.path == "/tokenize":
+        if request.url.path.endswith("/tokenize"):
             # 5 tokens for the long text, more than the cap of 3
             return httpx.Response(200, json={"tokens": [10, 11, 12, 13, 14]})
-        if request.url.path == "/detokenize":
+        if request.url.path.endswith("/detokenize"):
             seen["detok_tokens"] = body["tokens"]
             return httpx.Response(200, json={"content": "trunc"})
         seen["embedded"] = body["input"]
@@ -219,9 +219,9 @@ def test_embed_keeps_input_within_cap_unchanged() -> None:
     seen: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/tokenize":
+        if request.url.path.endswith("/tokenize"):
             return httpx.Response(200, json={"tokens": [1, 2]})  # 2 <= cap 3
-        if request.url.path == "/detokenize":
+        if request.url.path.endswith("/detokenize"):
             raise AssertionError("must not detokenize an input within the cap")
         seen["embedded"] = json.loads(request.content)["input"]
         return httpx.Response(200, json={"data": [{"embedding": [0.5]}]})
@@ -234,7 +234,7 @@ def test_embed_tokenize_request_matches_in_process_flags() -> None:
     seen: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/tokenize":
+        if request.url.path.endswith("/tokenize"):
             seen.update(json.loads(request.content))
             return httpx.Response(200, json={"tokens": [1]})
         return httpx.Response(200, json={"data": [{"embedding": [0.1]}]})
@@ -252,7 +252,7 @@ def test_embed_estimates_tokens_without_per_input_tokenize() -> None:
     sent: list[list[str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path in ("/tokenize", "/detokenize"):
+        if request.url.path.endswith(("/tokenize", "/detokenize")):
             raise AssertionError("normal-sized chunks must not hit the server tokenizer")
         inputs = json.loads(request.content)["input"]
         sent.append(list(inputs))
@@ -267,9 +267,9 @@ def test_embed_estimates_tokens_without_per_input_tokenize() -> None:
 def test_rerank_truncates_oversize_pairs() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
-        if request.url.path == "/tokenize":
+        if request.url.path.endswith("/tokenize"):
             return httpx.Response(200, json={"tokens": list(range(9))})  # 9 > cap 4
-        if request.url.path == "/detokenize":
+        if request.url.path.endswith("/detokenize"):
             return httpx.Response(200, json={"content": "t"})
         # one score per (truncated) pair
         return httpx.Response(200, json={"data": [{"embedding": [0.9]} for _ in body["input"]]})
@@ -319,7 +319,7 @@ def test_embed_subbatches_when_token_budget_exceeded() -> None:
     sent: list[list[str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path in ("/tokenize", "/detokenize"):
+        if request.url.path.endswith(("/tokenize", "/detokenize")):
             raise AssertionError("estimation must not hit the server tokenizer here")
         inputs = json.loads(request.content)["input"]
         sent.append(list(inputs))
@@ -339,7 +339,7 @@ def test_embed_subbatches_when_sequence_count_exceeded() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
-        if request.url.path == "/tokenize":
+        if request.url.path.endswith("/tokenize"):
             return httpx.Response(200, json={"tokens": [1]})  # 1 token each
         sizes.append(len(body["input"]))
         return httpx.Response(200, json={"data": [{"embedding": [0.0]} for _ in body["input"]]})
@@ -719,21 +719,21 @@ def test_parse_sse_stream_items_skips_empty_choices() -> None:
     assert list(_parse_sse_stream_items('data: {"choices": []}')) == []
 
 
-def test_tokenize_and_detokenize_carry_model_for_swap_routing() -> None:
-    """llama-swap routes by the request's model field, so the native /tokenize and
-    /detokenize calls must include it or the request 404s (bb-4pw)."""
-    seen: dict[str, dict] = {}
+def test_tokenize_and_detokenize_use_upstream_route() -> None:
+    """llama-swap proxies the native /tokenize + /detokenize routes only under
+    /upstream/<model>/...; the bare paths 404 (bb-4pw)."""
+    seen: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        seen[request.url.path] = json.loads(request.content)
-        if request.url.path == "/tokenize":
+        seen.append(request.url.path)
+        if request.url.path.endswith("/tokenize"):
             return httpx.Response(200, json={"tokens": [1, 2, 3]})
-        if request.url.path == "/detokenize":
+        if request.url.path.endswith("/detokenize"):
             return httpx.Response(200, json={"content": "hi"})
         return httpx.Response(404)
 
     client = _client(handler)
     client._tokenize("hello")
     client._detokenize([1, 2, 3])
-    assert seen["/tokenize"]["model"] == "test-model"
-    assert seen["/detokenize"]["model"] == "test-model"
+    assert "/upstream/test-model/tokenize" in seen
+    assert "/upstream/test-model/detokenize" in seen

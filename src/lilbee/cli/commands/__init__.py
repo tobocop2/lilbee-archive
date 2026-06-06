@@ -11,6 +11,7 @@ from __future__ import annotations
 from lilbee.cli.app import app
 from lilbee.cli.commands import (
     agent_config,
+    dataset,
     ingest_sync,
     memory,
     meta,
@@ -30,6 +31,8 @@ app.command()(ingest_sync.index)
 app.command()(ingest_sync.add)
 app.command()(ingest_sync.chunks)
 app.command()(ingest_sync.remove)
+app.command(name="export")(dataset.export_cmd)
+app.command(name="import")(dataset.import_cmd)
 app.command()(search_chat.ask)
 app.command()(search_chat.chat)
 app.command(name="use-embedder")(search_chat.use_embedder)

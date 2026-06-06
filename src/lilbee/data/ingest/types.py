@@ -9,7 +9,7 @@ from typing import NamedTuple, TypedDict
 
 from pydantic import BaseModel
 
-from lilbee.data.store import ChunkType
+from lilbee.data.store import ChunkType, PageTextRecord
 
 
 class FileToProcess(NamedTuple):
@@ -104,7 +104,8 @@ class _IngestResult:
     ``records`` carries the produced (extracted + embedded) chunks until the
     batched flush writes them; ``None`` on a failed file. ``needs_cleanup``
     travels with the records so the flush can delete the source's old chunks in
-    the same transaction.
+    the same transaction. ``page_texts`` carries the per-page text dataset rows,
+    written by the same flush.
     """
 
     name: str
@@ -114,6 +115,7 @@ class _IngestResult:
     file_hash: str = ""
     records: list[ChunkRecord] | None = None
     needs_cleanup: bool = True
+    page_texts: list[PageTextRecord] | None = None
 
 
 # Extension → content_type string for document formats handled by kreuzberg

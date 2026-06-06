@@ -29,7 +29,7 @@ from lilbee.data.ingest.skip_marker import (
     write_skip_markers,
 )
 from lilbee.data.ingest.types import ChunkRecord, FileToProcess, SyncResult, _IngestResult
-from lilbee.data.store import ChunkWrite
+from lilbee.data.store import ChunkWrite, PageTextRecord, SourceRecord, SourceType
 from lilbee.runtime.asyncio_loop import is_executor_shutdown
 from lilbee.runtime.cancellation import TaskCancelledError
 from lilbee.runtime.cpu import cpu_quota
@@ -115,19 +115,22 @@ async def _produce_records(
     *,
     quiet: bool = False,
     on_progress: DetailedProgressCallback = noop_callback,
+    page_texts_out: list[PageTextRecord] | None = None,
 ) -> list[ChunkRecord]:
     """Extract, chunk, and embed a single file into store-ready records.
 
     The LanceDB write is deferred: records are returned to the caller and written
     in a batched flush (see :func:`_flush_writes`), so bulk ingest pays one
-    write-lock acquisition per batch instead of one per file. Concept indexing
-    runs here because it reads the in-memory records, not the store.
+    write-lock acquisition per batch instead of one per file. The per-page text
+    dataset rows land in ``page_texts_out`` and are written by the same flush.
+    Concept indexing runs here because it reads the in-memory records, not the store.
     """
     records: list[ChunkRecord]
+    page_texts: list[PageTextRecord] = page_texts_out if page_texts_out is not None else []
     if content_type == "code":
         records = await asyncio.to_thread(ingest_code_sync, path, source_name, on_progress)
     elif path.suffix.lower() == ".md":
-        records = await ingest_markdown(path, source_name, on_progress)
+        records = await ingest_markdown(path, source_name, on_progress, page_texts_out=page_texts)
     else:
         records = await ingest_document(
             path,
@@ -135,6 +138,7 @@ async def _produce_records(
             content_type,
             quiet=quiet,
             on_progress=on_progress,
+            page_texts_out=page_texts,
         )
 
     await _index_concepts(records, source_name)
@@ -187,6 +191,19 @@ def _plan_file_changes(
     return files_to_process, added, updated, unchanged
 
 
+def _removable_sources(sources: list[SourceRecord], disk_files: dict[str, Path]) -> list[str]:
+    """Document sources whose backing file is gone.
+
+    Imported sources are detached (no file under documents/), so a missing
+    disk file must not mark them for removal.
+    """
+    return [
+        s["filename"]
+        for s in sources
+        if s["filename"] not in disk_files and s["source_type"] != SourceType.IMPORTED
+    ]
+
+
 def detect_pending() -> int:
     """Count files in documents/ that are out of sync with the store.
 
@@ -200,8 +217,9 @@ def detect_pending() -> int:
     if not cfg.documents_dir.exists():
         return 0
     disk_files = discover_files()
-    existing_sources = {s["filename"]: s["file_hash"] for s in get_services().store.get_sources()}
-    removed = sum(1 for name in existing_sources if name not in disk_files)
+    sources = get_services().store.get_sources()
+    existing_sources = {s["filename"]: s["file_hash"] for s in sources}
+    removed = len(_removable_sources(sources, disk_files))
     skip_markers = load_skip_markers(cfg.data_root)
     files_to_process, _, _, _ = _plan_file_changes(
         disk_files, existing_sources, cancel=None, skip_markers=skip_markers
@@ -267,15 +285,16 @@ async def sync(
     cfg.documents_dir.mkdir(parents=True, exist_ok=True)
 
     disk_files = discover_files()
-    existing_sources = {s["filename"]: s["file_hash"] for s in _store.get_sources()}
+    sources = _store.get_sources()
+    existing_sources = {s["filename"]: s["file_hash"] for s in sources}
     skip_markers = _load_pruned_skip_markers(disk_files, clear_first=force_rebuild or retry_skipped)
 
     removed: list[str] = []
     failed: list[str] = []
     skipped: list[str] = []
 
-    # Find files to remove (in DB but not on disk)
-    to_remove = [name for name in existing_sources if name not in disk_files]
+    # Find files to remove (document sources whose file is gone; imports are kept)
+    to_remove = _removable_sources(sources, disk_files)
     if to_remove:
         _store.remove_documents(to_remove)
         removed.extend(to_remove)
@@ -409,12 +428,14 @@ async def ingest_batch(
                 # The source's old chunks are deleted in the same locked
                 # transaction as the new write (see _flush_writes), so cleanup is
                 # carried on the result rather than run eagerly here.
+                page_texts: list[PageTextRecord] = []
                 records = await _produce_records(
                     path,
                     name,
                     content_type,
                     quiet=quiet,
                     on_progress=on_progress,
+                    page_texts_out=page_texts,
                 )
                 on_progress(
                     EventType.FILE_DONE,
@@ -428,6 +449,7 @@ async def ingest_batch(
                     file_hash=fhash,
                     records=records,
                     needs_cleanup=needs_cleanup,
+                    page_texts=page_texts,
                 )
             except (asyncio.CancelledError, TaskCancelledError) as exc:
                 # TaskCancelledError is the TUI's cooperative cancel signal raised
@@ -632,4 +654,11 @@ def _flush_writes(
             _discard_from_list(updated, r.name)
             if r.name not in failed:
                 failed.append(r.name)
+        buffer.clear()
+        return
+    # Chunks persisted; write the batch's per-page text dataset rows (a separate
+    # table) in one more locked pass so bulk ingest stays batched there too.
+    page_texts = [pt for r in buffer for pt in (r.page_texts or [])]
+    if page_texts:
+        get_services().store.add_page_texts(cast(list[dict], page_texts))
     buffer.clear()

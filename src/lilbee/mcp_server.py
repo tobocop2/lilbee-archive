@@ -362,6 +362,51 @@ def list_documents() -> dict[str, Any]:
 
 
 @_tool
+def export_dataset(output: str, fmt: str = "", source: str = "") -> dict[str, Any]:
+    """Write the per-page {source, page, text} dataset to a file (no vectors).
+
+    ``fmt`` is parquet/jsonl (empty infers from the suffix); ``source`` limits to one file.
+    """
+    from lilbee.app.dataset import DatasetError, export_to_path
+
+    try:
+        summary = export_to_path(Path(output), fmt, source or None)
+    except DatasetError as exc:
+        return _error(str(exc))
+    return summary.model_dump()
+
+
+@_tool
+async def import_dataset(dataset: str, fmt: str = "", ctx: Context | None = None) -> dict[str, Any]:
+    """Import a per-page text dataset, re-embedding under the current model.
+
+    Replaces existing copies; imported sources are detached so sync won't delete them.
+    """
+    from lilbee.app.dataset import DatasetError, import_from_path
+    from lilbee.runtime.progress import EmbedEvent, EventType, ProgressEvent
+
+    loop = asyncio.get_running_loop()
+
+    def on_progress(event_type: EventType, data: ProgressEvent) -> None:
+        # EMBED events carry chunk/total_chunks; other event types don't map to a percent.
+        if ctx is None or not isinstance(data, EmbedEvent):
+            return
+        future = asyncio.run_coroutine_threadsafe(
+            ctx.report_progress(
+                progress=float(data.chunk), total=float(data.total_chunks), message=data.file
+            ),
+            loop,
+        )
+        future.add_done_callback(_log_progress_failure)
+
+    try:
+        summary = await import_from_path(Path(dataset), fmt, on_progress=on_progress)
+    except DatasetError as exc:
+        return _error(str(exc))
+    return summary.model_dump()
+
+
+@_tool
 def reset(confirm: bool = False) -> dict[str, Any]:
     """Factory reset: delete all documents and indexed data. Requires ``confirm=true``."""
     if not confirm:

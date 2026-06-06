@@ -91,7 +91,7 @@ async def test_vision_fallback_uses_cache_and_skips_ocr(tmp_path: Path, monkeypa
         seen["pages"] = list(page_texts)
         return []
 
-    monkeypatch.setattr(extract, "_chunk_and_embed_pages", _capture)
+    monkeypatch.setattr(extract, "chunk_and_embed_pages", _capture)
     out = await extract._vision_ocr_fallback(
         pdf, "scan.pdf", "pdf", on_progress=lambda *_a, **_k: None, quiet=True
     )
@@ -118,7 +118,7 @@ async def test_vision_fallback_stores_fresh_ocr(tmp_path: Path, monkeypatch) -> 
     async def _noop(_page_texts, *_a, **_k):
         return []
 
-    monkeypatch.setattr(extract, "_chunk_and_embed_pages", _noop)
+    monkeypatch.setattr(extract, "chunk_and_embed_pages", _noop)
     await extract._vision_ocr_fallback(
         pdf, "scan.pdf", "pdf", on_progress=lambda *_a, **_k: None, quiet=True
     )

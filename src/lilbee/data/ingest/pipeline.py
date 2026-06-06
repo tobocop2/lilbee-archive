@@ -49,6 +49,7 @@ from lilbee.runtime.progress import (
 
 log = logging.getLogger(__name__)
 
+
 def _max_concurrent() -> int:
     """Files allowed in their compute phase at once.
 

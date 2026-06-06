@@ -576,10 +576,12 @@ def test_launch_opencode_picker_state_skips_when_no_models(tmp_path):
         patch("lilbee.cli.launchers.launcher.subprocess.run", return_value=completed),
         patch("lilbee.cli.launchers.launcher.installed_chat_model_refs", return_value=[]),
     ):
-        runner.invoke(app, ["launch", "opencode"])
+        result = runner.invoke(app, ["launch", "opencode"])
 
     state_path = tmp_path / ".local" / "state" / "opencode" / "model.json"
     assert not state_path.exists()
+    # No chat models -> the provider would be unusable; warn loudly (bb-c4t).
+    assert "no chat models are installed" in result.output
 
 
 def test_launch_opencode_spawns_server_when_none_running():

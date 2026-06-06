@@ -48,6 +48,17 @@ def run_launcher(launcher: Launcher) -> None:
         raise typer.Exit(1)
     (token, port), spawned = ensure_server_running()
     model_refs = installed_chat_model_refs()
+    if not model_refs:
+        # The client provider is written with no models, so it cannot use lilbee.
+        # Some clients (e.g. opencode) then silently fall back to their own default
+        # provider, so make the cause loud instead of leaving an empty picker.
+        typer.secho(
+            "Warning: no chat models are installed, so the launched client will have "
+            "no lilbee models to select. Pull one first, e.g. "
+            "'lilbee model pull Qwen/Qwen3-8B-GGUF'.",
+            err=True,
+            fg=typer.colors.YELLOW,
+        )
     # Wait out the cold model load before handing off, so the client opens onto a
     # warm engine instead of an apparently-dead stream. Only meaningful when a
     # chat model is configured to warm.

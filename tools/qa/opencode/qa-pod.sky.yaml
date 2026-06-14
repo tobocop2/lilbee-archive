@@ -41,6 +41,8 @@ envs:
   BRANCH: feat/local-model-api   # the branch under test; pin a SHA for a recorded run
   BACKEND: cu124                 # engine wheel backend the bootstrap builds
   MATRIX_ARGS: ""                # passed to matrix.py, e.g. "--families qwen3 --keep-models"
+  HF_TOKEN: ""                   # gated-model pulls; `make qa-pod-up` passes it as a --secret
+                                 # from your shell env (redacted in sky logs). Empty = ungated only.
 
 # The bootstrap self-clones the branch to /workspace/lilbee, builds the engine onto the
 # volume (cached across resumes), installs the toolchain + opencode + VHS, and writes

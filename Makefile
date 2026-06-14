@@ -109,7 +109,9 @@ qa-pod-up:  ## Provision the QA pod, bootstrap, and run the matrix (MATRIX_ARGS=
 	# -i 30 --down: autostop after 30 min idle and tear the pod down when the matrix
 	# finishes, so a finished or hung run never bills idle. The volume keeps the
 	# engine, models, and results; reels just re-launch (a warm volume boots fast).
-	sky launch -c lilbee-qa $(QA_SKY)/qa-pod.sky.yaml -y -i 30 --down $(if $(MATRIX_ARGS),--env MATRIX_ARGS="$(MATRIX_ARGS)",)
+	# HF_TOKEN (from your shell) is passed as a --secret so gated pulls work and
+	# the token stays redacted in sky logs; unset = ungated models only.
+	sky launch -c lilbee-qa $(QA_SKY)/qa-pod.sky.yaml -y -i 30 --down $(if $(HF_TOKEN),--secret HF_TOKEN="$(HF_TOKEN)",) $(if $(MATRIX_ARGS),--env MATRIX_ARGS="$(MATRIX_ARGS)",)
 
 qa-pod-logs:  ## Follow the QA pod's run log
 	sky logs lilbee-qa

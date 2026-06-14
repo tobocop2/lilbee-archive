@@ -21,15 +21,17 @@ resources:
   cloud: runpod
   disk_size: 100        # ephemeral container disk for the local-disk venv + the from-source
                         # engine build; models / corpus / engine cache live on the volume.
-  # GPU value ladder. The volume pins the DC (US-KS-2), so SkyPilot only provisions there
-  # and degrades the COUNT before dropping a tier. 3x A100-80GB is the usual QA box (a
-  # tensor-split giant spans two cards, leaving the third for the embedder).
+  # GPU value ladder. The volume pins the DC (CA-MTL-3), so SkyPilot only provisions
+  # there and degrades the COUNT before dropping a tier. 3x A100-80GB-SXM is the usual
+  # QA box (~$4.47/hr; a tensor-split giant spans two cards, leaving the third for the
+  # embedder). A100-80GB (PCIe) is the cheaper fallback, then H100.
   ordered:
+    - accelerators: A100-80GB-SXM:3
+    - accelerators: A100-80GB-SXM:2
+    - accelerators: A100-80GB-SXM:1
     - accelerators: A100-80GB:3
     - accelerators: A100-80GB:2
-    - accelerators: A100-80GB:1
     - accelerators: H100:3
-    - accelerators: H100:2
 
 # LILBEE_DATA / models / engine cache live here, so they outlive any pod.
 volumes:

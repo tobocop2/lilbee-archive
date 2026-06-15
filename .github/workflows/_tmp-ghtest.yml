@@ -1,0 +1,18 @@
+name: tmp gh-in-manylinux test
+on:
+  push:
+    branches: ['tmp/gh-container-test']
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    container: quay.io/pypa/manylinux_2_34_x86_64
+    steps:
+      - name: install gh via dnf
+        shell: bash
+        run: |
+          if command -v gh >/dev/null 2>&1; then echo "gh already present"; gh --version; exit 0; fi
+          dnf install -y 'dnf-command(config-manager)'
+          dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo
+          dnf install -y gh
+          gh --version
+          echo "GH_INSTALL_OK"

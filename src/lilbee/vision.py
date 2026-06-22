@@ -56,20 +56,31 @@ def resolve_ocr_prompt(model_ref: str) -> str:
 _RASTER_DPI = 150
 
 
-def pdf_page_count(path: Path) -> int:
-    """Return the number of pages in a PDF without rasterizing."""
-    from kreuzberg import PdfPageIterator  # lazy: heavy dependency
+def _render_pages(data: bytes) -> Iterator[bytes]:
+    """Yield each PDF page as PNG bytes, stopping when the index runs past the end."""
+    from kreuzberg import render_pdf_page_to_png  # lazy: heavy dependency
 
-    it = PdfPageIterator(str(path), dpi=_RASTER_DPI)
-    return len(it)
+    index = 0
+    while True:
+        try:
+            yield render_pdf_page_to_png(data, index, dpi=_RASTER_DPI)
+        except RuntimeError:
+            return  # page index past the last page
+        index += 1
+
+
+def pdf_page_count(path: Path) -> int:
+    """Return the number of pages in a PDF.
+
+    kreuzberg 5.x exposes no cheap page-count API (only per-page rendering), so
+    this rasterizes each page to count them.
+    """
+    return sum(1 for _ in _render_pages(path.read_bytes()))
 
 
 def rasterize_pdf(path: Path) -> Iterator[tuple[int, bytes]]:
     """Yield (0-based index, PNG bytes) for each page of a PDF."""
-    from kreuzberg import PdfPageIterator  # lazy: heavy dependency
-
-    with PdfPageIterator(str(path), dpi=_RASTER_DPI) as pages:
-        yield from pages
+    yield from enumerate(_render_pages(path.read_bytes()))
 
 
 def _png_to_data_url(png_bytes: bytes) -> str:

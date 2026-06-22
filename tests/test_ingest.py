@@ -142,19 +142,17 @@ def _make_kreuzberg_result(
     chunks = []
     for i in range(num_chunks):
         chunk_text = text[i * len(text) // num_chunks : (i + 1) * len(text) // num_chunks]
-        metadata = {
-            "byte_start": 0,
-            "byte_end": len(chunk_text),
-            "chunk_index": i,
-            "total_chunks": num_chunks,
-            "token_count": None,
-        }
-        if has_pages:
-            metadata["first_page"] = i + 1
-            metadata["last_page"] = i + 1
         chunk = mock.MagicMock()
         chunk.content = chunk_text
-        chunk.metadata = metadata
+        chunk.metadata = mock.MagicMock(
+            byte_start=0,
+            byte_end=len(chunk_text),
+            chunk_index=i,
+            total_chunks=num_chunks,
+            token_count=None,
+            first_page=(i + 1) if has_pages else None,
+            last_page=(i + 1) if has_pages else None,
+        )
         chunks.append(chunk)
 
     result = mock.MagicMock()
@@ -162,7 +160,7 @@ def _make_kreuzberg_result(
     result.content = text
     result.document = document
     result.pages = (
-        [{"page_number": i + 1, "content": chunks[i].content} for i in range(num_chunks)]
+        [mock.MagicMock(page_number=i + 1, content=chunks[i].content) for i in range(num_chunks)]
         if has_pages
         else []
     )
@@ -1906,7 +1904,7 @@ class TestExtractionConfig:
         from lilbee.data.ingest import ExtractMode, extraction_config
 
         config = extraction_config(ExtractMode.PAGINATED)
-        assert config.pages is not None
+        assert config.get("pages") is not None
 
     def test_paginated_no_markdown_output(self):
         from lilbee.data.ingest import ExtractMode, extraction_config
@@ -1918,27 +1916,27 @@ class TestExtractionConfig:
         from lilbee.data.ingest import ExtractMode, extraction_config
 
         config = extraction_config(ExtractMode.MARKDOWN)
-        assert config.pages is None
+        assert config.get("pages") is None
 
     def test_markdown_has_chunking(self):
         from lilbee.data.ingest import ExtractMode, extraction_config
 
         config = extraction_config(ExtractMode.MARKDOWN)
-        assert config.chunking is not None
+        assert config.get("chunking") is not None
 
     def test_markdown_sets_output_format(self):
         from lilbee.data.ingest import ExtractMode, extraction_config
 
         config = extraction_config(ExtractMode.MARKDOWN)
-        assert config.output_format == "markdown"
+        assert config["output_format"] == "markdown"
 
     def test_paginated_ocr_has_tesseract(self):
         from lilbee.data.ingest import ExtractMode, extraction_config
 
         config = extraction_config(ExtractMode.PAGINATED_OCR)
-        assert config.pages is not None
-        assert config.ocr is not None
-        assert config.ocr.backend == "tesseract"
+        assert config.get("pages") is not None
+        assert config.get("ocr") is not None
+        assert config["ocr"].backend == "tesseract"
 
     @pytest.mark.parametrize(
         "content_type, expected_mode_name",
@@ -1967,8 +1965,8 @@ class TestExtractionConfig:
         monkeypatch.setattr(cfg, "topic_threshold", 0.42)
         for mode in ExtractMode:
             config = extraction_config(mode)
-            assert config.chunking.chunker_type == "semantic"
-            assert config.chunking.topic_threshold == pytest.approx(0.42, abs=1e-5)
+            assert config["chunking"].chunker_type == "semantic"
+            assert config["chunking"].topic_threshold == pytest.approx(0.42, abs=1e-5)
 
 
 class TestClassifyKreuzbergParityFormats:

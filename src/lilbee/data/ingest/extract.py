@@ -14,7 +14,11 @@ from typing import TYPE_CHECKING, Any
 from PIL import Image, ImageSequence
 
 if TYPE_CHECKING:
-    from kreuzberg import ExtractionConfig, ExtractionResult
+    from kreuzberg import ExtractionConfig
+
+    # extract_* return the pyo3 result (attribute access), not the public
+    # ExtractionResult TypedDict (kreuzberg-7ih).
+    from kreuzberg._kreuzberg import ExtractionResult
 
 from lilbee.app.services import get_services
 from lilbee.core.config import cfg
@@ -62,30 +66,33 @@ def _page_text_record(source: str, page: int, text: str, content_type: str) -> P
 
 def extraction_config(mode: ExtractMode) -> ExtractionConfig:
     """Build ExtractionConfig for the given extraction mode."""
-    from kreuzberg import ConcurrencyConfig, ExtractionConfig, OcrConfig, PageConfig
+    from kreuzberg import ExtractionConfig, OcrConfig, PageConfig
 
     chunking = build_chunking_config()
     pages = PageConfig(extract_pages=True, insert_page_markers=False)
-    ocr = OcrConfig(backend=TESSERACT_BACKEND)
-    # Bound kreuzberg's internal pool to the same CPU budget as the
-    # pipeline semaphore so the two stop competing for cores.
-    concurrency = ConcurrencyConfig(max_threads=cpu_quota())
+    # vlm_fallback=None avoids a kreuzberg 5.x conversion crash on the default
+    # "disabled" string (kreuzberg-y7k).
+    ocr = OcrConfig(backend=TESSERACT_BACKEND, vlm_fallback=None)  # type: ignore[arg-type]  # kreuzberg-y7k
+    # Bound batch extraction to the CPU budget so kreuzberg and the pipeline
+    # semaphore stop competing for cores.
+    max_concurrent = cpu_quota()
     builders: dict[ExtractMode, Callable[[], ExtractionConfig]] = {
         ExtractMode.MARKDOWN: lambda: ExtractionConfig(
             chunking=chunking,
             output_format=MARKDOWN_OUTPUT,
-            concurrency=concurrency,
+            max_concurrent_extractions=max_concurrent,
         ),
         ExtractMode.PAGINATED: lambda: ExtractionConfig(
             chunking=chunking,
             pages=pages,
-            concurrency=concurrency,
+            max_concurrent_extractions=max_concurrent,
         ),
         ExtractMode.PAGINATED_OCR: lambda: ExtractionConfig(
             chunking=chunking,
             pages=pages,
             ocr=ocr,
-            concurrency=concurrency,
+            force_ocr=True,
+            max_concurrent_extractions=max_concurrent,
         ),
     }
     return builders[mode]()
@@ -317,7 +324,8 @@ def _run_tesseract_sync(path: Path) -> Any:
     from lilbee.core.system import stderr_suppressed
 
     with stderr_suppressed():
-        return extract_file_sync(str(path), config=extraction_config(ExtractMode.PAGINATED_OCR))
+        # kreuzberg-7ih: extract_* accept the public config dict at runtime, mistyped as the rust config.
+        return extract_file_sync(str(path), config=extraction_config(ExtractMode.PAGINATED_OCR))  # type: ignore[arg-type]
 
 
 async def _tesseract_ocr_fallback(
@@ -357,7 +365,7 @@ async def _tesseract_ocr_fallback(
 
         by_page: dict[int, list[str]] = {}
         for chunk in result.chunks or []:
-            page = int(chunk.metadata.get("first_page") or 1)
+            page = int(chunk.metadata.first_page or 1)
             by_page.setdefault(page, []).append(chunk.content)
         page_texts = [(page, "\n".join(by_page[page])) for page in sorted(by_page)]
         store_ocr_pages(key, page_texts)
@@ -426,7 +434,7 @@ def _capture_result_page_texts(
         return
     if result.pages:
         page_texts_out.extend(
-            _page_text_record(source_name, page["page_number"], page["content"], content_type)
+            _page_text_record(source_name, page.page_number, page.content, content_type)
             for page in result.pages
         )
     elif result.content.strip():
@@ -554,7 +562,8 @@ async def ingest_document(
     from kreuzberg import extract_file_sync
 
     config = extraction_config(content_type_to_mode(content_type))
-    result = await asyncio.to_thread(extract_file_sync, str(path), config=config)
+    # kreuzberg-7ih: extract_* accept the public config dict at runtime, mistyped as the rust config.
+    result = await asyncio.to_thread(extract_file_sync, str(path), config=config)  # type: ignore[arg-type]
 
     if content_type == PDF_CONTENT_TYPE and not _has_meaningful_text(result):
         return await _handle_scanned_pdf_fallback(
@@ -575,9 +584,9 @@ async def ingest_document(
     # Fire one EXTRACT event per file so subscribers (chat /add, /sync,
     # CLI Rich progress) can show "extracted N pages" before the embed
     # phase starts; otherwise a 44MB PDF sits at file-level 0% for
-    # minutes. get_page_count is the canonical PDF page count; for
+    # minutes. result.pages is the canonical PDF page list; for
     # non-paginated formats we fall back to the chunk count.
-    page_count = result.get_page_count() or len(result.chunks)
+    page_count = len(result.pages or []) or len(result.chunks or [])
     on_progress(
         EventType.EXTRACT,
         ExtractEvent(file=source_name, page=page_count, total_pages=page_count),
@@ -593,15 +602,15 @@ async def ingest_document(
             source=source_name,
             content_type=content_type,
             chunk_type=ChunkType.RAW,
-            page_start=chunk.metadata.get("first_page") or 0,
-            page_end=chunk.metadata.get("last_page") or 0,
+            page_start=chunk.metadata.first_page or 0,
+            page_end=chunk.metadata.last_page or 0,
             line_start=0,
             line_end=0,
             chunk=text,
-            chunk_index=chunk.metadata.get("chunk_index", idx),
+            chunk_index=chunk.metadata.chunk_index,
             vector=vec,
         )
-        for idx, (chunk, text, vec) in enumerate(zip(result.chunks, texts, vectors, strict=True))
+        for chunk, text, vec in zip(result.chunks, texts, vectors, strict=True)
     ]
 
 

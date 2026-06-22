@@ -52,46 +52,43 @@ def mock_provider():
     set_services(None)
 
 
-def _mock_iterator(num_pages: int = 1) -> mock.MagicMock:
-    """Build a mock PdfPageIterator that yields (index, png_bytes) tuples."""
-    pages = [(i, b"\x89PNG" + bytes(f"page-{i}", "utf-8")) for i in range(num_pages)]
-    it = mock.MagicMock()
-    it.__len__ = mock.Mock(return_value=num_pages)
-    it.__iter__ = mock.Mock(return_value=iter(pages))
-    it.__enter__ = mock.Mock(return_value=it)
-    it.__exit__ = mock.Mock(return_value=False)
-    return it
+def _mock_render(num_pages: int):
+    """Mock render_pdf_page_to_png: PNG bytes for a valid index, RuntimeError past the end."""
+
+    def render(data, index, dpi=None):
+        if index >= num_pages:
+            raise RuntimeError(f"Page index {index} out of range (document has {num_pages} pages)")
+        return b"\x89PNG" + bytes(f"page-{index}", "utf-8")
+
+    return render
 
 
+@mock.patch("pathlib.Path.read_bytes", return_value=b"%PDF-fake")
 class TestPdfPageCount:
-    def test_returns_page_count(self) -> None:
-        mock_iter = _mock_iterator(num_pages=5)
-        with mock.patch("kreuzberg.PdfPageIterator", return_value=mock_iter):
+    def test_returns_page_count(self, _read: mock.Mock) -> None:
+        with mock.patch("kreuzberg.render_pdf_page_to_png", side_effect=_mock_render(5)):
             from lilbee.vision import pdf_page_count
 
             assert pdf_page_count(Path("test.pdf")) == 5
 
-    def test_empty_pdf_returns_zero(self) -> None:
-        mock_iter = _mock_iterator(num_pages=0)
-        with mock.patch("kreuzberg.PdfPageIterator", return_value=mock_iter):
+    def test_empty_pdf_returns_zero(self, _read: mock.Mock) -> None:
+        with mock.patch("kreuzberg.render_pdf_page_to_png", side_effect=_mock_render(0)):
             from lilbee.vision import pdf_page_count
 
             assert pdf_page_count(Path("empty.pdf")) == 0
 
-    def test_passes_dpi(self) -> None:
-        mock_iter = _mock_iterator(num_pages=1)
-        mock_cls = mock.patch("kreuzberg.PdfPageIterator", return_value=mock_iter)
-        with mock_cls as patched:
+    def test_passes_dpi(self, _read: mock.Mock) -> None:
+        with mock.patch("kreuzberg.render_pdf_page_to_png", side_effect=_mock_render(1)) as patched:
             from lilbee.vision import _RASTER_DPI, pdf_page_count
 
             pdf_page_count(Path("test.pdf"))
-            patched.assert_called_once_with(mock.ANY, dpi=_RASTER_DPI)
+            patched.assert_any_call(mock.ANY, 0, dpi=_RASTER_DPI)
 
 
+@mock.patch("pathlib.Path.read_bytes", return_value=b"%PDF-fake")
 class TestRasterizePdf:
-    def test_yields_index_and_png_bytes(self) -> None:
-        mock_iter = _mock_iterator(num_pages=2)
-        with mock.patch("kreuzberg.PdfPageIterator", return_value=mock_iter):
+    def test_yields_index_and_png_bytes(self, _read: mock.Mock) -> None:
+        with mock.patch("kreuzberg.render_pdf_page_to_png", side_effect=_mock_render(2)):
             from lilbee.vision import rasterize_pdf
 
             pages = list(rasterize_pdf(Path("test.pdf")))
@@ -101,33 +98,31 @@ class TestRasterizePdf:
         assert pages[1][0] == 1
         assert all(data.startswith(b"\x89PNG") for _, data in pages)
 
-    def test_empty_pdf_yields_nothing(self) -> None:
-        mock_iter = _mock_iterator(num_pages=0)
-        with mock.patch("kreuzberg.PdfPageIterator", return_value=mock_iter):
+    def test_empty_pdf_yields_nothing(self, _read: mock.Mock) -> None:
+        with mock.patch("kreuzberg.render_pdf_page_to_png", side_effect=_mock_render(0)):
             from lilbee.vision import rasterize_pdf
 
             pages = list(rasterize_pdf(Path("empty.pdf")))
 
         assert pages == []
 
-    def test_uses_context_manager(self) -> None:
-        mock_iter = _mock_iterator(num_pages=1)
-        with mock.patch("kreuzberg.PdfPageIterator", return_value=mock_iter):
+    def test_stops_at_last_page(self, _read: mock.Mock) -> None:
+        """Rendering stops at the RuntimeError boundary instead of looping past the end."""
+        with mock.patch("kreuzberg.render_pdf_page_to_png", side_effect=_mock_render(3)) as patched:
             from lilbee.vision import rasterize_pdf
 
-            list(rasterize_pdf(Path("test.pdf")))
+            pages = list(rasterize_pdf(Path("test.pdf")))
 
-        mock_iter.__enter__.assert_called_once()
-        mock_iter.__exit__.assert_called_once()
+        assert [idx for idx, _ in pages] == [0, 1, 2]
+        # One extra call probes the out-of-range index that terminates the loop.
+        assert patched.call_count == 4
 
-    def test_passes_dpi(self) -> None:
-        mock_iter = _mock_iterator(num_pages=1)
-        mock_cls = mock.patch("kreuzberg.PdfPageIterator", return_value=mock_iter)
-        with mock_cls as patched:
+    def test_passes_dpi(self, _read: mock.Mock) -> None:
+        with mock.patch("kreuzberg.render_pdf_page_to_png", side_effect=_mock_render(1)) as patched:
             from lilbee.vision import _RASTER_DPI, rasterize_pdf
 
             list(rasterize_pdf(Path("test.pdf")))
-            patched.assert_called_once_with(mock.ANY, dpi=_RASTER_DPI)
+            patched.assert_any_call(mock.ANY, 0, dpi=_RASTER_DPI)
 
 
 class TestPngToDataUrl:

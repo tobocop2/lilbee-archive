@@ -53,30 +53,30 @@ def _page_text_record(source: str, page: int, text: str, content_type: str) -> P
 
 def extraction_config(mode: ExtractMode) -> ExtractionConfig:
     """Build ExtractionConfig for the given extraction mode."""
-    from kreuzberg import ConcurrencyConfig, ExtractionConfig, OcrConfig, PageConfig
+    from kreuzberg import ExtractionConfig, OcrConfig, PageConfig
 
     chunking = build_chunking_config()
     pages = PageConfig(extract_pages=True, insert_page_markers=False)
     ocr = OcrConfig(backend=TESSERACT_BACKEND)
-    # Bound kreuzberg's internal pool to the same CPU budget as the
-    # pipeline semaphore so the two stop competing for cores.
-    concurrency = ConcurrencyConfig(max_threads=cpu_quota())
+    # Bound batch extraction to the CPU budget so kreuzberg and the pipeline
+    # semaphore stop competing for cores.
+    max_concurrent = cpu_quota()
     builders: dict[ExtractMode, Callable[[], ExtractionConfig]] = {
         ExtractMode.MARKDOWN: lambda: ExtractionConfig(
             chunking=chunking,
             output_format=MARKDOWN_OUTPUT,
-            concurrency=concurrency,
+            max_concurrent_extractions=max_concurrent,
         ),
         ExtractMode.PAGINATED: lambda: ExtractionConfig(
             chunking=chunking,
             pages=pages,
-            concurrency=concurrency,
+            max_concurrent_extractions=max_concurrent,
         ),
         ExtractMode.PAGINATED_OCR: lambda: ExtractionConfig(
             chunking=chunking,
             pages=pages,
             ocr=ocr,
-            concurrency=concurrency,
+            max_concurrent_extractions=max_concurrent,
         ),
     }
     return builders[mode]()
@@ -256,7 +256,7 @@ def _capture_result_page_texts(
         return
     if result.pages:
         page_texts_out.extend(
-            _page_text_record(source_name, page["page_number"], page["content"], content_type)
+            _page_text_record(source_name, page.page_number, page.content, content_type)
             for page in result.pages
         )
     elif result.content.strip():
@@ -354,9 +354,9 @@ async def ingest_document(
     # Fire one EXTRACT event per file so subscribers (chat /add, /sync,
     # CLI Rich progress) can show "extracted N pages" before the embed
     # phase starts; otherwise a 44MB PDF sits at file-level 0% for
-    # minutes. get_page_count is the canonical PDF page count; for
+    # minutes. result.pages is the canonical PDF page list; for
     # non-paginated formats we fall back to the chunk count.
-    page_count = result.get_page_count() or len(result.chunks)
+    page_count = len(result.pages or []) or len(result.chunks or [])
     on_progress(
         EventType.EXTRACT,
         ExtractEvent(file=source_name, page=page_count, total_pages=page_count),

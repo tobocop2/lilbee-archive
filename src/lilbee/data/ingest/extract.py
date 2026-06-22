@@ -57,7 +57,9 @@ def extraction_config(mode: ExtractMode) -> ExtractionConfig:
 
     chunking = build_chunking_config()
     pages = PageConfig(extract_pages=True, insert_page_markers=False)
-    ocr = OcrConfig(backend=TESSERACT_BACKEND)
+    # vlm_fallback=None avoids a kreuzberg 5.x conversion crash on the default
+    # "disabled" string (kreuzberg-y7k).
+    ocr = OcrConfig(backend=TESSERACT_BACKEND, vlm_fallback=None)
     # Bound batch extraction to the CPU budget so kreuzberg and the pipeline
     # semaphore stop competing for cores.
     max_concurrent = cpu_quota()
@@ -76,6 +78,7 @@ def extraction_config(mode: ExtractMode) -> ExtractionConfig:
             chunking=chunking,
             pages=pages,
             ocr=ocr,
+            force_ocr=True,
             max_concurrent_extractions=max_concurrent,
         ),
     }

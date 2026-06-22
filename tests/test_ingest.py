@@ -85,19 +85,17 @@ def _make_kreuzberg_result(
     chunks = []
     for i in range(num_chunks):
         chunk_text = text[i * len(text) // num_chunks : (i + 1) * len(text) // num_chunks]
-        metadata = {
-            "byte_start": 0,
-            "byte_end": len(chunk_text),
-            "chunk_index": i,
-            "total_chunks": num_chunks,
-            "token_count": None,
-        }
-        if has_pages:
-            metadata["first_page"] = i + 1
-            metadata["last_page"] = i + 1
         chunk = mock.MagicMock()
         chunk.content = chunk_text
-        chunk.metadata = metadata
+        chunk.metadata = mock.MagicMock(
+            byte_start=0,
+            byte_end=len(chunk_text),
+            chunk_index=i,
+            total_chunks=num_chunks,
+            token_count=None,
+            first_page=(i + 1) if has_pages else None,
+            last_page=(i + 1) if has_pages else None,
+        )
         chunks.append(chunk)
 
     result = mock.MagicMock()
@@ -105,10 +103,7 @@ def _make_kreuzberg_result(
     result.content = text
     result.document = document
     result.pages = (
-        [
-            mock.MagicMock(page_number=i + 1, content=chunks[i].content)
-            for i in range(num_chunks)
-        ]
+        [mock.MagicMock(page_number=i + 1, content=chunks[i].content) for i in range(num_chunks)]
         if has_pages
         else []
     )

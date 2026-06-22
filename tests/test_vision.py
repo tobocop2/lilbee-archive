@@ -82,9 +82,7 @@ class TestPdfPageCount:
             assert pdf_page_count(Path("empty.pdf")) == 0
 
     def test_passes_dpi(self, _read: mock.Mock) -> None:
-        with mock.patch(
-            "kreuzberg.render_pdf_page_to_png", side_effect=_mock_render(1)
-        ) as patched:
+        with mock.patch("kreuzberg.render_pdf_page_to_png", side_effect=_mock_render(1)) as patched:
             from lilbee.vision import _RASTER_DPI, pdf_page_count
 
             pdf_page_count(Path("test.pdf"))
@@ -114,9 +112,7 @@ class TestRasterizePdf:
 
     def test_stops_at_last_page(self, _read: mock.Mock) -> None:
         """Rendering stops at the RuntimeError boundary instead of looping past the end."""
-        with mock.patch(
-            "kreuzberg.render_pdf_page_to_png", side_effect=_mock_render(3)
-        ) as patched:
+        with mock.patch("kreuzberg.render_pdf_page_to_png", side_effect=_mock_render(3)) as patched:
             from lilbee.vision import rasterize_pdf
 
             pages = list(rasterize_pdf(Path("test.pdf")))
@@ -126,9 +122,7 @@ class TestRasterizePdf:
         assert patched.call_count == 4
 
     def test_passes_dpi(self, _read: mock.Mock) -> None:
-        with mock.patch(
-            "kreuzberg.render_pdf_page_to_png", side_effect=_mock_render(1)
-        ) as patched:
+        with mock.patch("kreuzberg.render_pdf_page_to_png", side_effect=_mock_render(1)) as patched:
             from lilbee.vision import _RASTER_DPI, rasterize_pdf
 
             list(rasterize_pdf(Path("test.pdf")))

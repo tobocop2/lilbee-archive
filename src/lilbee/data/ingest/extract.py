@@ -9,7 +9,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from kreuzberg import ExtractionConfig, ExtractionResult
+    from kreuzberg import ExtractionConfig
+
+    # extract_* return the pyo3 result (attribute access), not the public
+    # ExtractionResult TypedDict (kreuzberg-7ih).
+    from kreuzberg._kreuzberg import ExtractionResult
 
 from lilbee.app.services import get_services
 from lilbee.core.config import cfg
@@ -59,7 +63,7 @@ def extraction_config(mode: ExtractMode) -> ExtractionConfig:
     pages = PageConfig(extract_pages=True, insert_page_markers=False)
     # vlm_fallback=None avoids a kreuzberg 5.x conversion crash on the default
     # "disabled" string (kreuzberg-y7k).
-    ocr = OcrConfig(backend=TESSERACT_BACKEND, vlm_fallback=None)
+    ocr = OcrConfig(backend=TESSERACT_BACKEND, vlm_fallback=None)  # type: ignore[arg-type]  # kreuzberg-y7k
     # Bound batch extraction to the CPU budget so kreuzberg and the pipeline
     # semaphore stop competing for cores.
     max_concurrent = cpu_quota()
@@ -162,7 +166,8 @@ def _run_tesseract_sync(path: Path) -> Any:
     from lilbee.providers.llama_cpp.log_dispatch import stderr_suppressed
 
     with stderr_suppressed():
-        return extract_file_sync(str(path), config=extraction_config(ExtractMode.PAGINATED_OCR))
+        # kreuzberg-7ih: extract_* accept the public config dict at runtime, mistyped as the rust config.
+        return extract_file_sync(str(path), config=extraction_config(ExtractMode.PAGINATED_OCR))  # type: ignore[arg-type]
 
 
 async def _tesseract_ocr_fallback(
@@ -198,7 +203,7 @@ async def _tesseract_ocr_fallback(
 
     by_page: dict[int, list[str]] = {}
     for chunk in result.chunks or []:
-        page = int(chunk.metadata.get("first_page") or 1)
+        page = int(chunk.metadata.first_page or 1)
         by_page.setdefault(page, []).append(chunk.content)
     page_texts = [(page, "\n".join(by_page[page])) for page in sorted(by_page)]
     _record_page_texts(page_texts, source_name, content_type, page_texts_out)
@@ -336,7 +341,8 @@ async def ingest_document(
     from kreuzberg import extract_file_sync
 
     config = extraction_config(content_type_to_mode(content_type))
-    result = await asyncio.to_thread(extract_file_sync, str(path), config=config)
+    # kreuzberg-7ih: extract_* accept the public config dict at runtime, mistyped as the rust config.
+    result = await asyncio.to_thread(extract_file_sync, str(path), config=config)  # type: ignore[arg-type]
 
     if content_type == PDF_CONTENT_TYPE and not _has_meaningful_text(result):
         return await _handle_scanned_pdf_fallback(
@@ -375,12 +381,12 @@ async def ingest_document(
             source=source_name,
             content_type=content_type,
             chunk_type=ChunkType.RAW,
-            page_start=chunk.metadata.get("first_page") or 0,
-            page_end=chunk.metadata.get("last_page") or 0,
+            page_start=chunk.metadata.first_page or 0,
+            page_end=chunk.metadata.last_page or 0,
             line_start=0,
             line_end=0,
             chunk=text,
-            chunk_index=chunk.metadata.get("chunk_index", idx),
+            chunk_index=chunk.metadata.chunk_index,
             vector=vec,
         )
         for idx, (chunk, text, vec) in enumerate(zip(result.chunks, texts, vectors, strict=True))

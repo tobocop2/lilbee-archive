@@ -750,8 +750,9 @@ class FleetProvider:
 
         # OCR pages concurrently (a single-page decode underuses the GPU; the vision
         # server runs cfg.vision_ocr_concurrency batching slots). A bounded sliding
-        # window keeps that many pages in flight without rasterizing the whole PDF
-        # into memory; results are reassembled in page order.
+        # window caps in-flight OCR work; results are reassembled in page order.
+        # (kreuzberg 5.x has no cheap page count, so pdf_page_count above renders to
+        # count -- kreuzberg-6o3.)
         concurrency = max(1, cfg.vision_ocr_concurrency)
         raster = rasterize_pdf(path)
         results: dict[int, str] = {}

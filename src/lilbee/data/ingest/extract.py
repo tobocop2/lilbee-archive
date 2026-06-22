@@ -389,7 +389,7 @@ async def ingest_document(
             chunk_index=chunk.metadata.chunk_index,
             vector=vec,
         )
-        for idx, (chunk, text, vec) in enumerate(zip(result.chunks, texts, vectors, strict=True))
+        for chunk, text, vec in zip(result.chunks, texts, vectors, strict=True)
     ]
 
 

@@ -8,7 +8,6 @@ extraction since we're testing the pipeline, not kreuzberg itself.
 from __future__ import annotations
 
 from unittest import mock
-from unittest.mock import Mock
 
 import pytest
 
@@ -80,8 +79,8 @@ def _make_kreuzberg_result(text="Extracted content. " * 10, num_chunks=1):
 
 
 @mock.patch(
-    "kreuzberg.extract_file_sync",
-    new_callable=Mock,
+    "kreuzberg.extract_file",
+    new_callable=mock.AsyncMock,
     return_value=_make_kreuzberg_result(),
 )
 class TestSyncDocx:
@@ -94,8 +93,8 @@ class TestSyncDocx:
 
 
 @mock.patch(
-    "kreuzberg.extract_file_sync",
-    new_callable=Mock,
+    "kreuzberg.extract_file",
+    new_callable=mock.AsyncMock,
     return_value=_make_kreuzberg_result(),
 )
 class TestSyncXlsx:
@@ -108,8 +107,8 @@ class TestSyncXlsx:
 
 
 @mock.patch(
-    "kreuzberg.extract_file_sync",
-    new_callable=Mock,
+    "kreuzberg.extract_file",
+    new_callable=mock.AsyncMock,
     return_value=_make_kreuzberg_result(),
 )
 class TestSyncPptx:
@@ -127,8 +126,8 @@ class TestSyncPptx:
 
 
 @mock.patch(
-    "kreuzberg.extract_file_sync",
-    new_callable=Mock,
+    "kreuzberg.extract_file",
+    new_callable=mock.AsyncMock,
     return_value=_make_kreuzberg_result(),
 )
 class TestSyncEpub:
@@ -146,8 +145,8 @@ class TestSyncEpub:
 
 
 @mock.patch(
-    "kreuzberg.extract_file_sync",
-    new_callable=Mock,
+    "kreuzberg.extract_file",
+    new_callable=mock.AsyncMock,
     return_value=_make_kreuzberg_result(),
 )
 class TestSyncImage:
@@ -225,8 +224,8 @@ class TestSyncCode:
 
 
 @mock.patch(
-    "kreuzberg.extract_file_sync",
-    new_callable=Mock,
+    "kreuzberg.extract_file",
+    new_callable=mock.AsyncMock,
     return_value=_make_kreuzberg_result(),
 )
 class TestSyncCsvTsv:

@@ -87,7 +87,8 @@ def chunk_text(
         chunking = build_chunking_config(use_semantic=use_semantic)
 
     config = ExtractionConfig(chunking=chunking)
-    # kreuzberg-7ih: extract_* accept the public config dict at runtime, mistyped as the rust config.
+    # kreuzberg-7ih: extract_* accept the public config dict at runtime, mistyped
+    # as the rust config.
     result = extract_bytes_sync(text.encode("utf-8"), mime_type, config=config)  # type: ignore[arg-type]
     if result.chunks:
         return [c.content for c in result.chunks]

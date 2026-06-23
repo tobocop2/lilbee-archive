@@ -200,7 +200,9 @@ def sync_vision_ocr_backend(provider: LLMProvider) -> None:
 
     Driven by ``cfg.vision_model``: registered while a model is set, removed when
     cleared. The backend reads ``cfg.vision_model`` live, so a model swap needs no
-    re-registration.
+    re-registration, but it captures ``provider.vision_ocr``, so it must re-bind
+    whenever the provider is rebuilt (``reset_services``) -- otherwise the global
+    kreuzberg registry keeps routing OCR to the shut-down provider.
     """
     from kreuzberg import list_ocr_backends, register_ocr_backend, unregister_ocr_backend
 
@@ -209,11 +211,14 @@ def sync_vision_ocr_backend(provider: LLMProvider) -> None:
     from lilbee.data.ingest.vision_ocr_backend import VisionOcrBackend
 
     registered = OcrBackendName.LILBEE_VISION in list_ocr_backends()
-    if cfg.vision_model and not registered:
+    if cfg.vision_model:
+        # Re-register so the backend always binds to the current provider.
+        if registered:
+            unregister_ocr_backend(OcrBackendName.LILBEE_VISION)
         register_ocr_backend(
             VisionOcrBackend(ocr_fn=provider.vision_ocr, model_ref_fn=lambda: cfg.vision_model)
         )
-    elif not cfg.vision_model and registered:
+    elif registered:
         unregister_ocr_backend(OcrBackendName.LILBEE_VISION)
 
 

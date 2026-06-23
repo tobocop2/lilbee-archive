@@ -36,14 +36,19 @@ class TestSyncVisionOcrBackend:
         reg.assert_called_once()
         unreg.assert_not_called()
 
-    def test_noop_when_already_registered(self, monkeypatch):
+    def test_rebinds_to_current_provider_when_already_registered(self, monkeypatch):
+        """A rebuilt provider must replace the stale binding: unregister then re-register.
+
+        ``reset_services`` shuts the old provider down; if sync left the prior
+        registration in place, kreuzberg would keep routing OCR to the dead provider.
+        """
         from lilbee.app.services import sync_vision_ocr_backend
 
         monkeypatch.setattr(cfg, "vision_model", "vendor/glm-ocr")
         reg, unreg = self._patch_kreuzberg(monkeypatch, listed=["lilbee-vision"])
         sync_vision_ocr_backend(MagicMock())
-        reg.assert_not_called()
-        unreg.assert_not_called()
+        unreg.assert_called_once_with("lilbee-vision")
+        reg.assert_called_once()
 
     def test_unregisters_when_model_cleared(self, monkeypatch):
         from lilbee.app.services import sync_vision_ocr_backend

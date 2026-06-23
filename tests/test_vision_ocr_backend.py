@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from lilbee.data.ingest.types import MARKDOWN_MIME, OcrBackendName
 from lilbee.data.ingest.vision_ocr_backend import (
     VisionOcrBackend,
@@ -62,7 +64,7 @@ class TestProtocol:
 class TestProcessImage:
     def test_returns_full_required_schema(self):
         be, _ = _backend()
-        out = be.process_image(b"PNG", {})
+        out = be.process_image(b"PNG", json.dumps({}))
         assert out == {
             "content": "# extracted",
             "mime_type": MARKDOWN_MIME,
@@ -74,7 +76,7 @@ class TestProcessImage:
 
     def test_passes_model_and_resolved_prompt(self):
         be, calls = _backend(model="vendor/glm-ocr")
-        be.process_image(b"PNG", {})
+        be.process_image(b"PNG", json.dumps({}))
         _, model, prompt, _ = calls[0]
         assert model == "vendor/glm-ocr"
         # glm-ocr has a native prompt; resolve_ocr_prompt picks it, not the generic one.
@@ -82,25 +84,38 @@ class TestProcessImage:
 
     def test_vlm_prompt_overrides_resolved(self):
         be, calls = _backend()
-        be.process_image(b"PNG", {"vlm_prompt": "custom prompt"})
+        be.process_image(b"PNG", json.dumps({"vlm_prompt": "custom prompt"}))
         assert calls[0][2] == "custom prompt"
 
     def test_request_context_supplies_timeout_and_fires_progress(self):
         ticks: list[int] = []
         be, calls = _backend()
         with ocr_request(on_page=lambda: ticks.append(1), timeout=12.5) as token:
-            be.process_image(b"PNG", {"backend_options": backend_options_for(token)})
+            be.process_image(b"PNG", json.dumps({"backend_options": backend_options_for(token)}))
         assert calls[0][3] == 12.5
+        assert ticks == [1]
+
+    def test_request_token_resolved_from_delivered_dict(self):
+        """kreuzberg parses OcrConfig.backend_options into an object before delivery,
+        so the backend must read it as a dict, not re-parse a string."""
+        ticks: list[int] = []
+        be, calls = _backend()
+        with ocr_request(on_page=lambda: ticks.append(1), timeout=9.0) as token:
+            delivered = json.dumps({"backend_options": json.loads(backend_options_for(token))})
+            be.process_image(b"PNG", delivered)
+        assert calls[0][3] == 9.0
         assert ticks == [1]
 
     def test_no_context_uses_zero_timeout_and_no_tick(self):
         be, calls = _backend()
-        be.process_image(b"PNG", {"backend_options": backend_options_for("unknown-token")})
+        be.process_image(
+            b"PNG", json.dumps({"backend_options": backend_options_for("unknown-token")})
+        )
         assert calls[0][3] == 0.0
 
     def test_malformed_backend_options_ignored(self):
         be, calls = _backend()
-        be.process_image(b"PNG", {"backend_options": "not-json"})
+        be.process_image(b"PNG", json.dumps({"backend_options": "not-json"}))
         assert calls[0][3] == 0.0
 
 
@@ -117,6 +132,6 @@ class TestRegistry:
     def test_backend_options_round_trip(self):
         token = "abc123"
         be, calls = _backend()
-        be.process_image(b"PNG", {"backend_options": backend_options_for(token)})
+        be.process_image(b"PNG", json.dumps({"backend_options": backend_options_for(token)}))
         # token not registered -> no context, zero timeout
         assert calls[0][3] == 0.0

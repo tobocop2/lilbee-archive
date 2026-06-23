@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 # Token key inside OcrConfig.backend_options JSON. kreuzberg does not propagate
 # contextvars into process_image (kreuzberg-4w9), so per-request state travels as
 # a token on the config and is resolved through the registry below.
-_REQUEST_TOKEN_KEY = "req"
+_REQUEST_TOKEN_KEY = "req"  # noqa: S105  # JSON key name, not a secret
 
 
 @dataclass(frozen=True)
@@ -31,7 +31,7 @@ class OcrRequestContext:
 
 
 class _OcrRequestRegistry:
-    """Token-keyed request contexts; process_image runs on kreuzberg threads, so guard with a lock."""
+    """Token-keyed request contexts; lock-guarded (process_image runs on kreuzberg threads)."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -75,7 +75,7 @@ def backend_options_for(token: str) -> str:
 
 
 class _OcrConfigView:
-    """Typed reader over the kreuzberg OcrConfig dict handed to process_image."""
+    """Typed reader over the parsed kreuzberg OcrConfig handed to process_image."""
 
     def __init__(self, config: dict[str, Any]) -> None:
         self._config = config
@@ -86,14 +86,17 @@ class _OcrConfigView:
 
     @property
     def request_token(self) -> str | None:
+        # kreuzberg parses OcrConfig.backend_options (a JSON string at construction)
+        # into an object, so it arrives here as a dict; tolerate a raw string too.
         raw = self._config.get("backend_options")
-        if not raw:
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except (ValueError, TypeError):
+                return None
+        if not isinstance(raw, dict):
             return None
-        try:
-            parsed = json.loads(raw)
-        except (ValueError, TypeError):
-            return None
-        token = parsed.get(_REQUEST_TOKEN_KEY)
+        token = raw.get(_REQUEST_TOKEN_KEY)
         return token if isinstance(token, str) else None
 
 
@@ -142,8 +145,10 @@ class VisionOcrBackend:
     def backend_type(self) -> str:
         return "custom"
 
-    def process_image(self, image_bytes: bytes, config: dict[str, Any]) -> dict[str, Any]:
-        view = _OcrConfigView(config)
+    def process_image(self, image_bytes: bytes, config: str) -> dict[str, Any]:
+        # kreuzberg serializes the OcrConfig and hands process_image the JSON string,
+        # not a dict (kreuzberg-d7w), so parse it before reading fields.
+        view = _OcrConfigView(json.loads(config))
         model = self._model_ref_fn()
         prompt = view.vlm_prompt or resolve_ocr_prompt(model)
         ctx = ocr_requests.get(view.request_token)

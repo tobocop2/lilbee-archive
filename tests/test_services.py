@@ -63,6 +63,21 @@ class TestSyncVisionOcrBackend:
         reg.assert_not_called()
         unreg.assert_not_called()
 
+    def test_settings_role_reload_syncs_vision_backend(self, monkeypatch):
+        """A vision_model change via any settings path (REST/MCP/TUI/CLI) registers it."""
+        from lilbee.app.services import set_services
+        from lilbee.app.settings import _reload_changed_roles
+        from tests.conftest import make_mock_services
+
+        set_services(make_mock_services())
+        try:
+            monkeypatch.setattr(cfg, "vision_model", "org/V-GGUF/v-Q4_K_M.gguf")
+            reg, _unreg = self._patch_kreuzberg(monkeypatch, listed=["tesseract"])
+            _reload_changed_roles({"vision_model"})
+            reg.assert_called_once()
+        finally:
+            set_services(None)
+
 
 class TestServicesDataclass:
     def test_fields_are_immutable(self):

@@ -180,8 +180,8 @@ def _supports_tools_cached(path_str: str, _mtime_ns: int) -> bool:
 class _VisionRequestGate:
     """Process-wide cap on concurrent vision-server requests at the fleet's OCR slots.
 
-    The ingest file fan-out runs many files at once and each file's ``pdf_ocr`` opens
-    its own ``vision_ocr_concurrency`` page pool, so without a shared cap the aggregate
+    The ingest file fan-out runs many files at once and kreuzberg OCRs their pages
+    through per-image ``vision_ocr`` calls, so without a shared cap the aggregate
     over-subscribes a single-replica vision server into a 429 storm. The semaphore is
     rebuilt to the configured capacity (``vision_replicas * vision_ocr_concurrency``)
     only while the gate is idle, so a capacity change never doubles the live cap.

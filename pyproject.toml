@@ -92,6 +92,7 @@ packages = ["src/lilbee"]
 # the index instead -- this source override is workspace metadata, not published deps.
 [tool.uv.sources]
 lilbee-engine = { path = "packaging/engine-wheel" }
+kreuzberg = { path = "/Users/tobias/projects/kreuzberg/packages/python/dist/kreuzberg-5.0.0rc30-cp310-abi3-macosx_11_0_arm64.whl" }  # LOCAL DEV ONLY (uncommitted): kreuzberg-bdg
 
 [dependency-groups]
 dev = [

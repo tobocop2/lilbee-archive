@@ -1,34 +1,9 @@
-"""Helpers for PDF rasterisation and vision-model OCR.
+"""Vision-model OCR helpers: prompt resolution and OpenAI-compatible image messages.
 
-Multi-page vision OCR runs through ``FleetProvider.pdf_ocr``, which rasterises
-each page and sends it to the vision server; this module hosts the small helpers
-(page count, rasterisation, prompt + chat-message construction, and the shared
-:class:`PageText` / :class:`PdfOcrChunk` types) that the provider and its callers
-share.
+PDF rasterisation and the page loop now live inside kreuzberg (the registered
+lilbee-vision OCR backend); this module only builds the single-image request the
+provider's ``vision_ocr`` sends to the vision server.
 """
-
-import logging
-from collections.abc import Iterator
-from pathlib import Path
-from typing import NamedTuple
-
-log = logging.getLogger(__name__)
-
-
-class PageText(NamedTuple):
-    """Extracted text for a single PDF page."""
-
-    page: int
-    text: str
-
-
-class PdfOcrChunk(NamedTuple):
-    """One streaming PDF-OCR worker frame: page index, total pages, page text."""
-
-    page: int
-    total: int
-    text: str
-
 
 OCR_PROMPT = (
     "Extract ALL text from this page as clean markdown. "
@@ -51,36 +26,6 @@ def resolve_ocr_prompt(model_ref: str) -> str:
         if family in needle:
             return prompt
     return OCR_PROMPT
-
-
-_RASTER_DPI = 150
-
-
-def _render_pages(data: bytes) -> Iterator[bytes]:
-    """Yield each PDF page as PNG bytes, stopping when the index runs past the end."""
-    from kreuzberg import render_pdf_page_to_png  # lazy: heavy dependency
-
-    index = 0
-    while True:
-        try:
-            yield render_pdf_page_to_png(data, index, dpi=_RASTER_DPI)
-        except RuntimeError:
-            return  # page index past the last page
-        index += 1
-
-
-def pdf_page_count(path: Path) -> int:
-    """Return the number of pages in a PDF.
-
-    kreuzberg 5.x exposes no cheap page-count API (only per-page rendering), so
-    this rasterizes each page to count them.
-    """
-    return sum(1 for _ in _render_pages(path.read_bytes()))
-
-
-def rasterize_pdf(path: Path) -> Iterator[tuple[int, bytes]]:
-    """Yield (0-based index, PNG bytes) for each page of a PDF."""
-    yield from enumerate(_render_pages(path.read_bytes()))
 
 
 def _png_to_data_url(png_bytes: bytes) -> str:

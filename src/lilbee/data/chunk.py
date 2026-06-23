@@ -19,6 +19,12 @@ _SEMANTIC_EMBEDDING_PRESET = "fast"
 _DISABLE_PROGRESS_ENV = "HF_HUB_DISABLE_PROGRESS_BARS"
 
 
+def _preset_embedding_model() -> dict[str, str]:
+    """kreuzberg's EmbeddingModelType rejects the bare preset string its stub
+    advertises; it needs the internally-tagged form (kreuzberg-8iv)."""
+    return {"type": "preset", "name": _SEMANTIC_EMBEDDING_PRESET}
+
+
 def _char_budget() -> tuple[int, int]:
     """Return (max_chars, max_overlap) in characters from the token-based cfg."""
     max_chars = cfg.chunk_size * CHARS_PER_TOKEN
@@ -46,7 +52,7 @@ def build_chunking_config(*, use_semantic: bool = True) -> ChunkingConfig:
         return ChunkingConfig(
             chunker_type=_SEMANTIC_CHUNKER,
             embedding=EmbeddingConfig(
-                model=_SEMANTIC_EMBEDDING_PRESET,
+                model=_preset_embedding_model(),  # type: ignore[arg-type]  # kreuzberg-8iv
                 show_download_progress=_show_download_progress(),
             ),
             topic_threshold=cfg.topic_threshold,

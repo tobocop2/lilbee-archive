@@ -126,6 +126,10 @@ class TestBuildChunkingConfig:
         monkeypatch.setattr(cfg, "chunk_size", 512)
         result = build_chunking_config()
         assert result.max_characters == 512 * CHARS_PER_TOKEN
+        # kreuzberg rejects the bare preset string; the embedding model must be the
+        # internally-tagged form or semantic chunking crashes at runtime (kreuzberg-8iv).
+        assert result.embedding is not None
+        assert result.embedding.model == {"type": "preset", "name": "fast"}
 
     def test_char_budget_when_disabled(self, monkeypatch):
         from lilbee.core.config import cfg

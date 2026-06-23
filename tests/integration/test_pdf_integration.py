@@ -134,9 +134,7 @@ class TestTesseractOcrFallback:
         """Tesseract OCR produces non-empty text from the scanned PDF fixture."""
         from kreuzberg import ExtractionConfig, OcrConfig, extract_file
 
-        config = ExtractionConfig(
-            ocr=OcrConfig(backend="tesseract", vlm_fallback=None), force_ocr=True
-        )
+        config = ExtractionConfig(ocr=OcrConfig(backend="tesseract"), force_ocr=True)
         result = await extract_file(str(SCANNED_PDF), config=config)
         assert len(result.content.strip()) > 0, "Tesseract produced empty text"
 
@@ -148,9 +146,7 @@ class TestTesseractOcrFallback:
         """Tesseract OCR captures key phrases from the scanned document."""
         from kreuzberg import ExtractionConfig, OcrConfig, extract_file
 
-        config = ExtractionConfig(
-            ocr=OcrConfig(backend="tesseract", vlm_fallback=None), force_ocr=True
-        )
+        config = ExtractionConfig(ocr=OcrConfig(backend="tesseract"), force_ocr=True)
         result = await extract_file(str(SCANNED_PDF), config=config)
         text_lower = result.content.lower()
         # At least some of the rendered text should be recognized
@@ -185,7 +181,7 @@ class TestVisionOcrFallback:
 
         sync_vision_ocr_backend(get_services().provider)
         config = ExtractionConfig(
-            ocr=OcrConfig(backend=OcrBackendName.LILBEE_VISION, vlm_fallback=None), force_ocr=True
+            ocr=OcrConfig(backend=OcrBackendName.LILBEE_VISION), force_ocr=True
         )
         result = await extract_file(str(SCANNED_PDF), config=config)
         return result.content

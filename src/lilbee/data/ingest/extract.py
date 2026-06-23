@@ -110,15 +110,11 @@ def _ocr_config(ocr_token: str | None) -> OcrConfig:
     from kreuzberg import OcrConfig
 
     if _effective_enable_ocr() is False:
-        return OcrConfig(enabled=False, vlm_fallback=None)  # type: ignore[arg-type]  # kreuzberg-y7k
+        return OcrConfig(enabled=False)
     if cfg.vision_model:
         options = backend_options_for(ocr_token) if ocr_token else None
-        return OcrConfig(
-            backend=OcrBackendName.LILBEE_VISION,
-            backend_options=options,
-            vlm_fallback=None,  # type: ignore[arg-type]  # kreuzberg-y7k
-        )
-    return OcrConfig(backend=OcrBackendName.TESSERACT, vlm_fallback=None)  # type: ignore[arg-type]  # kreuzberg-y7k
+        return OcrConfig(backend=OcrBackendName.LILBEE_VISION, backend_options=options)
+    return OcrConfig(backend=OcrBackendName.TESSERACT)
 
 
 def extraction_config(mode: ExtractMode, *, ocr_token: str | None = None) -> ExtractionConfig:
@@ -256,8 +252,7 @@ async def ingest_document(
     with ocr_request(on_page=_tick, timeout=_effective_ocr_timeout()) as token:
         config = extraction_config(content_type_to_mode(content_type), ocr_token=token)
         # kreuzberg-7ih: extract_* take the public config dict at runtime, mistyped as
-        # the rust config. kreuzberg-qey: the async path avoids the sync deadlock when
-        # a Python OCR backend is invoked.
+        # the rust config. Async keeps the OCR page loop off this event loop's thread.
         result = await extract_file(str(path), config=config)  # type: ignore[arg-type]
 
     if not result.chunks:

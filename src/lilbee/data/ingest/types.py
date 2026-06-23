@@ -48,7 +48,14 @@ MIN_MEANINGFUL_CHARS = 50
 PDF_CONTENT_TYPE = "pdf"
 IMAGE_CONTENT_TYPE = "image"
 MARKDOWN_OUTPUT = "markdown"
-TESSERACT_BACKEND = "tesseract"
+MARKDOWN_MIME = "text/markdown"
+
+
+class OcrBackendName(StrEnum):
+    """OCR backends lilbee selects in OcrConfig: kreuzberg's tesseract or lilbee's vision plugin."""
+
+    TESSERACT = "tesseract"
+    LILBEE_VISION = "lilbee-vision"
 
 
 class ExtractMode(StrEnum):

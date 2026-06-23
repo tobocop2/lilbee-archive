@@ -30,9 +30,9 @@ from lilbee.data.ingest.types import (
     MARKDOWN_OUTPUT,
     MIN_MEANINGFUL_CHARS,
     PDF_CONTENT_TYPE,
-    TESSERACT_BACKEND,
     ChunkRecord,
     ExtractMode,
+    OcrBackendName,
 )
 from lilbee.data.store import ChunkType, PageTextRecord
 from lilbee.runtime.cancellation import TaskCancelledError
@@ -72,7 +72,7 @@ def extraction_config(mode: ExtractMode) -> ExtractionConfig:
     pages = PageConfig(extract_pages=True, insert_page_markers=False)
     # vlm_fallback=None avoids a kreuzberg 5.x conversion crash on the default
     # "disabled" string (kreuzberg-y7k).
-    ocr = OcrConfig(backend=TESSERACT_BACKEND, vlm_fallback=None)  # type: ignore[arg-type]  # kreuzberg-y7k
+    ocr = OcrConfig(backend=OcrBackendName.TESSERACT, vlm_fallback=None)  # type: ignore[arg-type]  # kreuzberg-y7k
     # Bound batch extraction to the CPU budget so kreuzberg and the pipeline
     # semaphore stop competing for cores.
     max_concurrent = cpu_quota()
@@ -343,7 +343,9 @@ async def _tesseract_ocr_fallback(
     empty list so the caller can skip the file. OCR output is cached by file
     content so a downstream failure doesn't force a re-OCR on retry.
     """
-    key = ocr_cache_key(file_hash(path), backend=TESSERACT_BACKEND, model=TESSERACT_BACKEND)
+    key = ocr_cache_key(
+        file_hash(path), backend=OcrBackendName.TESSERACT, model=OcrBackendName.TESSERACT
+    )
     page_texts = load_ocr_pages(key)
     if page_texts is None:
         coro = asyncio.to_thread(_run_tesseract_sync, path)

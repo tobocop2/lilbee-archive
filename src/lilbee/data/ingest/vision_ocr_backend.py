@@ -115,12 +115,8 @@ def _lilbee_version() -> str:
 
 
 class VisionOcrBackend:
-    """Routes kreuzberg OCR calls to lilbee's vision model.
-
-    Layer-4 wiring injects ``ocr_fn`` (the provider's single-image OCR, which
-    self-gates vision-server concurrency) and ``model_ref_fn`` (the configured
-    vision model), so this stays free of upward imports.
-    """
+    """Routes kreuzberg OCR calls to lilbee's vision model through the injected
+    ``ocr_fn`` (single-image OCR) and ``model_ref_fn`` (the active vision model)."""
 
     def __init__(self, *, ocr_fn: _OcrFn, model_ref_fn: Callable[[], str]) -> None:
         self._ocr_fn = ocr_fn

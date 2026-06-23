@@ -141,10 +141,11 @@ class VisionOcrBackend:
     def backend_type(self) -> str:
         return "custom"
 
-    def process_image(self, image_bytes: bytes, config: str) -> dict[str, Any]:
-        # kreuzberg serializes the OcrConfig and hands process_image the JSON string,
-        # not a dict (kreuzberg-d7w), so parse it before reading fields.
-        view = _OcrConfigView(json.loads(config))
+    def process_image(self, image_bytes: bytes, config: str | dict[str, Any]) -> dict[str, Any]:
+        # Released kreuzberg hands the OcrConfig over as a JSON string; newer builds
+        # pass it already parsed into a dict (kreuzberg-d7w). Accept either.
+        parsed = json.loads(config) if isinstance(config, str) else config
+        view = _OcrConfigView(parsed)
         model = self._model_ref_fn()
         prompt = view.vlm_prompt or resolve_ocr_prompt(model)
         ctx = ocr_requests.get(view.request_token)

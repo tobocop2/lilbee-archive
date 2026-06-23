@@ -106,6 +106,14 @@ class TestProcessImage:
         assert calls[0][3] == 9.0
         assert ticks == [1]
 
+    def test_accepts_already_parsed_dict_config(self):
+        """Newer kreuzberg passes config already parsed into a dict (kreuzberg-d7w),
+        not a JSON string; the backend handles both."""
+        be, calls = _backend()
+        with ocr_request(on_page=lambda: None, timeout=4.0) as token:
+            be.process_image(b"PNG", {"backend_options": json.loads(backend_options_for(token))})
+        assert calls[0][3] == 4.0
+
     def test_no_context_uses_zero_timeout_and_no_tick(self):
         be, calls = _backend()
         be.process_image(

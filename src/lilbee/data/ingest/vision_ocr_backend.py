@@ -98,7 +98,10 @@ class _OcrConfigView:
 
 
 class _OcrFn(Protocol):
-    def __call__(self, image_bytes: bytes, model: str, prompt: str, *, timeout: float) -> str: ...
+    # Positional-only so the provider's vision_ocr (named png_bytes) matches structurally.
+    def __call__(
+        self, image_bytes: bytes, model: str, prompt: str, /, *, timeout: float
+    ) -> str: ...
 
 
 def _lilbee_version() -> str:

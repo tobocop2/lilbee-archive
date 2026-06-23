@@ -41,6 +41,18 @@ class TestProtocol:
         be, _ = _backend()
         assert isinstance(be.version(), str) and be.version()
 
+    def test_version_falls_back_when_package_missing(self, monkeypatch):
+        from importlib.metadata import PackageNotFoundError
+
+        from lilbee.data.ingest import vision_ocr_backend as mod
+
+        def _raise(_name):
+            raise PackageNotFoundError
+
+        monkeypatch.setattr(mod, "version", _raise)
+        be, _ = _backend()
+        assert be.version() == "0"
+
     def test_initialize_shutdown_noop(self):
         be, _ = _backend()
         assert be.initialize() is None

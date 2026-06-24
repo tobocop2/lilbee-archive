@@ -74,29 +74,33 @@ def backend_options_for(token: str) -> str:
     return json.dumps({_REQUEST_TOKEN_KEY: token})
 
 
-class _OcrConfigView:
-    """Typed reader over the parsed kreuzberg OcrConfig handed to process_image."""
+class _OcrConfigLike(Protocol):
+    """The native OcrConfig fields lilbee reads in process_image."""
 
-    def __init__(self, config: dict[str, Any]) -> None:
+    vlm_prompt: str | None
+    backend_options: str | None
+
+
+class _OcrConfigView:
+    """Typed reader over the native kreuzberg OcrConfig handed to process_image."""
+
+    def __init__(self, config: _OcrConfigLike) -> None:
         self._config = config
 
     @property
     def vlm_prompt(self) -> str | None:
-        return self._config.get("vlm_prompt")
+        return self._config.vlm_prompt
 
     @property
     def request_token(self) -> str | None:
-        # kreuzberg parses OcrConfig.backend_options (a JSON string at construction)
-        # into an object, so it arrives here as a dict; tolerate a raw string too.
-        raw = self._config.get("backend_options")
-        if isinstance(raw, str):
-            try:
-                raw = json.loads(raw)
-            except (ValueError, TypeError):
-                return None
-        if not isinstance(raw, dict):
+        raw = self._config.backend_options
+        if not isinstance(raw, str):
             return None
-        token = raw.get(_REQUEST_TOKEN_KEY)
+        try:
+            parsed = json.loads(raw)
+        except (ValueError, TypeError):
+            return None
+        token = parsed.get(_REQUEST_TOKEN_KEY)
         return token if isinstance(token, str) else None
 
 
@@ -141,11 +145,9 @@ class VisionOcrBackend:
     def backend_type(self) -> str:
         return "custom"
 
-    def process_image(self, image_bytes: bytes, config: str | dict[str, Any]) -> dict[str, Any]:
-        # Released kreuzberg hands the OcrConfig over as a JSON string; newer builds
-        # pass it already parsed into a dict (kreuzberg-d7w). Accept either.
-        parsed = json.loads(config) if isinstance(config, str) else config
-        view = _OcrConfigView(parsed)
+    def process_image(self, image_bytes: bytes, config: _OcrConfigLike) -> dict[str, Any]:
+        # kreuzberg hands process_image the native OcrConfig object; read fields off it.
+        view = _OcrConfigView(config)
         model = self._model_ref_fn()
         prompt = view.vlm_prompt or resolve_ocr_prompt(model)
         ctx = ocr_requests.get(view.request_token)

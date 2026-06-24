@@ -251,9 +251,8 @@ async def ingest_document(
 
     with ocr_request(on_page=_tick, timeout=_effective_ocr_timeout()) as token:
         config = extraction_config(content_type_to_mode(content_type), ocr_token=token)
-        # kreuzberg-7ih: extract_* take the public config dict at runtime, mistyped as
-        # the rust config. Async keeps the OCR page loop off this event loop's thread.
-        result = await extract_file(str(path), config=config)  # type: ignore[arg-type]
+        # Async keeps the OCR page loop off this event loop's thread.
+        result = await extract_file(str(path), config=config)
 
     if not result.chunks:
         if content_type in (PDF_CONTENT_TYPE, IMAGE_CONTENT_TYPE):

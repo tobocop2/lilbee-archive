@@ -19,12 +19,6 @@ _SEMANTIC_EMBEDDING_PRESET = "fast"
 _DISABLE_PROGRESS_ENV = "HF_HUB_DISABLE_PROGRESS_BARS"
 
 
-def _preset_embedding_model() -> dict[str, str]:
-    """kreuzberg's EmbeddingModelType rejects the bare preset string its stub
-    advertises; it needs the internally-tagged form (kreuzberg-8iv)."""
-    return {"type": "preset", "name": _SEMANTIC_EMBEDDING_PRESET}
-
-
 def _char_budget() -> tuple[int, int]:
     """Return (max_chars, max_overlap) in characters from the token-based cfg."""
     max_chars = cfg.chunk_size * CHARS_PER_TOKEN
@@ -52,7 +46,7 @@ def build_chunking_config(*, use_semantic: bool = True) -> ChunkingConfig:
         return ChunkingConfig(
             chunker_type=_SEMANTIC_CHUNKER,
             embedding=EmbeddingConfig(
-                model=_preset_embedding_model(),  # type: ignore[arg-type]  # kreuzberg-8iv
+                model=_SEMANTIC_EMBEDDING_PRESET,
                 show_download_progress=_show_download_progress(),
             ),
             topic_threshold=cfg.topic_threshold,
@@ -87,9 +81,7 @@ def chunk_text(
         chunking = build_chunking_config(use_semantic=use_semantic)
 
     config = ExtractionConfig(chunking=chunking)
-    # kreuzberg-7ih: extract_* accept the public config dict at runtime, mistyped
-    # as the rust config.
-    result = extract_bytes_sync(text.encode("utf-8"), mime_type, config=config)  # type: ignore[arg-type]
+    result = extract_bytes_sync(text.encode("utf-8"), mime_type, config=config)
     if result.chunks:
         return [c.content for c in result.chunks]
     return []

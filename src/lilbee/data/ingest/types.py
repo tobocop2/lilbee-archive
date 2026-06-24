@@ -17,6 +17,57 @@ from lilbee.data.store import (
     SourceStatBackfill,
 )
 
+PDF_CONTENT_TYPE = "pdf"
+IMAGE_CONTENT_TYPE = "image"
+MARKDOWN_OUTPUT = "markdown"
+MARKDOWN_MIME = "text/markdown"
+
+# Extension → content_type string for document formats handled by kreuzberg.
+# Container formats (.zip/.tar/.7z/.pst) are deliberately absent: kreuzberg can
+# extract them, but one file fans out to many inner documents, which the
+# source/citation model can't express yet.
+DOCUMENT_EXTENSION_MAP: dict[str, str] = {
+    **{ext: "text" for ext in (".md", ".txt", ".html", ".htm", ".rst", ".yaml", ".yml")},
+    ".pdf": PDF_CONTENT_TYPE,
+    **{
+        ext: ext.lstrip(".")
+        for ext in (
+            ".docx",
+            ".xlsx",
+            ".pptx",
+            ".doc",
+            ".xls",
+            ".ppt",
+            ".rtf",
+            ".odt",
+            ".ods",
+            ".eml",
+            ".msg",
+        )
+    },
+    ".epub": "epub",
+    **{
+        ext: IMAGE_CONTENT_TYPE
+        for ext in (
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".tiff",
+            ".tif",
+            ".bmp",
+            ".webp",
+            ".gif",
+            ".jp2",
+            ".j2k",
+            ".j2c",
+            ".jpx",
+        )
+    },
+    **{ext: "data" for ext in (".csv", ".tsv", ".dbf")},
+    ".xml": "xml",
+    **{ext: "json" for ext in (".json", ".jsonl")},
+}
+
 
 class FileToProcess(NamedTuple):
     """A file queued for ingestion with its metadata."""
@@ -37,12 +88,6 @@ class FileChangePlan(NamedTuple):
     updated: dict[str, None]
     unchanged: int
     stat_backfills: list[SourceStatBackfill]
-
-
-PDF_CONTENT_TYPE = "pdf"
-IMAGE_CONTENT_TYPE = "image"
-MARKDOWN_OUTPUT = "markdown"
-MARKDOWN_MIME = "text/markdown"
 
 
 class OcrBackendName(StrEnum):
@@ -137,50 +182,3 @@ class _IngestResult:
     page_texts: list[PageTextRecord] | None = None
     stat: SourceStat | None = None
     concept_records: ConceptRecords | None = None
-
-
-# Extension → content_type string for document formats handled by kreuzberg.
-# Container formats (.zip/.tar/.7z/.pst) are deliberately absent: kreuzberg can
-# extract them, but one file fans out to many inner documents, which the
-# source/citation model can't express yet.
-DOCUMENT_EXTENSION_MAP: dict[str, str] = {
-    **{ext: "text" for ext in (".md", ".txt", ".html", ".htm", ".rst", ".yaml", ".yml")},
-    ".pdf": PDF_CONTENT_TYPE,
-    **{
-        ext: ext.lstrip(".")
-        for ext in (
-            ".docx",
-            ".xlsx",
-            ".pptx",
-            ".doc",
-            ".xls",
-            ".ppt",
-            ".rtf",
-            ".odt",
-            ".ods",
-            ".eml",
-            ".msg",
-        )
-    },
-    ".epub": "epub",
-    **{
-        ext: IMAGE_CONTENT_TYPE
-        for ext in (
-            ".png",
-            ".jpg",
-            ".jpeg",
-            ".tiff",
-            ".tif",
-            ".bmp",
-            ".webp",
-            ".gif",
-            ".jp2",
-            ".j2k",
-            ".j2c",
-            ".jpx",
-        )
-    },
-    **{ext: "data" for ext in (".csv", ".tsv", ".dbf")},
-    ".xml": "xml",
-    **{ext: "json" for ext in (".json", ".jsonl")},
-}

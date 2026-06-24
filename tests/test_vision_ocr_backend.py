@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+import json
 
 from lilbee.data.ingest.types import MARKDOWN_MIME, OcrBackendName
 from lilbee.data.ingest.vision_ocr_backend import (
@@ -25,8 +25,8 @@ def _backend(ocr_fn=None, model="vendor/glm-ocr"):
 
 
 def _cfg(*, vlm_prompt=None, backend_options=None):
-    """Stand-in for kreuzberg's native OcrConfig object handed to process_image."""
-    return SimpleNamespace(vlm_prompt=vlm_prompt, backend_options=backend_options)
+    """The OcrConfig JSON string kreuzberg hands process_image."""
+    return json.dumps({"vlm_prompt": vlm_prompt, "backend_options": backend_options})
 
 
 class TestProtocol:

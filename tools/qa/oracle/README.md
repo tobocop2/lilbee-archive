@@ -50,21 +50,39 @@ fails the run).
 
 ## Tiers
 
-- **Tier 0-1 (this harness):** content-type routing, native extraction, image
-  OCR, JPEG-2000 render, page counts, deterministic (model-free) chunking.
-- **Tier 2-3 (end-to-end, separate run):** scanned-**PDF** OCR, vision-model OCR,
-  and embedding/search recall must be compared at lilbee's **pipeline/CLI** level,
-  not at `extract_file`. The migration moved PDF OCR from lilbee's pipeline (oracle)
-  into kreuzberg's `extract_file` (candidate), so the two are only comparable
-  through `lilbee add` + `lilbee search` with the fleet running. Capturing those
-  needs an embedder (and, for vision, a vision model) on both sides.
+- **Tier 0-1 — `capture.py` + `compare.py`:** content-type routing, native
+  extraction, image OCR, JPEG-2000 render, page counts, deterministic chunking,
+  compared at kreuzberg's `extract_file` level.
+- **Pipeline OCR — `pipeline_ocr.py`:** captures `ingest_document`'s `page_texts`
+  (OCR text) without the embedder, so it compares OCR *where each build performs
+  it* -- the oracle's own pipeline (rasterize+tesseract) vs the candidate's
+  kreuzberg backend. This is the apples-to-apples scanned-PDF comparison.
+- **Tier 2-3 — `e2e_diff.py`:** runs the full stack via `lilbee add` + `lilbee
+  search` and measures ground-truth recall. With `LILBEE_VISION_MODEL` set, the
+  scanned inputs exercise the vision-OCR path.
 
-## Findings to date
+### Engine-migration caveat
+
+The merge-base oracle (`bb037407`) predates lilbee's in-process -> llama-server
+engine migration: its embedding and vision OCR run through the in-process
+`llama_cpp` module, which the current build removed. So the oracle's **search**
+and **vision** paths can't run without compiling `llama-cpp-python` into the
+oracle venv -- and doing so would test the *engine* migration, not kreuzberg.
+Those tiers are therefore validated end-to-end on the candidate against ground
+truth (the oracle's contract was to recover the same text); `pipeline_ocr.py`
+still captures the oracle's tesseract OCR for a direct scanned-PDF comparison.
+
+## Findings
 
 - **Fixed regression:** image + tesseract OCR failed under kreuzberg 5.x because
-  lilbee left the OCR language empty (`language=[]`); 5.x errors instead of
-  defaulting to English the way 4.x did. Fixed by setting `language=["eng"]` in
-  `data/ingest/extract.py::_ocr_config`.
+  lilbee left the OCR language empty (`language=[]`); 4.x's `OcrConfig.language`
+  was a `str` that defaulted to English, 5.x is a `list` that errors when empty.
+  Fixed by setting `language=["eng"]` in `data/ingest/extract.py::_ocr_config`
+  (bb-jhq), with a regression test.
+- **Improvement, not regression:** scanned-PDF OCR recall went from 0.6 (oracle,
+  150-DPI rasterize+tesseract) to 1.0 (candidate, kreuzberg backend). JPEG-2000
+  scans (`#1158`) extract correctly. Vision OCR (LightOnOCR) recovers 1.0 recall
+  on all scanned inputs; end-to-end search retrieves 7/7 corpus items.
 - **Benign divergences:** CSV-to-markdown formatting changed across versions
   (data preserved); single images now route to `PAGINATED` (one page) instead of
   `MARKDOWN` (intentional).

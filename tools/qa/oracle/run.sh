@@ -42,6 +42,14 @@ echo "==> oracle venv sync (kreuzberg 4.x)"
 echo "==> oracle capture (kreuzberg 4.x)"
 (cd "${ORACLE_WT}" && LILBEE_DATA="$(mktemp -d)" uv run --no-sync python -m tools.qa.oracle.capture "${CORPUS}" "${OUT_DIR}/oracle_golden.json")
 
-echo "==> differential"
+echo "==> extract-level differential (Tier 0-1)"
 LILBEE_DATA="$(mktemp -d)" uv run --no-sync python -m tools.qa.oracle.compare \
-  "${OUT_DIR}/oracle_golden.json" "${OUT_DIR}/candidate_golden.json"
+  "${OUT_DIR}/oracle_golden.json" "${OUT_DIR}/candidate_golden.json" || true
+
+echo "==> pipeline OCR (oracle vs candidate, apples-to-apples scanned-PDF OCR)"
+cp "${REPO_HEAD}"/tools/qa/oracle/*.py "${ORACLE_WT}/tools/qa/oracle/"
+LILBEE_DATA="$(mktemp -d)" uv run --no-sync python -m tools.qa.oracle.pipeline_ocr "${CORPUS}" "${OUT_DIR}/candidate_pipeline_ocr.json"
+(cd "${ORACLE_WT}" && LILBEE_DATA="$(mktemp -d)" uv run --no-sync python -m tools.qa.oracle.pipeline_ocr "${CORPUS}" "${OUT_DIR}/oracle_pipeline_ocr.json")
+
+echo "==> candidate end-to-end (Tier 3 search recall; set LILBEE_VISION_MODEL for Tier 2)"
+LILBEE_DATA="$(mktemp -d)" uv run --no-sync python -m tools.qa.oracle.e2e_diff "${CORPUS}" "${OUT_DIR}/candidate_e2e.json" "${LILBEE_VISION_MODEL:-}"

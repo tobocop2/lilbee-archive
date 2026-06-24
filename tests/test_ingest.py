@@ -1948,6 +1948,9 @@ class TestExtractionConfig:
         assert config.get("ocr") is not None
         # No vision model configured -> kreuzberg's tesseract backend OCRs scanned pages.
         assert config["ocr"].backend == "tesseract"
+        # kreuzberg 5.x errors on image OCR with an empty language list; lilbee must
+        # set an explicit default to preserve 4.x behavior (regression guard).
+        assert config["ocr"].language == ["eng"]
 
     @pytest.mark.parametrize(
         "content_type, expected_mode_name",

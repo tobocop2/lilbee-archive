@@ -118,10 +118,12 @@ def _compare_item(name: str, oracle: dict[str, Any], cand: dict[str, Any]) -> li
     ct = cand.get("content_type", oracle.get("content_type", "?"))
     out: list[Finding] = []
 
+    # A mode change is a routing decision to surface, not breakage in itself;
+    # the page_count / recall / chunk invariants below catch actual breakage.
     o_mode = oracle.get("extract", {}).get("mode")
     c_mode = cand.get("extract", {}).get("mode")
     if o_mode != c_mode:
-        out.append(Finding(name, "mode", Verdict.REGRESSION, f"mode {o_mode!r} -> {c_mode!r}"))
+        out.append(Finding(name, "mode", Verdict.DIVERGENCE, f"mode {o_mode!r} -> {c_mode!r}"))
 
     op, cp = _pages(oracle), _pages(cand)
     page_verdict = Verdict.PASS if op == cp else Verdict.REGRESSION

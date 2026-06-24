@@ -41,6 +41,11 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+# kreuzberg 5.x requires an explicit tesseract language for image OCR; an empty
+# language errors instead of defaulting to English the way 4.x did. Default to
+# English to preserve pre-5.x behavior.
+_TESSERACT_LANGUAGES = ["eng"]
+
 
 def content_type_to_mode(content_type: str) -> ExtractMode:
     """Map a content_type to the extraction mode (paginated for PDFs and images)."""
@@ -114,7 +119,7 @@ def _ocr_config(ocr_token: str | None) -> OcrConfig:
     if cfg.vision_model:
         options = backend_options_for(ocr_token) if ocr_token else None
         return OcrConfig(backend=OcrBackendName.LILBEE_VISION, backend_options=options)
-    return OcrConfig(backend=OcrBackendName.TESSERACT)
+    return OcrConfig(backend=OcrBackendName.TESSERACT, language=_TESSERACT_LANGUAGES)
 
 
 def extraction_config(mode: ExtractMode, *, ocr_token: str | None = None) -> ExtractionConfig:

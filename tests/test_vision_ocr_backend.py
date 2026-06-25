@@ -110,12 +110,6 @@ class TestProcessImage:
         be.process_image(b"PNG", _cfg(backend_options="not-json"))
         assert calls[0][3] == 0.0
 
-    def test_dict_config_read_without_json_decode(self):
-        # kreuzberg may hand a pre-parsed dict (forward compat); read it as-is.
-        be, calls = _backend()
-        be.process_image(b"PNG", {"vlm_prompt": "dict prompt", "backend_options": None})
-        assert calls[0][2] == "dict prompt"
-
     def test_malformed_config_string_falls_back_to_defaults(self):
         # A non-JSON config string yields an empty view: resolved prompt, zero timeout.
         be, calls = _backend(model="vendor/glm-ocr")
@@ -123,6 +117,12 @@ class TestProcessImage:
         _, _, prompt, timeout = calls[0]
         assert prompt == "OCR"
         assert timeout == 0.0
+
+    def test_non_object_json_config_falls_back_to_defaults(self):
+        # Valid JSON that isn't an object (e.g. a bare number) is treated as empty.
+        be, calls = _backend(model="vendor/glm-ocr")
+        be.process_image(b"PNG", "123")
+        assert calls[0][2] == "OCR"
 
 
 class TestRegistry:

@@ -1952,6 +1952,14 @@ class TestExtractionConfig:
         # set an explicit default to preserve 4.x behavior (regression guard).
         assert config["ocr"].language == ["eng"]
 
+    def test_tesseract_ocr_language_from_config(self, monkeypatch):
+        from lilbee.core.config import cfg
+        from lilbee.data.ingest import ExtractMode, extraction_config
+
+        monkeypatch.setattr(cfg, "ocr_language", ["deu", "fra"])
+        config = extraction_config(ExtractMode.PAGINATED)
+        assert config["ocr"].language == ["deu", "fra"]
+
     @pytest.mark.parametrize(
         "content_type, expected_mode_name",
         [

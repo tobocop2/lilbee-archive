@@ -305,3 +305,33 @@ async def test_placement_screen_passes_devices_to_panel(monkeypatch: pytest.Monk
         assert len(panel._devices) == 4
         assert panel._labels[0] == "CUDA0"
         assert panel._names[0] == "NVIDIA A40"
+
+
+@pytest.mark.asyncio
+async def test_panel_renders_role_badge_and_separated_cards(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each card shows its role badge and is separated from the next by a blank line."""
+    import lilbee.cli.tui.widgets.gpu_fleet_panel as pm
+    from lilbee.cli.tui.widgets.gpu_fleet_panel import GpuFleetPanel
+
+    stat = lambda i, u: pm.GpuStat(i, u, 15 * 1024**3, 47 * 1024**3)  # noqa: E731
+    monkeypatch.setattr(pm, "probe_gpu_stats", lambda d: {1: stat(1, 71), 2: stat(2, 68)})
+    app = _PanelHost()
+    async with app.run_test(size=(90, 24)) as pilot:
+        await pilot.pause()
+        p = app.query_one(GpuFleetPanel)
+        p.set_devices(
+            [_make_device(1), _make_device(2)],
+            labels={1: "CUDA1", 2: "CUDA2"},
+            names={1: "A6000", 2: "A6000"},
+            roles={1: "chat - Qwen3-235B", 2: "chat - Qwen3-235B"},
+        )
+        p._request_stats()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        r = str(p.render())
+        assert "chat - Qwen3-235B" in r  # badge present
+        assert r.count("CUDA") == 2  # both cards
+        # a blank separator line exists between the two card blocks
+        assert "\n\n" in r

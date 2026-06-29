@@ -1,6 +1,6 @@
 """Live GPU fleet panel widget for the Placement screen.
 
-Renders per-card utilization and VRAM bars in the rose-pine palette and
+Renders per-card utilization and VRAM bars styled via rose-pine theme tokens and
 refreshes on a ~1 s interval.  The probe runs off the UI thread so the
 event loop is never blocked by the nvidia-smi subprocess.
 """
@@ -26,16 +26,6 @@ log = logging.getLogger(__name__)
 
 _CSS_FILE = Path(__file__).parent / "gpu_fleet_panel.tcss"
 
-# Rose-pine palette (hex literals for Rich markup)
-_COLOR_IRIS = "#c4a7e7"
-_COLOR_FOAM = "#9ccfd8"
-_COLOR_GOLD = "#f6c177"
-_COLOR_LOVE = "#eb6f92"
-_COLOR_TEXT = "#e0def4"
-_COLOR_SUBTLE = "#908caa"
-_COLOR_MUTED = "#6e6a86"
-_COLOR_TRACK = "#403d52"
-
 # Bar render constants
 _BAR_FILL = "█"  # full block █
 _BAR_TRACK = "─"  # horizontal box-drawing line ─
@@ -48,6 +38,9 @@ _UTIL_HOT = 80
 
 # VRAM saturation threshold (fraction)
 _VRAM_HIGH = 0.85
+
+# Temperature threshold (°C) above which temp is shown in error color
+_TEMP_HOT = 75
 
 # Refresh interval
 _TICK_INTERVAL_S = 1.0
@@ -65,71 +58,93 @@ _EMPTY_TEXT = "(no GPUs detected)"
 # Shown as the util reading when utilization_pct is None
 _UTIL_DASH = " -- "
 
+# Blank separator line between GPU card blocks
+_ROW_GAP = ""
 
-def _heat_color(utilization_pct: int) -> str:
-    """Rose-pine heat color keyed on utilization percentage."""
+
+def _heat_color(utilization_pct: int, theme: dict[str, str]) -> str:
+    """Theme-token heat color keyed on utilization percentage."""
     if utilization_pct < _UTIL_WARM:
-        return _COLOR_FOAM
+        return theme.get("success", "#9ccfd8")
     if utilization_pct < _UTIL_HOT:
-        return _COLOR_GOLD
-    return _COLOR_LOVE
+        return theme.get("warning", "#f6c177")
+    return theme.get("error", "#eb6f92")
 
 
-def _bar(fraction: float, width: int, fill_color: str) -> str:
-    """Render a filled bar with rose-pine track for the remainder."""
+def _bar(fraction: float, width: int, fill_color: str, track_color: str) -> str:
+    """Render a filled bar with a track for the remainder."""
     clamped = max(0.0, min(1.0, fraction))
     filled = round(clamped * width)
-    return (
-        f"[{fill_color}]{_BAR_FILL * filled}[/][{_COLOR_TRACK}]{_BAR_TRACK * (width - filled)}[/]"
-    )
+    return f"[{fill_color}]{_BAR_FILL * filled}[/][{track_color}]{_BAR_TRACK * (width - filled)}[/]"
 
 
-def _render_stats(stats: dict[int, GpuStat], labels: dict[int, str], names: dict[int, str]) -> str:
+def _render_stats(
+    stats: dict[int, GpuStat],
+    labels: dict[int, str],
+    names: dict[int, str],
+    roles: dict[int, str],
+    theme: dict[str, str],
+) -> str:
     """Build the Rich markup string for all GPUs from a stat snapshot."""
     if not stats:
-        return f"[{_COLOR_MUTED}]  {_EMPTY_TEXT}[/]"
-    lines: list[str] = [
-        f"[bold {_COLOR_IRIS}]  {_TITLE_TEXT}[/]",
-        f"[{_COLOR_TRACK}]{'─' * (_BAR_WIDTH + 24)}[/]",
-        "",
-    ]
-    for idx in sorted(stats):
+        return f"[{theme.get('text-muted', '#6e6a86')}]  {_EMPTY_TEXT}[/]"
+
+    muted = theme.get("text-muted", "#6e6a86")
+    secondary = theme.get("secondary", "#c4a7e7")
+    foreground = theme.get("foreground", "#e0def4")
+    panel_color = theme.get("panel", "#403d52")
+    primary = theme.get("primary", "#c4a7e7")
+    error = theme.get("error", "#eb6f92")
+
+    lines: list[str] = []
+    sorted_indices = sorted(stats)
+    for card_n, idx in enumerate(sorted_indices):
         s = stats[idx]
         label = labels.get(idx, f"GPU{idx}")
-        name = names.get(idx, "")
+        role = roles.get(idx, "")
         used_bytes = s.total_bytes - s.free_bytes
         vram_frac = used_bytes / s.total_bytes if s.total_bytes else 0.0
         used_gib = used_bytes / _GIB
         total_gib = s.total_bytes / _GIB
-        vram_color = _COLOR_LOVE if vram_frac >= _VRAM_HIGH else _COLOR_IRIS
+        vram_color = error if vram_frac >= _VRAM_HIGH else primary
 
-        # Card heading row
+        # Heat bullet color
         if s.utilization_pct is not None:
-            dot_color = _heat_color(s.utilization_pct)
+            dot_color = _heat_color(s.utilization_pct, theme)
         else:
-            dot_color = _COLOR_MUTED
-        heading = (
-            f"  [{dot_color}]{_BULLET}[/] [bold {_COLOR_TEXT}]{label}[/]  [{_COLOR_MUTED}]{name}[/]"
-        )
-        lines.append(heading)
+            dot_color = muted
+
+        # Badge line: [heat]●[/] [bold]CUDAi[/]  [secondary]role[/]
+        # role string is expected to carry "role - model" in one string already
+        if role:
+            badge = (
+                f"  [{dot_color}]{_BULLET}[/] [bold {foreground}]{label}[/]  [{secondary}]{role}[/]"
+            )
+        else:
+            badge = f"  [{dot_color}]{_BULLET}[/] [bold {foreground}]{label}[/]"
+        lines.append(badge)
 
         # Utilization bar
         if s.utilization_pct is not None:
-            heat = _heat_color(s.utilization_pct)
-            util_bar = _bar(s.utilization_pct / 100, _BAR_WIDTH, heat)
+            heat = _heat_color(s.utilization_pct, theme)
+            util_bar = _bar(s.utilization_pct / 100, _BAR_WIDTH, heat, panel_color)
             util_pct = f"[{heat}]{s.utilization_pct:>3}%[/]"
         else:
-            util_bar = f"[{_COLOR_TRACK}]{_BAR_TRACK * _BAR_WIDTH}[/]"
-            util_pct = f"[{_COLOR_MUTED}]{_UTIL_DASH}[/]"
-        lines.append(f"     [{_COLOR_SUBTLE}]{_LABEL_UTIL}[/]  {util_bar} {util_pct}")
+            util_bar = f"[{panel_color}]{_BAR_TRACK * _BAR_WIDTH}[/]"
+            util_pct = f"[{muted}]{_UTIL_DASH}[/]"
+        lines.append(f"     [{muted}]{_LABEL_UTIL}[/]  {util_bar} {util_pct}")
 
         # VRAM bar
-        vram_bar = _bar(vram_frac, _BAR_WIDTH, vram_color)
+        vram_bar = _bar(vram_frac, _BAR_WIDTH, vram_color, panel_color)
         lines.append(
-            f"     [{_COLOR_SUBTLE}]{_LABEL_VRAM}[/]  {vram_bar}"
-            f" [{_COLOR_SUBTLE}]{used_gib:>4.1f}/{total_gib:>2.0f}G[/]"
+            f"     [{muted}]{_LABEL_VRAM}[/]  {vram_bar}"
+            f" [{muted}]{used_gib:>4.1f}/{total_gib:>2.0f}G[/]"
         )
-        lines.append("")
+
+        # Blank separator between cards (not after the last one)
+        if card_n < len(sorted_indices) - 1:
+            lines.append(_ROW_GAP)
+
     return "\n".join(lines)
 
 
@@ -147,6 +162,7 @@ class GpuFleetPanel(Static):
         self._devices: Sequence[_DeviceLike] = []
         self._labels: dict[int, str] = {}
         self._names: dict[int, str] = {}
+        self._roles: dict[int, str] = {}
         self._timer: Timer | None = None
 
     def set_devices(
@@ -155,15 +171,18 @@ class GpuFleetPanel(Static):
         *,
         labels: dict[int, str],
         names: dict[int, str],
+        roles: dict[int, str] | None = None,
     ) -> None:
         """Register the GPU devices the panel probes on each tick.
 
         `labels` maps device index to the short display label (e.g. "CUDA0").
         `names` maps device index to the GPU name (e.g. "NVIDIA A40").
+        `roles` maps device index to a badge string (e.g. "chat - Qwen3-235B"), "" when idle.
         """
         self._devices = list(devices)
         self._labels = dict(labels)
         self._names = dict(names)
+        self._roles = dict(roles) if roles is not None else {}
 
     def on_mount(self) -> None:
         self._timer = self.set_interval(_TICK_INTERVAL_S, self._request_stats)
@@ -177,7 +196,20 @@ class GpuFleetPanel(Static):
 
     def _request_stats(self) -> None:
         """Kick off an off-thread stats probe."""
-        self._probe_worker(list(self._devices), self._labels.copy(), self._names.copy())
+        self._probe_worker(
+            list(self._devices),
+            self._labels.copy(),
+            self._names.copy(),
+            self._roles.copy(),
+        )
+
+    def _resolve_theme(self) -> dict[str, str]:
+        """Return the current app theme variables with `$` prefix stripped."""
+        try:
+            raw: dict[str, str] = self.app.theme_variables
+            return {k.lstrip("$"): v for k, v in raw.items()}
+        except Exception:
+            return {}
 
     @work(thread=True, exit_on_error=False)
     def _probe_worker(
@@ -185,6 +217,7 @@ class GpuFleetPanel(Static):
         devices: list[_DeviceLike],
         labels: dict[int, str],
         names: dict[int, str],
+        roles: dict[int, str],
     ) -> None:
         """Probe GPU stats off the UI thread and push the result back."""
         try:
@@ -192,14 +225,16 @@ class GpuFleetPanel(Static):
         except Exception:
             log.debug("gpu_fleet_panel: probe failed", exc_info=True)
             return
-        call_from_thread(self, self._apply_stats, stats, labels, names)
+        call_from_thread(self, self._apply_stats, stats, labels, names, roles)
 
     def _apply_stats(
         self,
         stats: dict[int, GpuStat],
         labels: dict[int, str],
         names: dict[int, str],
+        roles: dict[int, str],
     ) -> None:
         """Update the rendered content with fresh stat data (main thread)."""
-        markup = _render_stats(stats, labels, names)
+        theme = self._resolve_theme()
+        markup = _render_stats(stats, labels, names, roles, theme)
         self.update(markup)

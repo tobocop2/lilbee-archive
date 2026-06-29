@@ -218,7 +218,7 @@ class PlacementScreen(Screen[None]):
             return
         labels = {g.index: g.label for g in view.gpus}
         names = {g.index: g.name for g in view.gpus}
-        panel.set_devices(view.gpus, labels=labels, names=names)
+        panel.set_devices(view.gpus, labels=labels, names=names, roles={})
 
     # -- editor state ----------------------------------------------------
 

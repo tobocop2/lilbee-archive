@@ -7,7 +7,7 @@ import os
 import re
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -23,7 +23,12 @@ from lilbee.providers.fleet.adapters import (
     resolve_rerank_mode,
 )
 from lilbee.providers.fleet.binary import llama_server_runtime_env, resolve_llama_server
-from lilbee.providers.fleet.devices import FleetDevice, probe_devices, visible_env
+from lilbee.providers.fleet.devices import (
+    FleetDevice,
+    host_compute_device,
+    probe_devices,
+    visible_env,
+)
 from lilbee.providers.fleet.launch import InstanceLaunch
 from lilbee.providers.fleet.placement import (
     InstancePlan,
@@ -813,12 +818,21 @@ def _resolve_placement(
 
 @dataclass(frozen=True)
 class ResolvedPlacement:
-    """Devices + resolved instance plans + model refs for the placement view."""
+    """Devices + resolved instance plans + model refs for the placement view.
+
+    ``role_footprints`` is each placed role's estimated single-instance memory
+    footprint (unified bytes on a shared-memory host, else VRAM bytes), carried so
+    the view can report a per-role "~X GB" without re-estimating. ``host_device`` is
+    the host's unified-memory (Metal) compute device, surfaced for display only when
+    the probe enumerates no discrete GPU; it never participates in placement.
+    """
 
     devices: tuple[FleetDevice, ...]
     instances: tuple[InstancePlan, ...]
     unplaceable_roles: tuple[WorkerRole, ...]
     model_refs: dict[WorkerRole, str]
+    role_footprints: dict[WorkerRole, int] = field(default_factory=dict)
+    host_device: FleetDevice | None = None
 
 
 def resolve_placement_plan(placement: PlacementSpec | None) -> ResolvedPlacement:
@@ -840,6 +854,9 @@ def resolve_placement_plan(placement: PlacementSpec | None) -> ResolvedPlacement
         instances=resolved.instances,
         unplaceable_roles=resolved.unplaceable_roles,
         model_refs=model_refs,
+        role_footprints={m.role: m.est_vram_bytes for m in inputs},
+        # No discrete GPU enumerated -> show the host's unified-memory device.
+        host_device=host_compute_device(binary) if not devices else None,
     )
 
 

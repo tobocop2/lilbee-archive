@@ -32,13 +32,18 @@ class GpuInfo:
 
 @dataclass(frozen=True)
 class RolePlacementView:
-    """Where one role's model is placed in the resolved plan."""
+    """Where one role's model is placed in the resolved plan.
+
+    ``vram_bytes`` is the role's estimated single-instance memory footprint on its
+    assigned device(s), or ``None`` when the plan did not estimate it.
+    """
 
     role: WorkerRole
     model: str
     devices: tuple[int, ...]
     tensor_split: tuple[int, ...] | None
     replicas: int
+    vram_bytes: int | None = None
 
 
 @dataclass(frozen=True)
@@ -58,6 +63,10 @@ def _active_spec() -> PlacementSpec | None:
 
 
 def _view(resolved: ResolvedPlacement, *, manual: bool, spec_json: str | None) -> PlacementView:
+    # No discrete GPU enumerated -> show the host's unified-memory (Metal) device.
+    display = resolved.devices or (
+        (resolved.host_device,) if resolved.host_device is not None else ()
+    )
     gpus = tuple(
         GpuInfo(
             index=d.index,
@@ -67,7 +76,7 @@ def _view(resolved: ResolvedPlacement, *, manual: bool, spec_json: str | None) -
             total_bytes=d.total_bytes,
             free_bytes=d.free_bytes,
         )
-        for d in resolved.devices
+        for d in display
     )
     by_role: dict[WorkerRole, RolePlacementView] = {}
     for plan in resolved.instances:
@@ -82,6 +91,7 @@ def _view(resolved: ResolvedPlacement, *, manual: bool, spec_json: str | None) -
                 devices=plan.devices,
                 tensor_split=plan.tensor_split or None,
                 replicas=1,
+                vram_bytes=resolved.role_footprints.get(plan.role),
             )
     return PlacementView(
         gpus=gpus,

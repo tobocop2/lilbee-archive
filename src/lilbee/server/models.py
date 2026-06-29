@@ -576,13 +576,18 @@ class GpuInfoResponse(BaseModel):
 
 
 class RolePlacementResponse(BaseModel):
-    """Where one role's model is placed in the resolved plan."""
+    """Where one role's model is placed in the resolved plan.
+
+    ``vram_bytes`` is the role's estimated single-instance memory footprint on its
+    assigned device(s), or ``None`` when the plan did not estimate it.
+    """
 
     role: WorkerRole
     model: str
     devices: list[int]
     tensor_split: list[int] | None
     replicas: int
+    vram_bytes: int | None = None
 
 
 class PlacementResponse(BaseModel):

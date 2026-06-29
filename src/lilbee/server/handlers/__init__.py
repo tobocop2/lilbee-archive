@@ -143,6 +143,7 @@ def _placement_response(view: PlacementView) -> PlacementResponse:
                 devices=list(r.devices),
                 tensor_split=list(r.tensor_split) if r.tensor_split else None,
                 replicas=r.replicas,
+                vram_bytes=r.vram_bytes,
             )
             for r in view.roles
         ],

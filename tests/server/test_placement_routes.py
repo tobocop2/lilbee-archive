@@ -240,6 +240,37 @@ def test_delete_provider_error_returns_503_when_enabled(monkeypatch):
         assert r.status_code == 503
 
 
+def test_placement_response_carries_role_vram_bytes():
+    """The response exposes each role's estimated memory footprint (or None)."""
+    from lilbee.server.handlers import _placement_response
+
+    view = PlacementView(
+        gpus=(),
+        roles=(RolePlacementView(WorkerRole.CHAT, "org/chat.gguf", (), None, 1, 5 * GIB),),
+        unplaceable=(),
+        manual=False,
+        spec_json=None,
+    )
+    resp = _placement_response(view)
+    assert resp.roles[0].vram_bytes == 5 * GIB
+
+
+def test_placement_response_surfaces_host_metal_device():
+    """A no-discrete-GPU host reports one device with non-zero total_bytes."""
+    from lilbee.server.handlers import _placement_response
+
+    view = PlacementView(
+        gpus=(GpuInfo(0, "metal", "metal0", "Apple Silicon (unified memory)", 32 * GIB, 20 * GIB),),
+        roles=(),
+        unplaceable=(),
+        manual=False,
+        spec_json=None,
+    )
+    resp = _placement_response(view)
+    assert resp.gpus[0].label == "metal0"
+    assert resp.gpus[0].total_bytes == 32 * GIB
+
+
 def test_get_gpus(monkeypatch):
     from lilbee.server.models import GpuInfoResponse
 

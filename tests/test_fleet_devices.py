@@ -10,6 +10,7 @@ import pytest
 from lilbee.providers.fleet import devices as dev_mod
 from lilbee.providers.fleet.devices import (
     FleetDevice,
+    host_compute_device,
     probe_devices,
     visible_env,
 )
@@ -79,6 +80,40 @@ def test_probe_returns_empty_on_subprocess_failure(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(dev_mod.subprocess, "run", _boom)
     assert probe_devices(Path("/bin/llama-server")) == []
+
+
+def test_host_compute_device_reports_metal_from_listing(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A Metal device is dropped from the planner's discrete list, but the view path
+    # surfaces it under a lowercase backend (label "metal0") with its real totals.
+    listing = "  Metal0: Apple M2 Max (49152 MiB, 40000 MiB free)\n"
+    monkeypatch.setattr(dev_mod.subprocess, "run", _fake_run(listing))
+    assert probe_devices(Path("/bin/llama-server")) == []  # not a pinnable backend
+    device = host_compute_device(Path("/bin/llama-server"))
+    assert device == FleetDevice("metal", 0, "Apple M2 Max", 49152 * _MIB, 40000 * _MIB)
+
+
+def test_host_compute_device_synthesizes_from_host_memory_on_apple_silicon(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # No Metal device in the listing, but an Apple Silicon host -> derive one device
+    # from host (unified) memory so the view still draws a memory bar.
+    from lilbee.providers import model_cache
+
+    monkeypatch.setattr(dev_mod.subprocess, "run", _fake_run("  CPU0: host cpu (64000 MiB)\n"))
+    monkeypatch.setattr(dev_mod, "_is_apple_silicon", lambda: True)
+    monkeypatch.setattr(model_cache, "total_system_memory", lambda: 64 * 1024**3)
+    monkeypatch.setattr(model_cache, "free_system_memory", lambda: 48 * 1024**3)
+    device = host_compute_device(Path("/bin/llama-server"))
+    assert device == FleetDevice(
+        "metal", 0, "Apple Silicon (unified memory)", 64 * 1024**3, 48 * 1024**3
+    )
+
+
+def test_host_compute_device_none_on_cpu_only_non_mac(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A GPU-less non-Mac host has no compute device to show.
+    monkeypatch.setattr(dev_mod.subprocess, "run", _fake_run("  CPU0: host cpu (64000 MiB)\n"))
+    monkeypatch.setattr(dev_mod, "_is_apple_silicon", lambda: False)
+    assert host_compute_device(Path("/bin/llama-server")) is None
 
 
 def test_probe_env_sets_pci_bus_order() -> None:

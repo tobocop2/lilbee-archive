@@ -2,7 +2,7 @@ from pathlib import Path
 
 from lilbee.providers.fleet import planning
 from lilbee.providers.fleet.devices import FleetDevice
-from lilbee.providers.fleet.placement import InstancePlan, Placement
+from lilbee.providers.fleet.placement import InstancePlan, ModelPlacementInput, Placement
 from lilbee.providers.fleet.placement_spec import PlacementSpec, RolePlacement
 from lilbee.providers.roles import WorkerRole
 
@@ -71,6 +71,58 @@ def test_resolve_placement_plan_uses_read_cache(monkeypatch):
     planning.resolve_placement_plan(None)
     assert calls["n"] == 1
     planning.clear_read_device_cache()
+
+
+def _stub_resolve_env(monkeypatch, *, devices):
+    import lilbee.providers.fleet.cuda_runtime as cuda_runtime
+    import lilbee.providers.fleet.gpu_env as gpu_env
+
+    planning.clear_read_device_cache()
+    monkeypatch.setattr(planning, "resolve_llama_server", lambda: Path("/fake"))
+    monkeypatch.setattr(gpu_env, "apply_fleet_gpu_env", lambda: None)
+    monkeypatch.setattr(cuda_runtime, "apply_cuda_runtime_env", lambda: None)
+    monkeypatch.setattr(planning, "resolve_devices", lambda _binary: devices)
+    monkeypatch.setattr(
+        planning,
+        "_resolve_placement",
+        lambda *a, **k: Placement(instances=(), unplaceable_roles=()),
+    )
+
+
+def test_resolve_placement_plan_carries_role_footprints_and_no_host_on_discrete(monkeypatch):
+    """With a discrete GPU, the plan carries per-role footprints and no host device."""
+    _stub_resolve_env(monkeypatch, devices=[FleetDevice("CUDA", 0, "A", 80 * GIB, 80 * GIB)])
+    monkeypatch.setattr(
+        planning,
+        "_server_model_inputs",
+        lambda roles, *, unified_budget=None: (
+            [ModelPlacementInput(role=WorkerRole.CHAT, est_vram_bytes=7 * GIB)],
+            {WorkerRole.CHAT: "ref"},
+            0,
+        ),
+    )
+    called = {"host": False}
+    monkeypatch.setattr(
+        planning, "host_compute_device", lambda _b: called.__setitem__("host", True)
+    )
+    resolved = planning.resolve_placement_plan(None)
+    planning.clear_read_device_cache()
+    assert resolved.role_footprints == {WorkerRole.CHAT: 7 * GIB}
+    assert resolved.host_device is None
+    assert called["host"] is False  # host probe skipped when a discrete GPU exists
+
+
+def test_resolve_placement_plan_surfaces_host_device_when_no_gpu(monkeypatch):
+    """With no discrete GPU, the plan surfaces the host's unified-memory device."""
+    _stub_resolve_env(monkeypatch, devices=[])
+    monkeypatch.setattr(
+        planning, "_server_model_inputs", lambda roles, *, unified_budget=None: ([], {}, 0)
+    )
+    host = FleetDevice("metal", 0, "Apple Silicon (unified memory)", 32 * GIB, 20 * GIB)
+    monkeypatch.setattr(planning, "host_compute_device", lambda _b: host)
+    resolved = planning.resolve_placement_plan(None)
+    planning.clear_read_device_cache()
+    assert resolved.host_device == host
 
 
 def test_spec_branch_calls_placement_from_spec(monkeypatch):

@@ -133,6 +133,41 @@ def test_set_validates_before_persist(monkeypatch):
     assert wrote["any"] is False
 
 
+def test_view_surfaces_host_device_when_no_discrete_gpu():
+    # A host with no discrete GPU still reports one device (the unified-memory /
+    # Metal host) with non-zero total_bytes, so the plugin can draw the memory bar.
+    resolved = ResolvedPlacement(
+        devices=(),
+        instances=(InstancePlan(role=WorkerRole.CHAT, devices=(), tensor_split=None),),
+        unplaceable_roles=(),
+        model_refs={WorkerRole.CHAT: "org/chat.gguf"},
+        host_device=FleetDevice("metal", 0, "Apple Silicon (unified memory)", 32 * GIB, 20 * GIB),
+    )
+    view = app_placement._view(resolved, manual=False, spec_json=None)
+    assert len(view.gpus) == 1
+    assert view.gpus[0].label == "metal0"
+    assert view.gpus[0].backend == "metal"
+    assert view.gpus[0].total_bytes == 32 * GIB
+    assert view.gpus[0].free_bytes == 20 * GIB
+
+
+def test_view_carries_per_role_vram_bytes():
+    resolved = ResolvedPlacement(
+        devices=(FleetDevice("CUDA", 0, "NVIDIA A100", 80 * GIB, 72 * GIB),),
+        instances=(InstancePlan(role=WorkerRole.CHAT, devices=(0,), tensor_split=None),),
+        unplaceable_roles=(),
+        model_refs={WorkerRole.CHAT: "org/chat.gguf"},
+        role_footprints={WorkerRole.CHAT: 7 * GIB},
+    )
+    view = app_placement._view(resolved, manual=False, spec_json=None)
+    assert view.roles[0].vram_bytes == 7 * GIB
+
+
+def test_view_role_vram_bytes_none_when_unestimated():
+    view = app_placement._view(_resolved(), manual=False, spec_json=None)
+    assert view.roles[0].vram_bytes is None
+
+
 def test_view_multi_replica_unions_devices():
     resolved = ResolvedPlacement(
         devices=(

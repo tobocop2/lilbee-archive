@@ -10,6 +10,7 @@ fallback when the binary can't enumerate. See docs/architecture.md.
 from __future__ import annotations
 
 import os
+import platform
 import re
 import subprocess
 from dataclasses import dataclass
@@ -17,6 +18,13 @@ from pathlib import Path
 
 _LIST_DEVICES_TIMEOUT_S = 60.0
 _MIB = 1024 * 1024
+# Apple GPU: llama-server prints "Metal" but it is not a pinnable discrete backend
+# (absent from _BACKEND_RANK), so probe_devices drops it and the planner uses the
+# unified-memory path. host_compute_device surfaces it for the view only, under a
+# lowercase backend so the label reads "metal0" like a CUDA "CUDA0" device.
+_METAL_PROBE_BACKEND = "Metal"
+_METAL_BACKEND = "metal"
+_UNIFIED_DEVICE_NAME = "Apple Silicon (unified memory)"
 # Per-backend visible-devices env vars (the probe inherits them; the children
 # re-emit them, composed through any parent restriction).
 _CUDA_VISIBLE_VAR = "CUDA_VISIBLE_DEVICES"
@@ -58,12 +66,8 @@ def _probe_env() -> dict[str, str]:
     return env
 
 
-def probe_devices(binary: Path) -> list[FleetDevice]:
-    """Parse ``<binary> --list-devices``; ``[]`` when unavailable/unparseable.
-
-    Filtered to a single GPU backend (the highest-ranked one present) so device
-    indices are unambiguous when a build exposes several backends.
-    """
+def _list_devices_output(binary: Path) -> str:
+    """``<binary> --list-devices`` stdout+stderr, or ``""`` when it can't run."""
     try:
         proc = subprocess.run(  # noqa: S603 - binary is the resolved llama-server
             [str(binary), "--list-devices"],
@@ -74,8 +78,49 @@ def probe_devices(binary: Path) -> list[FleetDevice]:
             check=False,
         )
     except (OSError, subprocess.SubprocessError):
-        return []
-    return _select_backend(_parse_devices(proc.stdout + proc.stderr))
+        return ""
+    return proc.stdout + proc.stderr
+
+
+def probe_devices(binary: Path) -> list[FleetDevice]:
+    """Parse ``<binary> --list-devices``; ``[]`` when unavailable/unparseable.
+
+    Filtered to a single GPU backend (the highest-ranked one present) so device
+    indices are unambiguous when a build exposes several backends.
+    """
+    return _select_backend(_parse_devices(_list_devices_output(binary)))
+
+
+def _is_apple_silicon() -> bool:
+    """Whether this host is an Apple Silicon Mac (Metal-backed unified memory)."""
+    return platform.system() == "Darwin" and platform.machine() == "arm64"
+
+
+def host_compute_device(binary: Path) -> FleetDevice | None:
+    """The host's unified-memory compute device for the placement VIEW, or ``None``.
+
+    The planner never places against this: probe_devices keeps only discrete,
+    pinnable GPU backends, so an Apple Silicon host runs the unified-memory path
+    and Metal stays invisible to placement and launch. The view surfaces it so a
+    client can draw the host memory bar. Prefers the Metal device --list-devices
+    reports (real totals); else synthesizes one from host memory on Apple Silicon;
+    else ``None`` (a CPU-only non-Mac host has no compute device to show).
+    """
+    parsed = _parse_devices(_list_devices_output(binary))
+    metal = next((d for d in parsed if d.backend == _METAL_PROBE_BACKEND), None)
+    if metal is not None:
+        return FleetDevice(_METAL_BACKEND, 0, metal.name, metal.total_bytes, metal.free_bytes)
+    if not _is_apple_silicon():
+        return None
+    from lilbee.providers import model_cache
+
+    return FleetDevice(
+        _METAL_BACKEND,
+        0,
+        _UNIFIED_DEVICE_NAME,
+        model_cache.total_system_memory(),
+        model_cache.free_system_memory(),
+    )
 
 
 def _parse_devices(text: str) -> list[FleetDevice]:

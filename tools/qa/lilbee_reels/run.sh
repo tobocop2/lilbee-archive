@@ -98,7 +98,7 @@ log "warm ready"
 
 # 5. The reel tape: launch opencode (reuses the warm serve), ask one prompt that
 #    forces a lilbee_search over the lilbee source AND a real code change.
-PROMPT="Add a 'lilbee launch which <agent>' subcommand that prints the resolved binary path for the given agent, or reports that it is not installed, using the launcher registry in src/lilbee/cli/launchers/__init__.py and each launcher's find_binary. Run it to make sure it works, then add a focused test under tests/cli/ and run just that test."
+PROMPT="Add a 'lilbee launch status' subcommand to the launch command group in src/lilbee/cli/launchers/__init__.py: it lists each launchable agent and shows whether that agent is installed (its binary found on PATH via the launcher's find_binary). Implement only this one subcommand. Run 'lilbee launch status' to confirm it works, then add a focused test in tests/cli/ for it and run just that test."
 WS="$REPO"
 # Verified rose-pine recipe: VHS's BUILT-IN named theme (an inline JSON theme
 # silently falls back to gray), plus the macOS window chrome the existing agent

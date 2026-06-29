@@ -50,7 +50,6 @@ _GIB = 1024**3
 # Column labels
 _LABEL_UTIL = "util"
 _LABEL_VRAM = "vram"
-_TITLE_TEXT = "G P U   F L E E T"
 
 # Displayed when no GPU info is available
 _EMPTY_TEXT = "(no GPUs detected)"
@@ -61,14 +60,25 @@ _UTIL_DASH = " -- "
 # Blank separator line between GPU card blocks
 _ROW_GAP = ""
 
+# Rich color used when a theme token is absent (renders in terminal default)
+_COLOR_FALLBACK = "default"
+
+# Badge role/model separator
+_BADGE_SEP = " - "
+
+
+def _theme_color(theme: dict[str, str], token: str) -> str:
+    """Resolve a theme token to a Rich color, falling back to terminal default."""
+    return theme.get(token, _COLOR_FALLBACK)
+
 
 def _heat_color(utilization_pct: int, theme: dict[str, str]) -> str:
     """Theme-token heat color keyed on utilization percentage."""
     if utilization_pct < _UTIL_WARM:
-        return theme.get("success", "#9ccfd8")
+        return _theme_color(theme, "success")
     if utilization_pct < _UTIL_HOT:
-        return theme.get("warning", "#f6c177")
-    return theme.get("error", "#eb6f92")
+        return _theme_color(theme, "warning")
+    return _theme_color(theme, "error")
 
 
 def _bar(fraction: float, width: int, fill_color: str, track_color: str) -> str:
@@ -76,6 +86,17 @@ def _bar(fraction: float, width: int, fill_color: str, track_color: str) -> str:
     clamped = max(0.0, min(1.0, fraction))
     filled = round(clamped * width)
     return f"[{fill_color}]{_BAR_FILL * filled}[/][{track_color}]{_BAR_TRACK * (width - filled)}[/]"
+
+
+def _badge_role_markup(role: str, secondary: str, muted: str) -> str:
+    """Return Rich markup for the role portion of a badge.
+
+    Splits "role - model" so the role renders in secondary and the model in muted.
+    """
+    if _BADGE_SEP in role:
+        role_part, model_part = role.split(_BADGE_SEP, 1)
+        return f"[{secondary}]{role_part}[/][{muted}]{_BADGE_SEP}{model_part}[/]"
+    return f"[{secondary}]{role}[/]"
 
 
 def _render_stats(
@@ -86,15 +107,16 @@ def _render_stats(
     theme: dict[str, str],
 ) -> str:
     """Build the Rich markup string for all GPUs from a stat snapshot."""
-    if not stats:
-        return f"[{theme.get('text-muted', '#6e6a86')}]  {_EMPTY_TEXT}[/]"
+    muted = _theme_color(theme, "text-muted")
 
-    muted = theme.get("text-muted", "#6e6a86")
-    secondary = theme.get("secondary", "#c4a7e7")
-    foreground = theme.get("foreground", "#e0def4")
-    panel_color = theme.get("panel", "#403d52")
-    primary = theme.get("primary", "#c4a7e7")
-    error = theme.get("error", "#eb6f92")
+    if not stats:
+        return f"[{muted}]  {_EMPTY_TEXT}[/]"
+
+    secondary = _theme_color(theme, "secondary")
+    foreground = _theme_color(theme, "foreground")
+    panel_color = _theme_color(theme, "panel")
+    primary = _theme_color(theme, "primary")
+    error = _theme_color(theme, "error")
 
     lines: list[str] = []
     sorted_indices = sorted(stats)
@@ -114,12 +136,10 @@ def _render_stats(
         else:
             dot_color = muted
 
-        # Badge line: [heat]●[/] [bold]CUDAi[/]  [secondary]role[/]
-        # role string is expected to carry "role - model" in one string already
+        # Badge line: [heat]●[/] [bold]CUDAi[/]  [secondary]role[/][muted] - model[/]
         if role:
-            badge = (
-                f"  [{dot_color}]{_BULLET}[/] [bold {foreground}]{label}[/]  [{secondary}]{role}[/]"
-            )
+            role_markup = _badge_role_markup(role, secondary, muted)
+            badge = f"  [{dot_color}]{_BULLET}[/] [bold {foreground}]{label}[/]  {role_markup}"
         else:
             badge = f"  [{dot_color}]{_BULLET}[/] [bold {foreground}]{label}[/]"
         lines.append(badge)
@@ -208,7 +228,7 @@ class GpuFleetPanel(Static):
         try:
             raw: dict[str, str] = self.app.theme_variables
             return {k.lstrip("$"): v for k, v in raw.items()}
-        except Exception:
+        except AttributeError:
             return {}
 
     @work(thread=True, exit_on_error=False)

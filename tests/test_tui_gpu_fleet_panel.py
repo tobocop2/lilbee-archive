@@ -335,3 +335,36 @@ async def test_panel_renders_role_badge_and_separated_cards(
         assert r.count("CUDA") == 2  # both cards
         # a blank separator line exists between the two card blocks
         assert "\n\n" in r
+
+
+@pytest.mark.asyncio
+async def test_panel_uses_resolved_theme_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Theme tokens from app.theme_variables appear in the rendered markup."""
+    import lilbee.cli.tui.widgets.gpu_fleet_panel as pm
+    from lilbee.cli.tui.widgets.gpu_fleet_panel import GpuFleetPanel
+
+    # A hot util (>= _UTIL_HOT) should render the error token color.
+    stat = _make_stat(0, utilization_pct=85)
+    monkeypatch.setattr(pm, "probe_gpu_stats", lambda d: {0: stat})
+
+    sentinel = "#deadbe"
+    fake_theme = {"$error": sentinel, "$success": "#aabbcc", "$warning": "#ccbbaa"}
+
+    app = _PanelHost()
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        p = app.query_one(GpuFleetPanel)
+        # Patch _resolve_theme so it returns our known token dict.
+        monkeypatch.setattr(
+            p,
+            "_resolve_theme",
+            lambda: {k.lstrip("$"): v for k, v in fake_theme.items()},
+        )
+        p.set_devices([_make_device(0)], labels={0: "CUDA0"}, names={0: "A100"})
+        p._request_stats()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        # _Static__content holds the raw markup string passed to update(); render() strips tags.
+        raw_markup = str(p._Static__content)  # isinstance guard: Static name-mangles __content
+        # The error token color must appear (util 85% >= _UTIL_HOT triggers error heat).
+        assert sentinel in raw_markup

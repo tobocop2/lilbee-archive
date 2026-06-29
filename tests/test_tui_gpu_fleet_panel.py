@@ -272,32 +272,32 @@ async def test_panel_timer_stops_on_unmount(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 @pytest.mark.asyncio
-async def test_placement_screen_mounts_panel(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The PlacementScreen composes a GpuFleetPanel alongside the GPU table."""
-    from lilbee.cli.tui.screens import placement as screen_mod
+async def test_fleet_screen_mounts_panel(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The FleetScreen composes a GpuFleetPanel alongside the GPU table."""
+    from lilbee.cli.tui.widgets import fleet_body as fbm
     from lilbee.cli.tui.widgets.gpu_fleet_panel import GpuFleetPanel
-    from tests.test_tui_placement import PlacementTestApp, _make_view
+    from tests.test_tui_fleet import FleetTestApp, _make_view
 
-    monkeypatch.setattr(screen_mod, "get_placement", lambda: _make_view())
+    monkeypatch.setattr(fbm, "get_placement", lambda: _make_view())
 
-    app = PlacementTestApp()
+    app = FleetTestApp()
     async with app.run_test(size=(140, 44)) as pilot:
         await pilot.pause()
-        # Panel must be present in the placement screen's DOM.
+        # Panel must be present in the fleet screen's DOM.
         panel = app.screen.query_one(GpuFleetPanel)
         assert panel is not None
 
 
 @pytest.mark.asyncio
-async def test_placement_screen_passes_devices_to_panel(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_fleet_screen_passes_devices_to_panel(monkeypatch: pytest.MonkeyPatch) -> None:
     """After loading placement the fleet panel receives the GPU device list."""
-    from lilbee.cli.tui.screens import placement as screen_mod
+    from lilbee.cli.tui.widgets import fleet_body as fbm
     from lilbee.cli.tui.widgets.gpu_fleet_panel import GpuFleetPanel
-    from tests.test_tui_placement import PlacementTestApp, _make_view
+    from tests.test_tui_fleet import FleetTestApp, _make_view
 
-    monkeypatch.setattr(screen_mod, "get_placement", lambda: _make_view())
+    monkeypatch.setattr(fbm, "get_placement", lambda: _make_view())
 
-    app = PlacementTestApp()
+    app = FleetTestApp()
     async with app.run_test(size=(140, 44)) as pilot:
         await pilot.pause()
         panel = app.screen.query_one(GpuFleetPanel)

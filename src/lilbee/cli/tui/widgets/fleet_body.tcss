@@ -1,0 +1,116 @@
+FleetBody {
+
+    #placement-layout {
+        height: 1fr;
+        padding: 0 1;
+    }
+
+    #placement-title {
+        height: 1;
+        margin-bottom: 1;
+    }
+
+    #placement-gpus {
+        height: auto;
+        max-height: 12;
+        border: solid $surface-lighten-2;
+        margin-bottom: 1;
+    }
+
+    #placement-editor {
+        height: auto;
+    }
+
+    .role-row {
+        height: 3;
+        align-vertical: middle;
+    }
+
+    .role-name {
+        width: 9;
+        content-align: left middle;
+    }
+
+    /* GPU slots are toggle chips: a flat themed border carries the state so
+       there is no default-Button bevel and no reverse-video focus flash. */
+    .dev-toggle {
+        min-width: 5;
+        width: 5;
+        height: 3;
+        margin: 0 1 0 0;
+        border: round $panel;
+        background: $surface;
+        color: $text-muted;
+        text-style: none;
+    }
+
+    .dev-toggle:hover {
+        background: $boost;
+        color: $foreground;
+        border: round $secondary;
+    }
+
+    .dev-toggle:focus {
+        background: $surface;
+        color: $foreground;
+        text-style: bold;
+        border: round $primary;
+    }
+
+    .dev-toggle.on {
+        background: $secondary;
+        color: $background;
+        text-style: bold;
+        border: round $secondary;
+    }
+
+    .dev-toggle.on:hover {
+        background: $secondary-darken-1;
+        border: round $secondary-darken-1;
+    }
+
+    .dev-toggle.on:focus {
+        background: $secondary;
+        color: $background;
+        text-style: bold;
+        border: round $primary;
+    }
+
+    .rep-btn {
+        min-width: 5;
+        width: 5;
+        height: 3;
+        margin: 0 1 0 0;
+        border: round $panel;
+        background: $surface;
+        color: $foreground;
+    }
+
+    .rep-btn:hover {
+        background: $boost;
+        border: round $secondary;
+    }
+
+    .rep-btn:focus {
+        background: $surface;
+        color: $foreground;
+        text-style: bold;
+        border: round $primary;
+    }
+
+    .rep-count {
+        width: 5;
+        content-align: center middle;
+    }
+
+    #placement-generated {
+        height: auto;
+        margin-top: 1;
+        color: $text-muted;
+    }
+
+    #placement-hint {
+        height: auto;
+        color: $text-muted;
+    }
+}

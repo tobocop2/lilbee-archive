@@ -296,7 +296,7 @@ class TestViewCycling:
                 await pilot.press("escape")
                 await pilot.pause()
 
-                expected = ["Catalog", "Status", "Settings", "Tasks", "Wiki", "Placement", "Chat"]
+                expected = ["Catalog", "Status", "Settings", "Tasks", "Wiki", "Fleet", "Chat"]
                 for view in expected:
                     await pilot.press("right_square_bracket")
                     await pilot.pause()
@@ -498,7 +498,7 @@ class TestScreenTransitions:
                 # Blur the chat input so the app-level ] binding fires.
                 await pilot.press("escape")
                 await pilot.pause()
-                expected = ["Catalog", "Status", "Settings", "Tasks", "Wiki", "Placement", "Chat"]
+                expected = ["Catalog", "Status", "Settings", "Tasks", "Wiki", "Fleet", "Chat"]
                 for view in expected:
                     await pilot.press("right_square_bracket")
                     await pilot.pause()
@@ -559,7 +559,7 @@ class TestScreenTransitions:
                 # Blur the chat input so the app-level ] binding fires.
                 await pilot.press("escape")
                 await pilot.pause()
-                full_cycle = ["Catalog", "Status", "Settings", "Tasks", "Wiki", "Placement", "Chat"]
+                full_cycle = ["Catalog", "Status", "Settings", "Tasks", "Wiki", "Fleet", "Chat"]
                 for view in full_cycle:
                     await pilot.press("right_square_bracket")
                     await pilot.pause()
@@ -578,7 +578,7 @@ class TestScreenTransitions:
                 await pilot.press("escape")
                 await pilot.pause()
                 backward_cycle = [
-                    "Placement",
+                    "Fleet",
                     "Wiki",
                     "Tasks",
                     "Settings",

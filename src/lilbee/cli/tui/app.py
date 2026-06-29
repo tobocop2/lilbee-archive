@@ -70,10 +70,10 @@ def _make_wiki() -> Screen:
     return WikiScreen()
 
 
-def _make_placement() -> Screen:
-    from lilbee.cli.tui.screens.placement import PlacementScreen
+def _make_fleet() -> Screen:
+    from lilbee.cli.tui.screens.fleet import FleetScreen
 
-    return PlacementScreen()
+    return FleetScreen()
 
 
 # Screen factory per managed view name (Chat is special-cased in switch_view and
@@ -85,7 +85,7 @@ _VIEW_FACTORIES: dict[str, Callable[[], Screen]] = {
     "Settings": _make_settings,
     "Tasks": _make_tasks,
     "Wiki": _make_wiki,
-    "Placement": _make_placement,
+    "Fleet": _make_fleet,
 }
 
 

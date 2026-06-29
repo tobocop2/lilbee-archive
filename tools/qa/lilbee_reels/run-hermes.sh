@@ -16,6 +16,11 @@ export LILBEE_DATA="$DATA" LILBEE_CHAT_MODEL="$REEL_MODEL" LILBEE_CHAT_N_CTX_TAR
 export COLORTERM=truecolor TERM=xterm-256color
 log(){ echo "[hermes-reel $(date +%H:%M:%S)] $*"; }
 
+# 0. Record on a pristine tree so the agent implements the feature from scratch
+#    (a prior reel on the same pod may have already added its change).
+git -C "$REPO" reset --hard HEAD -q 2>/dev/null || true
+git -C "$REPO" clean -fdq -- src tests 2>/dev/null || true
+
 # 1. Install hermes-agent (clone + uv sync) and a `hermes` PATH shim so the
 #    launcher's shutil.which("hermes") resolves it. ripgrep is a hermes dep.
 log "installing hermes-agent"

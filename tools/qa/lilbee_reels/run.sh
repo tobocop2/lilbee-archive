@@ -21,6 +21,12 @@ export LILBEE_CHAT_N_CTX_TARGET=65536
 export COLORTERM=truecolor TERM=xterm-256color
 log(){ echo "[reels $(date +%H:%M:%S)] $*"; }
 
+# 0. Record on a pristine tree so the agent implements the feature from scratch.
+#    A prior reel on the same pod may have already added its change; without this,
+#    a later reel just finds the feature "already implemented".
+git -C "$REPO" reset --hard HEAD -q 2>/dev/null || true
+git -C "$REPO" clean -fdq -- src tests 2>/dev/null || true
+
 # 1. Pull the reel model (cached on the volume across retakes).
 log "pulling reel model $REEL_MODEL"
 uv run lilbee model pull "$REEL_MODEL" >>"$OUT/pull.log" 2>&1 || { log "model pull FAILED"; tail -5 "$OUT/pull.log"; }
@@ -92,7 +98,7 @@ log "warm ready"
 
 # 5. The reel tape: launch opencode (reuses the warm serve), ask one prompt that
 #    forces a lilbee_search over the lilbee source AND a real code change.
-PROMPT="Add a 'lilbee launch list' subcommand that prints the agents you can launch, reading the launcher registry in src/lilbee/cli/launchers/__init__.py. Run it to make sure it works, then add a focused test under tests/cli/ and run just that test."
+PROMPT="Add a 'lilbee launch which <agent>' subcommand that prints the resolved binary path for the given agent, or reports that it is not installed, using the launcher registry in src/lilbee/cli/launchers/__init__.py and each launcher's find_binary. Run it to make sure it works, then add a focused test under tests/cli/ and run just that test."
 WS="$REPO"
 # Verified rose-pine recipe: VHS's BUILT-IN named theme (an inline JSON theme
 # silently falls back to gray), plus the macOS window chrome the existing agent

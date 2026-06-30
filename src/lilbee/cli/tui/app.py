@@ -141,6 +141,7 @@ class LilbeeApp(App[None]):
         ),
         Binding("ctrl+c", "quit", "Quit", show=True, priority=True),
         Binding("S", "run_sync", "Sync", show=False, priority=True),
+        Binding("g", "open_fleet", "Fleet", show=True),
     ]
 
     def __init__(self, *, initial_view: str | None = None) -> None:
@@ -453,21 +454,29 @@ class LilbeeApp(App[None]):
         raise SkipAction()
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
-        """Hide ``t Tasks`` from the footer while a text input is focused.
+        """Hide single-key bindings from the footer while a text input is focused.
 
-        ``t`` is not a priority binding, so a focused ``Input`` / ``TextArea``
-        (the chat prompt in INSERT mode, a catalog/settings search box) eats
-        it as a literal character. Showing ``t Tasks`` there would lie.
+        ``t`` and ``g`` are not priority bindings, so a focused ``Input`` /
+        ``TextArea`` eats them as literal characters. Showing them in the footer
+        would lie.
         """
         # isinstance: a focused Input/TextArea consumes printable keys before
-        # non-priority screen/app bindings see them, so `t` types a literal there.
-        if action == "open_tasks" and isinstance(self.focused, (Input, TextArea)):
+        # non-priority screen/app bindings see them, so `t`/`g` type literals there.
+        if action in ("open_tasks", "open_fleet") and isinstance(self.focused, (Input, TextArea)):
             return False
         return super().check_action(action, parameters)
 
     def action_open_tasks(self) -> None:
         """Jump to the Task Center screen (t key)."""
         self.switch_view("Tasks")
+
+    def action_open_fleet(self) -> None:
+        """Open the Fleet overlay (g key). No-op if already open."""
+        from lilbee.cli.tui.widgets.fleet_modal import FleetModal
+
+        if isinstance(self.screen, FleetModal):
+            return
+        self.push_screen(FleetModal())
 
     def action_global_slash_to_chat(self) -> None:
         """Route a slash typed on a non-slash-bound screen back to Chat's prompt.

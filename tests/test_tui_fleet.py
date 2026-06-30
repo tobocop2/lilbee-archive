@@ -47,9 +47,9 @@ class FleetTestApp(LilbeeAppHost):
 
 
 def _generated(app) -> str:  # type: ignore[no-untyped-def]
-    from lilbee.cli.tui.widgets.fleet_body import _GENERATED_ID
-
     from textual.widgets import Static as _Static
+
+    from lilbee.cli.tui.widgets.fleet_body import _GENERATED_ID
 
     return str(app.screen.query_one(_GENERATED_ID, _Static).render())
 
@@ -366,8 +366,8 @@ async def test_apply_ignored_while_applying(monkeypatch):
 @pytest.mark.asyncio
 async def test_go_back_binding(monkeypatch):
     """q pops the screen."""
-    from lilbee.cli.tui.widgets import fleet_body as fbm
     from lilbee.cli.tui.screens.fleet import FleetScreen
+    from lilbee.cli.tui.widgets import fleet_body as fbm
 
     monkeypatch.setattr(fbm, "get_placement", lambda: _make_view())
 
@@ -383,7 +383,6 @@ async def test_go_back_binding(monkeypatch):
 async def test_go_back_single_screen(monkeypatch):
     """action_go_back with a single-item screen_stack calls switch_view('Chat')."""
     from lilbee.cli.tui.widgets import fleet_body as fbm
-    from lilbee.cli.tui.screens.fleet import FleetScreen
 
     monkeypatch.setattr(fbm, "get_placement", lambda: _make_view())
 

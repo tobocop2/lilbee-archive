@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar
+from typing import ClassVar
 
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
@@ -10,11 +10,6 @@ from textual.screen import Screen
 
 from lilbee.cli.tui.app import LilbeeApp
 from lilbee.cli.tui.widgets.fleet_body import FleetBody
-
-if TYPE_CHECKING:
-    pass
-
-_FLEET_BODY_ID = "#fleet-body"
 
 
 class FleetScreen(Screen[None]):

@@ -548,7 +548,7 @@ class TestScreenTransitions:
                 assert app.active_view == "Tasks"
 
     async def test_forward_cycle_full_loop(self, _mock_resolve):
-        """Chat->Catalog->Status->Settings->Tasks->Wiki->Placement->Chat via nav_next."""
+        """Chat->Catalog->Status->Settings->Tasks->Wiki->Fleet->Chat via nav_next."""
         from lilbee.cli.tui.app import LilbeeApp
 
         with _mock_catalog_deps(), _mock_remote_models():
@@ -566,7 +566,7 @@ class TestScreenTransitions:
                     assert app.active_view == view
 
     async def test_backward_cycle_full_loop(self, _mock_resolve):
-        """Chat->Placement->Wiki->Tasks->Settings->Status->Catalog->Chat via nav_prev."""
+        """Chat->Fleet->Wiki->Tasks->Settings->Status->Catalog->Chat via nav_prev."""
         from lilbee.cli.tui.app import LilbeeApp
 
         with _mock_catalog_deps(), _mock_remote_models():

@@ -31,6 +31,8 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+_CSS_FILE = Path(__file__).parent / "fleet_body.tcss"
+
 _GPU_TABLE_ID = "#placement-gpus"
 _EDITOR_ID = "#placement-editor"
 _GENERATED_ID = "#placement-generated"
@@ -63,9 +65,7 @@ def _fmt_gib(n: int) -> str:
 class FleetBody(Widget):
     """GPU table, live fleet panel, and interactive placement editor."""
 
-    DEFAULT_CSS: ClassVar[str] = (Path(__file__).parent / "fleet_body.tcss").read_text(
-        encoding="utf-8"
-    )
+    DEFAULT_CSS: ClassVar[str] = _CSS_FILE.read_text(encoding="utf-8")
 
     applying: reactive[bool] = reactive(False)
 

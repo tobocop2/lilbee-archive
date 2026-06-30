@@ -471,10 +471,10 @@ class LilbeeApp(App[None]):
         self.switch_view("Tasks")
 
     def action_open_fleet(self) -> None:
-        """Open the Fleet overlay (g key). No-op if already open."""
+        """Open the Fleet overlay (ctrl+g). No-op when a FleetBody is already on screen."""
         from lilbee.cli.tui.widgets.fleet_modal import FleetModal
 
-        if isinstance(self.screen, FleetModal):
+        if isinstance(self.screen, FleetModal) or bool(self.screen.query("FleetBody")):
             return
         self.push_screen(FleetModal())
 

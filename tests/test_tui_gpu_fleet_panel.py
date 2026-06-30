@@ -89,13 +89,12 @@ async def test_panel_renders_card_label_and_vram(monkeypatch: pytest.MonkeyPatch
 
     device = _make_device(0)
     labels = {0: "CUDA0"}
-    names = {0: "NVIDIA A40"}
 
     app = _PanelHost()
     async with app.run_test(size=(80, 24)) as pilot:
         await pilot.pause()
         panel = app.query_one(GpuFleetPanel)
-        panel.set_devices([device], labels=labels, names=names)
+        panel.set_devices([device], labels=labels)
         # Trigger a manual tick so we don't wait for the 1 s timer.
         panel._request_stats()
         await app.workers.wait_for_complete()
@@ -122,7 +121,7 @@ async def test_panel_renders_utilization_percentage(monkeypatch: pytest.MonkeyPa
     async with app.run_test(size=(80, 24)) as pilot:
         await pilot.pause()
         panel = app.query_one(GpuFleetPanel)
-        panel.set_devices([device], labels={0: "CUDA0"}, names={0: "RTX 3090"})
+        panel.set_devices([device], labels={0: "CUDA0"})
         panel._request_stats()
         await app.workers.wait_for_complete()
         await pilot.pause()
@@ -145,7 +144,7 @@ async def test_panel_shows_dash_when_util_is_none(monkeypatch: pytest.MonkeyPatc
     async with app.run_test(size=(80, 24)) as pilot:
         await pilot.pause()
         panel = app.query_one(GpuFleetPanel)
-        panel.set_devices([device], labels={0: "Vulkan0"}, names={0: "AMD Radeon"})
+        panel.set_devices([device], labels={0: "Vulkan0"})
         panel._request_stats()
         await app.workers.wait_for_complete()
         await pilot.pause()
@@ -184,7 +183,7 @@ async def test_panel_updates_on_second_tick(monkeypatch: pytest.MonkeyPatch) -> 
         await pilot.pause()
         panel = app.query_one(GpuFleetPanel)
         # Set devices after mount so explicit ticks have the right labels.
-        panel.set_devices([device], labels={0: "CUDA0"}, names={0: "A100"})
+        panel.set_devices([device], labels={0: "CUDA0"})
         await app.workers.wait_for_complete()
 
         # First explicit tick
@@ -234,7 +233,7 @@ async def test_panel_graceful_on_probe_exception(monkeypatch: pytest.MonkeyPatch
     async with app.run_test(size=(80, 24)) as pilot:
         await pilot.pause()
         panel = app.query_one(GpuFleetPanel)
-        panel.set_devices([device], labels={0: "CUDA0"}, names={0: "A100"})
+        panel.set_devices([device], labels={0: "CUDA0"})
         await app.workers.wait_for_complete()
 
         # First explicit tick returns good stats
@@ -304,7 +303,6 @@ async def test_fleet_screen_passes_devices_to_panel(monkeypatch: pytest.MonkeyPa
         # The placement view has 4 GPUs (indices 0-3); all must be in the panel.
         assert len(panel._devices) == 4
         assert panel._labels[0] == "CUDA0"
-        assert panel._names[0] == "NVIDIA A40"
 
 
 @pytest.mark.asyncio
@@ -324,7 +322,6 @@ async def test_panel_renders_role_badge_and_separated_cards(
         p.set_devices(
             [_make_device(1), _make_device(2)],
             labels={1: "CUDA1", 2: "CUDA2"},
-            names={1: "A6000", 2: "A6000"},
             roles={1: "chat - Qwen3-235B", 2: "chat - Qwen3-235B"},
         )
         p._request_stats()
@@ -360,7 +357,7 @@ async def test_panel_uses_resolved_theme_tokens(monkeypatch: pytest.MonkeyPatch)
             "_resolve_theme",
             lambda: {k.lstrip("$"): v for k, v in fake_theme.items()},
         )
-        p.set_devices([_make_device(0)], labels={0: "CUDA0"}, names={0: "A100"})
+        p.set_devices([_make_device(0)], labels={0: "CUDA0"})
         p._request_stats()
         await app.workers.wait_for_complete()
         await pilot.pause()
@@ -368,3 +365,87 @@ async def test_panel_uses_resolved_theme_tokens(monkeypatch: pytest.MonkeyPatch)
         raw_markup = str(p._Static__content)  # isinstance guard: Static name-mangles __content
         # The error token color must appear (util 85% >= _UTIL_HOT triggers error heat).
         assert sentinel in raw_markup
+
+
+@pytest.mark.asyncio
+async def test_badge_role_markup_no_separator(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A role string without ' - ' renders without splitting (else branch in _badge_role_markup)."""
+    import lilbee.cli.tui.widgets.gpu_fleet_panel as pm
+    from lilbee.cli.tui.widgets.gpu_fleet_panel import GpuFleetPanel
+
+    stat = _make_stat(0, utilization_pct=30)
+    monkeypatch.setattr(pm, "probe_gpu_stats", lambda d: {0: stat})
+
+    app = _PanelHost()
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        p = app.query_one(GpuFleetPanel)
+        # "chat" has no " - " separator: exercises the else branch in _badge_role_markup
+        p.set_devices([_make_device(0)], labels={0: "CUDA0"}, roles={0: "chat"})
+        p._request_stats()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        rendered = str(p.render())
+        assert "chat" in rendered
+
+
+@pytest.mark.asyncio
+async def test_resolve_theme_falls_back_on_attribute_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_resolve_theme returns {} when app.theme_variables raises AttributeError."""
+    import lilbee.cli.tui.widgets.gpu_fleet_panel as pm
+    from lilbee.cli.tui.widgets.gpu_fleet_panel import GpuFleetPanel
+
+    monkeypatch.setattr(pm, "probe_gpu_stats", lambda d: {})
+
+    app = _PanelHost()
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        p = app.query_one(GpuFleetPanel)
+        # Make theme_variables raise AttributeError so the except branch runs.
+        type(p.app).theme_variables = property(  # type: ignore[attr-defined]
+            lambda self: (_ for _ in ()).throw(AttributeError("no theme_variables"))
+        )
+        result = p._resolve_theme()
+        assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_update_fleet_panel_noop_when_panel_not_mounted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_update_fleet_panel is a no-op when GpuFleetPanel is not in the DOM."""
+    import lilbee.cli.tui.widgets.gpu_fleet_panel as gfp
+    from lilbee.app.placement import GpuInfo, PlacementView, RolePlacementView
+    from lilbee.cli.tui.widgets import fleet_body as fbm
+    from lilbee.cli.tui.widgets.fleet_body import FleetBody
+    from lilbee.cli.tui.widgets.gpu_fleet_panel import GpuFleetPanel
+    from lilbee.providers.roles import WorkerRole
+
+    view = PlacementView(
+        gpus=(GpuInfo(0, "CUDA", "CUDA0", "A40", 44 * GIB, 44 * GIB),),
+        roles=(RolePlacementView(WorkerRole.CHAT, "org/chat.gguf", (0,), None, 1),),
+        unplaceable=(),
+        manual=False,
+        spec_json=None,
+    )
+    monkeypatch.setattr(fbm, "get_placement", lambda: view)
+    monkeypatch.setattr(gfp, "probe_gpu_stats", lambda d: {})
+
+    class _NoPanelHost(LilbeeAppHost):
+        CSS = ""
+
+        def compose(self) -> ComposeResult:
+            yield FleetBody()
+
+    app = _NoPanelHost()
+    async with app.run_test(size=(140, 44)) as pilot:
+        await pilot.pause()
+        body = app.query_one(FleetBody)
+        # Remove the GpuFleetPanel child so NoMatches fires in _update_fleet_panel.
+        panel = body.query_one(GpuFleetPanel)
+        await panel.remove()
+        await pilot.pause()
+        # Must not raise; NoMatches is caught and the method returns early.
+        body._update_fleet_panel(view)

@@ -191,14 +191,13 @@ class FleetBody(Widget):
         except NoMatches:
             return
         labels = {g.index: g.label for g in view.gpus}
-        names = {g.index: g.name for g in view.gpus}
         roles: dict[int, str] = {}
         for r in view.roles:
             short_model = r.model.split("/")[-1] if r.model else ""
             badge = f"{r.role.value} - {short_model}" if short_model else r.role.value
             for idx in r.devices:
                 roles[idx] = badge
-        panel.set_devices(view.gpus, labels=labels, names=names, roles=roles)
+        panel.set_devices(view.gpus, labels=labels, roles=roles)
 
     # -- editor state ----------------------------------------------------
 

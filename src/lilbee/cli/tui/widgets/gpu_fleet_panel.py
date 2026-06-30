@@ -1,4 +1,4 @@
-"""Live GPU fleet panel widget for the Placement screen.
+"""Live GPU fleet panel widget for the Fleet view.
 
 Renders per-card utilization and VRAM bars styled via rose-pine theme tokens and
 refreshes on a ~1 s interval.  The probe runs off the UI thread so the
@@ -102,7 +102,6 @@ def _badge_role_markup(role: str, secondary: str, muted: str) -> str:
 def _render_stats(
     stats: dict[int, GpuStat],
     labels: dict[int, str],
-    names: dict[int, str],
     roles: dict[int, str],
     theme: dict[str, str],
 ) -> str:
@@ -181,7 +180,6 @@ class GpuFleetPanel(Static):
         super().__init__(_EMPTY_TEXT, id="gpu-fleet-panel")
         self._devices: Sequence[_DeviceLike] = []
         self._labels: dict[int, str] = {}
-        self._names: dict[int, str] = {}
         self._roles: dict[int, str] = {}
         self._timer: Timer | None = None
 
@@ -190,18 +188,15 @@ class GpuFleetPanel(Static):
         devices: Sequence[_DeviceLike],
         *,
         labels: dict[int, str],
-        names: dict[int, str],
         roles: dict[int, str] | None = None,
     ) -> None:
         """Register the GPU devices the panel probes on each tick.
 
         `labels` maps device index to the short display label (e.g. "CUDA0").
-        `names` maps device index to the GPU name (e.g. "NVIDIA A40").
         `roles` maps device index to a badge string (e.g. "chat - Qwen3-235B"), "" when idle.
         """
         self._devices = list(devices)
         self._labels = dict(labels)
-        self._names = dict(names)
         self._roles = dict(roles) if roles is not None else {}
 
     def on_mount(self) -> None:
@@ -219,7 +214,6 @@ class GpuFleetPanel(Static):
         self._probe_worker(
             list(self._devices),
             self._labels.copy(),
-            self._names.copy(),
             self._roles.copy(),
         )
 
@@ -236,7 +230,6 @@ class GpuFleetPanel(Static):
         self,
         devices: list[_DeviceLike],
         labels: dict[int, str],
-        names: dict[int, str],
         roles: dict[int, str],
     ) -> None:
         """Probe GPU stats off the UI thread and push the result back."""
@@ -245,16 +238,15 @@ class GpuFleetPanel(Static):
         except Exception:
             log.debug("gpu_fleet_panel: probe failed", exc_info=True)
             return
-        call_from_thread(self, self._apply_stats, stats, labels, names, roles)
+        call_from_thread(self, self._apply_stats, stats, labels, roles)
 
     def _apply_stats(
         self,
         stats: dict[int, GpuStat],
         labels: dict[int, str],
-        names: dict[int, str],
         roles: dict[int, str],
     ) -> None:
         """Update the rendered content with fresh stat data (main thread)."""
         theme = self._resolve_theme()
-        markup = _render_stats(stats, labels, names, roles, theme)
+        markup = _render_stats(stats, labels, roles, theme)
         self.update(markup)

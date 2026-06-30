@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import ClassVar
 
 from textual.app import ComposeResult
@@ -11,13 +10,11 @@ from textual.screen import ModalScreen
 
 from lilbee.cli.tui.widgets.fleet_body import FleetBody
 
-_CSS_FILE = Path(__file__).parent / "fleet_modal.tcss"
-
 
 class FleetModal(ModalScreen[None]):
     """GPU fleet panel as a modal overlay, dismissed with Escape."""
 
-    CSS_PATH = _CSS_FILE
+    CSS_PATH = "fleet_modal.tcss"
     AUTO_FOCUS = "#placement-gpus"
 
     BINDINGS: ClassVar[list[BindingType]] = [

@@ -1,4 +1,4 @@
-"""Tests for the FleetModal overlay: open with g, dismiss with escape."""
+"""Tests for the FleetModal overlay: open with ctrl+g, dismiss with escape."""
 
 from __future__ import annotations
 
@@ -34,17 +34,19 @@ class LilbeeTestApp(LilbeeAppHost):
 
 
 @pytest.mark.asyncio
-async def test_g_opens_fleet_modal_and_esc_closes(monkeypatch):
-    """g opens FleetModal; escape dismisses it and returns to the prior screen."""
+async def test_ctrl_g_opens_fleet_modal_and_esc_closes(monkeypatch):
+    """ctrl+g opens FleetModal; escape dismisses it and returns to the prior screen."""
     from lilbee.cli.tui.widgets import fleet_body as fbm
+    from lilbee.cli.tui.widgets import gpu_fleet_panel as gfp
     from lilbee.cli.tui.widgets.fleet_modal import FleetModal
 
     monkeypatch.setattr(fbm, "get_placement", lambda: _make_view())
+    monkeypatch.setattr(gfp, "probe_gpu_stats", lambda devices: {})
 
     app = LilbeeTestApp()
     async with app.run_test(size=(140, 44)) as pilot:
         await pilot.pause()
-        await pilot.press("g")
+        await pilot.press("ctrl+g")
         await pilot.pause()
         assert isinstance(app.screen, FleetModal)
         await pilot.press("escape")
@@ -53,21 +55,23 @@ async def test_g_opens_fleet_modal_and_esc_closes(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_g_does_not_stack_second_fleet_modal(monkeypatch):
-    """Pressing g while FleetModal is already on top is a no-op (re-entry guard)."""
+async def test_ctrl_g_does_not_stack_second_fleet_modal(monkeypatch):
+    """Pressing ctrl+g while FleetModal is open is a no-op (re-entry guard)."""
     from lilbee.cli.tui.widgets import fleet_body as fbm
+    from lilbee.cli.tui.widgets import gpu_fleet_panel as gfp
     from lilbee.cli.tui.widgets.fleet_modal import FleetModal
 
     monkeypatch.setattr(fbm, "get_placement", lambda: _make_view())
+    monkeypatch.setattr(gfp, "probe_gpu_stats", lambda devices: {})
 
     app = LilbeeTestApp()
     async with app.run_test(size=(140, 44)) as pilot:
         await pilot.pause()
-        await pilot.press("g")
+        await pilot.press("ctrl+g")
         await pilot.pause()
         assert isinstance(app.screen, FleetModal)
         depth_before = len(app.screen_stack)
-        await pilot.press("g")
+        await pilot.press("ctrl+g")
         await pilot.pause()
         assert isinstance(app.screen, FleetModal)
         assert len(app.screen_stack) == depth_before
@@ -79,15 +83,17 @@ async def test_fleet_modal_shows_gpu_table(monkeypatch):
     from textual.widgets import DataTable
 
     from lilbee.cli.tui.widgets import fleet_body as fbm
+    from lilbee.cli.tui.widgets import gpu_fleet_panel as gfp
     from lilbee.cli.tui.widgets.fleet_body import _GPU_TABLE_ID
     from lilbee.cli.tui.widgets.fleet_modal import FleetModal
 
     monkeypatch.setattr(fbm, "get_placement", lambda: _make_view())
+    monkeypatch.setattr(gfp, "probe_gpu_stats", lambda devices: {})
 
     app = LilbeeTestApp()
     async with app.run_test(size=(140, 44)) as pilot:
         await pilot.pause()
-        await pilot.press("g")
+        await pilot.press("ctrl+g")
         await pilot.pause()
         assert isinstance(app.screen, FleetModal)
         table = app.screen.query_one(_GPU_TABLE_ID, DataTable)

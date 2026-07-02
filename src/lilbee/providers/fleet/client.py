@@ -280,6 +280,11 @@ _HTTP_BAD_REQUEST = 400
 _HTTP_TOO_MANY_REQUESTS = 429
 _DONE_SENTINEL = "[DONE]"
 _DATA_PREFIX = "data:"
+# Recent llama-server splits a reasoning model's thinking into a separate
+# ``reasoning_content`` field. We re-inline it as these tags so lilbee's
+# ``<think>``-based reasoning parser keeps working across every chat surface.
+_THINK_OPEN = "<think>"
+_THINK_CLOSE = "</think>"
 _DEFAULT_TIMEOUT_S = 300.0
 # Short, separate timeout for /health: a server can wedge under heavy prompt
 # processing, and readiness/monitor polls must not block on the request timeout.
@@ -436,10 +441,21 @@ class LlamaServerClient:
             ) as resp,
         ):
             _raise_for_status(resp)
+            reasoning_open = False
             for line in resp.iter_lines():
-                delta = _parse_sse_delta(line)
-                if delta:
-                    yield delta
+                content, reasoning = _parse_sse_delta(line)
+                if reasoning:
+                    if not reasoning_open:
+                        yield _THINK_OPEN
+                        reasoning_open = True
+                    yield reasoning
+                if content:
+                    if reasoning_open:
+                        yield _THINK_CLOSE
+                        reasoning_open = False
+                    yield content
+            if reasoning_open:
+                yield _THINK_CLOSE
 
     def chat_tools(
         self,
@@ -926,21 +942,27 @@ def _llm_rerank_score(top_logprobs: list[dict[str, Any]]) -> float:
     return yes_e / (yes_e + no_e)
 
 
-def _parse_sse_delta(line: str) -> str:
-    """Extract the content delta from one OpenAI SSE line, ``""`` if none."""
+def _parse_sse_delta(line: str) -> tuple[str, str]:
+    """Extract ``(content, reasoning_content)`` deltas from one OpenAI SSE line.
+
+    Recent llama-server puts a reasoning model's thinking in a separate
+    ``reasoning_content`` field rather than inline in ``content``; both are
+    returned so the caller can re-inline the reasoning for the ``<think>`` parser.
+    """
     if not line.startswith(_DATA_PREFIX):
-        return ""
+        return "", ""
     body = line[len(_DATA_PREFIX) :].strip()
     if not body or body == _DONE_SENTINEL:
-        return ""
+        return "", ""
     try:
         obj = json.loads(body)
     except json.JSONDecodeError:
-        return ""
+        return "", ""
     choices = obj.get("choices") or []
     if not choices:
-        return ""
-    return str(choices[0].get("delta", {}).get("content") or "")
+        return "", ""
+    delta = choices[0].get("delta") or {}
+    return str(delta.get("content") or ""), str(delta.get("reasoning_content") or "")
 
 
 def _usage_from_body(body: Mapping[str, Any]) -> TokenUsage | None:

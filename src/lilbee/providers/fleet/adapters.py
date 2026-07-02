@@ -41,11 +41,11 @@ ROLE_SPECS: dict[WorkerRole, RoleServerSpec] = {
         role=WorkerRole.CHAT,
         endpoint_path="/v1/chat/completions",
         # --jinja renders the model's own chat template and parses native
-        # tool-call syntax into structured message.tool_calls.
-        # --reasoning-format none keeps <think>...</think> inline in content;
-        # without it, recent llama-server extracts reasoning into a separate
-        # reasoning_content field and lilbee's <think>-based parser sees none.
-        extra_args=("--jinja", "--reasoning-format", "none"),
+        # tool-call syntax into structured message.tool_calls. We keep
+        # llama-server's default reasoning-format so it extracts a reasoning
+        # model's thinking into reasoning_content; the fleet client re-inlines
+        # that as <think>...</think> for lilbee's reasoning parser.
+        extra_args=("--jinja",),
         server_capable=True,
     ),
     WorkerRole.EMBED: RoleServerSpec(

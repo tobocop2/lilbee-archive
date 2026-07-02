@@ -377,6 +377,34 @@ def test_chat_stream_yields_deltas() -> None:
     assert chunks == ["He", "llo"]
 
 
+def test_chat_stream_reinlines_reasoning_content() -> None:
+    """Reasoning that llama-server splits into ``reasoning_content`` is re-inlined
+    as ``<think>...</think>`` so the downstream reasoning parser still sees it."""
+    body = (
+        'data: {"choices":[{"delta":{"reasoning_content":"let me "}}]}\n\n'
+        'data: {"choices":[{"delta":{"reasoning_content":"think"}}]}\n\n'
+        'data: {"choices":[{"delta":{"content":"the answer"}}]}\n\n'
+        "data: [DONE]\n\n"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=body)
+
+    chunks = list(_client(handler).chat([{"role": "user", "content": "q"}], stream=True))
+    assert "".join(chunks) == "<think>let me think</think>the answer"
+
+
+def test_chat_stream_closes_open_reasoning_at_end() -> None:
+    """A stream that ends while still reasoning gets a closing ``</think>``."""
+    body = 'data: {"choices":[{"delta":{"reasoning_content":"only think"}}]}\n\ndata: [DONE]\n\n'
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=body)
+
+    chunks = list(_client(handler).chat([{"role": "user", "content": "q"}], stream=True))
+    assert "".join(chunks) == "<think>only think</think>"
+
+
 def test_chat_stream_forwards_caller_timeout() -> None:
     """A caller deadline must reach the streaming request, not be silently dropped."""
     client = _client()
@@ -946,19 +974,23 @@ def test_close_leaves_injected_client_open() -> None:
 
 class TestParseSseDelta:
     def test_non_data_line_is_empty(self) -> None:
-        assert _parse_sse_delta("event: message") == ""
+        assert _parse_sse_delta("event: message") == ("", "")
 
     def test_done_sentinel_is_empty(self) -> None:
-        assert _parse_sse_delta("data: [DONE]") == ""
+        assert _parse_sse_delta("data: [DONE]") == ("", "")
 
     def test_invalid_json_is_empty(self) -> None:
-        assert _parse_sse_delta("data: {not json") == ""
+        assert _parse_sse_delta("data: {not json") == ("", "")
 
     def test_no_choices_is_empty(self) -> None:
-        assert _parse_sse_delta('data: {"choices": []}') == ""
+        assert _parse_sse_delta('data: {"choices": []}') == ("", "")
 
     def test_extracts_content(self) -> None:
-        assert _parse_sse_delta('data: {"choices":[{"delta":{"content":"hi"}}]}') == "hi"
+        assert _parse_sse_delta('data: {"choices":[{"delta":{"content":"hi"}}]}') == ("hi", "")
+
+    def test_extracts_reasoning_content(self) -> None:
+        line = 'data: {"choices":[{"delta":{"reasoning_content":"thinking"}}]}'
+        assert _parse_sse_delta(line) == ("", "thinking")
 
 
 def _tools() -> list[dict]:

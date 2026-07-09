@@ -41,6 +41,14 @@ class _RecordingProvider:
     ) -> str:
         return ""
 
+    def role_ready(self, role: object) -> bool:
+        # The bottom TaskBar polls chat readiness on every screen; report ready so
+        # this settings-eviction host isn't treated as mid-warm.
+        return True
+
+    def warm_progress(self) -> None:
+        return None
+
 
 @pytest.fixture(autouse=True)
 def _isolated_cfg(tmp_path):

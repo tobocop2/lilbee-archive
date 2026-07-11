@@ -1,0 +1,45 @@
+# SkyPilot definition for the retrieval differential sweep.
+#
+#   sky launch -c retrieval-sweep harness/retrieval/sweep-pod.sky.yaml \
+#     --env BRANCH=fix/hybrid-ann-recall
+#
+# CPU pod: ingest and probes are embedding-bound, and the default embedder
+# runs acceptably on CPU at this corpus size. Swap resources for a small GPU
+# when running a private corpus large enough to need one.
+
+resources:
+  cloud: runpod
+  cpus: 16+
+  memory: 32+
+  disk_size: 80
+  # The published engine wheel's llama-server needs glibc >= 2.38; RunPod's
+  # default image is Ubuntu 22.04 (2.35) and the server dies at exec. This
+  # is the ubuntu2404 image the other lilbee pods already use.
+  image_id: runpod/pytorch:1.0.7-cu1281-torch280-ubuntu2404
+
+envs:
+  BRANCH: fix/hybrid-ann-recall
+  REPO: https://github.com/tobocop2/lilbee.git
+
+setup: |
+  set -e
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="$HOME/.local/bin:$PATH"
+  if [ ! -d lilbee ]; then git clone "$REPO" lilbee; fi
+  cd lilbee
+  git fetch origin "$BRANCH" && git checkout "$BRANCH" && git pull --ff-only || true
+  uv venv .venv && VIRTUAL_ENV=.venv uv pip install -q -e .
+  # Real engine binaries (the source tree's engine wheel is a stub; the
+  # published wheels live on the lilbee.sh channel indexes, not PyPI).
+  VIRTUAL_ENV=.venv uv pip install -q --no-sources --reinstall --prerelease allow \
+    --extra-index-url https://lilbee.sh/cpu/ lilbee-engine
+  # The probes need the embedding model on disk; downloads it if absent.
+  .venv/bin/lilbee use-embedder "nomic-ai/nomic-embed-text-v1.5-GGUF/nomic-embed-text-v1.5.Q4_K_M.gguf"
+
+run: |
+  set -e
+  export PATH="$HOME/.local/bin:$PATH"
+  cd lilbee
+  bash harness/retrieval/run_sweep.sh --work "$HOME/sweep"
+  echo "==== EVIDENCE ===="
+  cat "$HOME/sweep/EVIDENCE.md"

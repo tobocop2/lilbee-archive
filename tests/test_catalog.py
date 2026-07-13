@@ -1607,6 +1607,31 @@ class TestExtractFamilyName:
         assert _families._extract_family_name("Meta-Llama-3-8B-Instruct-GGUF") == "Llama"
 
 
+class TestDisplayNameQuantBounds:
+    """A quant tag must never swallow the model name that follows it.
+
+    ``IQ4_XS`` is followed by an underscore and the real name; an open-ended
+    trailing class would consume both and leave the model unnamed.
+    """
+
+    def test_quant_does_not_eat_the_following_name(self) -> None:
+        name = catalog.clean_display_name("Brunobkr/OFFELLIA_IQ4_XS_diffusiongemma-26B-A4B-it.gguf")
+        assert "Diffusiongemma" in name
+        assert "IQ4" not in name and "XS" not in name
+
+    def test_quant_does_not_eat_a_versioned_name(self) -> None:
+        name = catalog.clean_display_name("Brunobkr/OFFELLIA_IQ4_NL_Qwen3.6-35B-A3B-heretic.gguf")
+        assert name.startswith("OFFELLIA Qwen3.6")
+
+    def test_multi_part_quant_tags_still_strip(self) -> None:
+        assert catalog.clean_display_name("x/Qwen3.6-27B-i1-IQ4_KS_KT-GGUF") == "Qwen3.6 27B"
+        assert catalog.clean_display_name("x/Qwen3-80B-UD-Q4_K_XL-layers") == "Qwen3 80B Layers"
+
+    def test_a_repo_named_only_gguf_keeps_a_label(self) -> None:
+        """Stripping the whole name would leave an empty label; keep it instead."""
+        assert catalog.clean_display_name("calcuis/gguf") == "Gguf"
+
+
 class TestExtractQuant:
     def test_wildcard_pattern(self) -> None:
         assert catalog.extract_quant("*Q4_K_M.gguf") == "Q4_K_M"

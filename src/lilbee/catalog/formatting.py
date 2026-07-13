@@ -20,11 +20,15 @@ PARAM_COUNT_RE = re.compile(r"(\d+\.?\d*B)", re.IGNORECASE)
 _DISPLAY_NAME_NOISE = re.compile(
     r"[-_.](?:GGUF|GUFF|Instruct|Chat|Embedding|Embed|qat|it"
     r"|imatrix|i1|UD|unquantized)(?=[-_.]|$)"
-    r"|[-_.](?:Q\d[A-Z0-9_]*|IQ\d[A-Z0-9_]*|F16|F32|BF16|FP8)(?=[-_.]|$)"
+    # A quant tag is ``Q``/``IQ``, a digit, then only SHORT parts (``_K``, ``_M``,
+    # ``_XL``, ``_NL``, ``_0``). The parts must stay bounded: an open-ended
+    # ``[A-Z0-9_]*`` is greedy across underscores and, under IGNORECASE, eats the
+    # model name itself out of ``OFFELLIA_IQ4_XS_diffusiongemma-26B``.
+    r"|[-_.](?:I?Q\d[A-Z0-9]{0,2}(?:_[A-Z0-9]{1,3})*|F16|F32|BF16|FP8)(?=[-_.]|$)"
     # The same tokens lead some names (``GGUF-Qwen3-8B``), where there is no
     # separator to their left. Only the unambiguous ones are stripped in that
     # position: a leading ``it`` or ``Chat`` is more likely to be a real word.
-    r"|^(?:GGUF|GUFF|Instruct|Q\d[A-Z0-9_]*|IQ\d[A-Z0-9_]*)(?=[-_.])"
+    r"|^(?:GGUF|GUFF|Instruct|I?Q\d[A-Z0-9]{0,2}(?:_[A-Z0-9]{1,3})*)(?=[-_.])"
     r"|-\d{4}$",
     re.IGNORECASE,
 )

@@ -123,8 +123,19 @@ def agent_model_id(ref: str) -> str:
 
 
 def extract_quant(filename: str) -> str:
-    """Extract the GGUF quantization label (e.g. ``Q4_K_M``) from a filename."""
-    m = re.search(r"(Q\d[A-Z0-9_]*)", filename, re.IGNORECASE)
+    """Extract the GGUF quantization label (e.g. ``Q4_K_M``, ``IQ4_XS``) from a filename.
+
+    The parts after the digit are bounded for the same reason as the display-name
+    grammar: an open-ended trailing class runs across underscores and reports
+    ``Q4_XS_DIFFUSIONGEMMA`` as the quantization of
+    ``OFFELLIA_IQ4_XS_diffusiongemma-26B.gguf``. An ``IQ`` tag keeps its ``I``, so
+    the label names the quantization the file actually carries.
+    """
+    # Each ``_``-part must be a whole token: without the trailing guard the
+    # bounded repeat still takes the first three letters of a following word
+    # (``IQ4_XS_DIF`` out of ``IQ4_XS_diffusiongemma``). Unlike the display
+    # grammar, this pattern has no separator lookahead to backtrack against.
+    m = re.search(r"(I?Q\d[A-Z0-9]{0,2}(?:_[A-Z0-9]{1,3}(?![A-Z0-9]))*)", filename, re.IGNORECASE)
     return m.group(1).upper() if m else ""
 
 

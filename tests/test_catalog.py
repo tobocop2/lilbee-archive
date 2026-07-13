@@ -1645,6 +1645,14 @@ class TestExtractQuant:
     def test_no_quant(self) -> None:
         assert catalog.extract_quant("model.gguf") == ""
 
+    def test_quant_does_not_run_into_the_model_name(self) -> None:
+        """An open-ended tail reported ``Q4_XS_DIFFUSIONGEMMA`` as a quantization."""
+        quant = catalog.extract_quant("OFFELLIA_IQ4_XS_diffusiongemma-26B-A4B.gguf")
+        assert quant == "IQ4_XS"
+
+    def test_iq_tag_keeps_its_leading_i(self) -> None:
+        assert catalog.extract_quant("Qwen3-27B-IQ4_KS_KT.gguf") == "IQ4_KS_KT"
+
 
 class TestGetFamilies:
     def test_returns_list(self) -> None:

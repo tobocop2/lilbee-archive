@@ -5,15 +5,15 @@
   },
   {
     "repo": "Andycurrent/Gemma-3-1B-it-GLM-4.7-Flash-Heretic-Uncensored-Thinking_GGUF",
-    "display": "Gemma 3 1B GLM 4.7 Flash Heretic Uncensored Thinking_GGUF"
+    "display": "Gemma 3 1B GLM 4.7 Flash Heretic Uncensored Thinking"
   },
   {
     "repo": "DavidAU/Qwen3.6-27B-Heretic-Uncensored-FINETUNE-NEO-CODE-Di-IMatrix-MAX-GGUF",
-    "display": "Qwen3.6 27B Heretic Uncensored FINETUNE NEO CODE Di IMatrix MAX"
+    "display": "Qwen3.6 27B Heretic Uncensored FINETUNE NEO CODE Di MAX"
   },
   {
     "repo": "DavidAU/Qwen3.6-40B-Claude-4.6-Opus-Deckard-Heretic-Uncensored-Thinking-NEO-CODE-Di-IMatrix-MAX-GGUF",
-    "display": "Qwen3.6 40B Claude 4.6 Opus Deckard Heretic Uncensored Thinking NEO CODE Di IMatrix MAX"
+    "display": "Qwen3.6 40B Claude 4.6 Opus Deckard Heretic Uncensored Thinking NEO CODE Di MAX"
   },
   {
     "repo": "DeepBeepMeep/LTX-2",
@@ -305,7 +305,7 @@
   },
   {
     "repo": "MonsterMMORPG/Wan_GGUF",
-    "display": "Wan_GGUF"
+    "display": "Wan"
   },
   {
     "repo": "Mungert/Hunyuan-MT-7B-GGUF",
@@ -370,10 +370,6 @@
   {
     "repo": "Qwen/Qwen3-Embedding-0.6B-GGUF",
     "display": "Qwen3 0.6B"
-  },
-  {
-    "repo": "Qwen/Qwen3-VL-2B-Instruct-GGUF",
-    "display": "Qwen3 VL 2B"
   },
   {
     "repo": "ReadyArt/Dark-Scarlett-v0.3-26B-A4B-GGUF",
@@ -453,11 +449,11 @@
   },
   {
     "repo": "bartowski/Qwen_Qwen3.6-35B-A3B-GGUF",
-    "display": "Qwen_Qwen3.6 35B A3B"
+    "display": "Qwen Qwen3.6 35B A3B"
   },
   {
     "repo": "bartowski/deepreinforce-ai_Ornith-1.0-35B-GGUF",
-    "display": "Deepreinforce ai_Ornith 1.0 35B"
+    "display": "Deepreinforce Ai Ornith 1.0 35B"
   },
   {
     "repo": "bartowski/gemma-2-2b-it-GGUF",
@@ -465,11 +461,11 @@
   },
   {
     "repo": "bartowski/google_gemma-4-26B-A4B-it-GGUF",
-    "display": "google_gemma 4 26B A4B"
+    "display": "Google Gemma 4 26B A4B"
   },
   {
     "repo": "bartowski/google_gemma-4-E2B-it-GGUF",
-    "display": "google_gemma 4 E2B"
+    "display": "Google Gemma 4 E2B"
   },
   {
     "repo": "batiai/Qwen3.6-27B-GGUF",
@@ -517,7 +513,7 @@
   },
   {
     "repo": "douyamv/Gemma-4-31B-JANG_4M-CRACK-GGUF",
-    "display": "Gemma 4 31B JANG_4M CRACK"
+    "display": "Gemma 4 31B JANG 4M CRACK"
   },
   {
     "repo": "empero-ai/Qwythos-9B-Claude-Mythos-5-1M-GGUF",
@@ -549,6 +545,10 @@
   },
   {
     "repo": "google/gemma-2b",
+    "display": "Gemma 2B"
+  },
+  {
+    "repo": "google/gemma-2b-it",
     "display": "Gemma 2B"
   },
   {
@@ -753,7 +753,7 @@
   },
   {
     "repo": "mradermacher/gemma-4-26B-A4B-it-ultra-uncensored-heretic-i1-GGUF",
-    "display": "Gemma 4 26B A4B Ultra Uncensored Heretic i1"
+    "display": "Gemma 4 26B A4B Ultra Uncensored Heretic"
   },
   {
     "repo": "nomic-ai/nomic-embed-text-v1.5-GGUF",

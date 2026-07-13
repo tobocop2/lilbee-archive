@@ -9,12 +9,22 @@ from lilbee.catalog.types import ModelCompat, ModelSource, ModelTask
 
 PARAM_COUNT_RE = re.compile(r"(\d+\.?\d*B)", re.IGNORECASE)
 
-# One alternation strips every kind of trailing noise from a display name:
-# name suffixes (anywhere they precede ``-`` or end-of-string), trailing GGUF
-# quant tokens (``-Q4_K_M``, ``-F16`` ...), and trailing date stamps (``-2507``).
+# One alternation strips every kind of noise from a display name. Repo authors
+# separate tokens with ``-``, ``_``, or ``.`` (a repo id is sometimes just a
+# filename, ``doctrine-flagship.q4_k_m.gguf``), so every token is bounded by any
+# of the three or by the string edge. Version dots (``Qwen3.5``) are untouched
+# because a version is not a noise token. Quant tags are stripped wherever they
+# appear, not just at the end: ``gemma-4-it-qat-q4_0-unquantized-GGUF`` carries
+# one mid-name. Date stamps stay end-anchored, since a bare four-digit group
+# inside a name is more likely to be meaningful.
 _DISPLAY_NAME_NOISE = re.compile(
-    r"-(?:GGUF|Instruct|Chat|Embedding|Embed|qat|it)(?=-|$)"
-    r"|-(?:Q\d[A-Z0-9_]*|F16|F32)$"
+    r"[-_.](?:GGUF|GUFF|Instruct|Chat|Embedding|Embed|qat|it"
+    r"|imatrix|i1|UD|unquantized)(?=[-_.]|$)"
+    r"|[-_.](?:Q\d[A-Z0-9_]*|IQ\d[A-Z0-9_]*|F16|F32|BF16|FP8)(?=[-_.]|$)"
+    # The same tokens lead some names (``GGUF-Qwen3-8B``), where there is no
+    # separator to their left. Only the unambiguous ones are stripped in that
+    # position: a leading ``it`` or ``Chat`` is more likely to be a real word.
+    r"|^(?:GGUF|GUFF|Instruct|Q\d[A-Z0-9_]*|IQ\d[A-Z0-9_]*)(?=[-_.])"
     r"|-\d{4}$",
     re.IGNORECASE,
 )
@@ -52,7 +62,9 @@ def clean_display_name(repo_id: str) -> str:
             break
         name = stripped
     name = _DISPLAY_NAME_META_PREFIX.sub("", name)
-    name = name.replace("-", " ").strip()
+    # ``-`` and ``_`` are word separators; ``.`` is not, since it carries the
+    # version (``Qwen3.5``, ``v1.5``).
+    name = name.replace("-", " ").replace("_", " ").strip()
     name = re.sub(r"\s+", " ", name)
     return " ".join(_prettify_word(w) for w in name.split(" "))
 

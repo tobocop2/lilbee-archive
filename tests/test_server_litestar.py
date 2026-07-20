@@ -1825,6 +1825,12 @@ class TestAuthRequiredRoutes:
         resp = auth_client.put("/api/models/embedding", json={"model": "nomic-embed-text:latest"})
         assert resp.status_code == 401
 
+    def test_shutdown_requires_auth(self, auth_client):
+        # The remote shutdown is the most abuse-sensitive mutating route; pin that
+        # it is bearer-protected so a future @read_only slip fails loud here.
+        resp = auth_client.post("/api/shutdown")
+        assert resp.status_code == 401
+
 
 class _StubEmbedder:
     truncated_total = 0
@@ -1949,3 +1955,18 @@ class TestPlacementSetRoute:
         """DELETE placement is refused on the shared HTTP daemon."""
         resp = client.delete("/api/placement")
         assert resp.status_code == 409
+
+
+class TestShutdownRoute:
+    @mock.patch("lilbee.server.handlers.threading.Timer")
+    def test_accepts_and_schedules_sigterm(self, mock_timer, client):
+        import signal as signal_mod
+
+        response = client.post("/api/shutdown")
+        assert response.status_code == 202
+        assert response.json() == {"status": "shutting_down"}
+        mock_timer.assert_called_once()
+        args, kwargs = mock_timer.call_args
+        assert args[1] is signal_mod.raise_signal
+        assert kwargs["args"] == (signal_mod.SIGTERM,)
+        mock_timer.return_value.start.assert_called_once()

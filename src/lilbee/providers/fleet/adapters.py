@@ -154,6 +154,24 @@ def embed_spec(meta: dict[str, str] | None) -> RoleServerSpec:
     return replace(base, extra_args=(*base.extra_args, "--pooling", pooling.value))
 
 
+# The expert tensors --cpu-moe/--n-cpu-moe move to system memory, copied from
+# llama.cpp's LLM_FFN_EXPS_REGEX (common/common.h). The estimator is handed the
+# same patterns so its sizing matches what the launch actually offloads; they
+# must stay in step with upstream or the estimate silently drifts from reality.
+EXPERT_TENSOR_REGEX = r"\.ffn_(up|down|gate|gate_up)_(ch|)exps"
+
+
+def expert_offload_patterns(*, cpu_moe: bool, n_cpu_moe: int | None) -> tuple[str, ...]:
+    """Tensor-name patterns whose experts live in system memory, launch order.
+
+    Mirrors llama.cpp's expansion: ``--cpu-moe`` is one blanket pattern, while
+    ``--n-cpu-moe N`` is one per-block pattern for the first N blocks.
+    """
+    if n_cpu_moe is not None:
+        return tuple(rf"blk\.{i}{EXPERT_TENSOR_REGEX}" for i in range(n_cpu_moe))
+    return (EXPERT_TENSOR_REGEX,) if cpu_moe else ()
+
+
 def build_server_argv(
     *,
     binary: Path,
@@ -170,11 +188,14 @@ def build_server_argv(
     batch_size: int | None = None,
     threads: int | None = None,
     no_mmap: bool = False,
+    cpu_moe: bool = False,
+    n_cpu_moe: int | None = None,
 ) -> list[str]:
     """Assemble the llama-server command line for one instance, minus ``--port``.
 
     ``--ctx-size`` is the per-slot context times the slot count, since
-    llama-server divides total context across parallel slots.
+    llama-server divides total context across parallel slots. ``n_cpu_moe``
+    wins over ``cpu_moe``; the pair would offload the same tensors twice.
     """
     argv = [
         str(binary),
@@ -205,5 +226,9 @@ def build_server_argv(
         argv += ["--tensor-split", ",".join(str(r) for r in ratio)]
     if no_mmap:
         argv += ["--no-mmap"]
+    if n_cpu_moe is not None:
+        argv += ["--n-cpu-moe", str(n_cpu_moe)]
+    elif cpu_moe:
+        argv += ["--cpu-moe"]
     argv += list(spec.extra_args)
     return argv

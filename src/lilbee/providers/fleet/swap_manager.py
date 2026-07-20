@@ -25,7 +25,7 @@ import httpx
 import psutil
 
 from lilbee.providers.base import ProviderError, ProviderErrorKind
-from lilbee.providers.fleet.binary import resolve_llama_swap
+from lilbee.providers.fleet.binary import engine_pin, resolve_llama_swap
 from lilbee.providers.fleet.groups import SwapGroup
 from lilbee.providers.fleet.launch import role_model_prefix
 from lilbee.providers.fleet.swap_config import PORT_FLAG, build_swap_config
@@ -40,11 +40,9 @@ _HOST = "127.0.0.1"
 # One llama-swap per swap group: the group name lands in the config filename so
 # each group's processes are identified (and stopped) by their own config path,
 # and a placement change can restart one group without touching the others.
-# Per owner-pid (the last dotted segment, matching the state-file scheme) so two
-# lilbee instances at one data_dir never write the same config file. A shared
-# name let a sibling's write flip the ports/ttl a later restart would re-read.
+# The writer pid segment is uniqueness, not ownership: the build lock ensures
+# one builder per engine dir, and reaping cleans dead writers' leftovers.
 _CONFIG_FILENAME_TEMPLATE = "llama-swap-{group}.{pid}.json"
-# Matches every owner's group configs; the per-owner glob narrows to one pid.
 _CONFIG_FILE_GLOB = "llama-swap-*.json"
 # llama-swap's own stdout/stderr (its HTTP access log) is captured to a file under
 # the data root's ``logs/`` (beside server.log etc.) instead of inherited from the
@@ -53,10 +51,8 @@ _CONFIG_FILE_GLOB = "llama-swap-*.json"
 # upstream logs are unaffected (those go to llama-swap's /logs API).
 _LOGS_SUBDIR = "logs"
 _LOG_FILENAME_TEMPLATE = "llama-swap-{group}.log"
-# Cross-run reaping: each owner lilbee writes its own state file (named with its
-# pid) recording its swap's pid/pgid plus the owner's pid and create time, so the
-# next start can kill a dead owner's surviving llama-swap (it holds VRAM
-# otherwise) while leaving a live owner's swap and file alone.
+# Each writer's state file records its swap's pid/pgid so a later start can
+# stop a dead or unhealthy engine. Health, not ownership, decides sparing.
 _STATE_FILENAME_PREFIX = "llama-swap.state."
 _STATE_FILENAME_SUFFIX = ".json"
 # Also matches the legacy single shared state file ("llama-swap.state.json").
@@ -64,14 +60,12 @@ _STATE_FILE_GLOB = f"{_STATE_FILENAME_PREFIX}*"
 _STATE_KEY_PID = "pid"
 _STATE_KEY_PGID = "pgid"
 _STATE_KEY_CREATED_AT = "created_at"
-_STATE_KEY_OWNER_PID = "owner_pid"
-_STATE_KEY_OWNER_CREATED_AT = "owner_created_at"
 _STATE_KEY_NAME = "name"
 _STATE_KEY_MEMBER_PORTS = "member_ports"
 _STATE_KEY_PROXY_PORT = "proxy_port"
 _STATE_KEY_LILBEE_VERSION = "lilbee_version"
-_STATE_KEY_DETACHED = "detached"
 _STATE_KEY_LAUNCHES = "launches"
+_STATE_KEY_ENGINE_PIN = "engine_pin"
 # Atomic state writes: the dot prefix keeps half-written tmp files out of the
 # reap scan's glob.
 _STATE_TMP_PREFIX = "."
@@ -90,7 +84,10 @@ _HTTP_TIMEOUT_S = 10.0
 # own (longer) budget inside llama-swap, so this only covers the proxy coming up.
 _BOOT_TIMEOUT_S = 30.0
 _BOOT_POLL_S = 0.25
-_STOP_TIMEOUT_S = 10.0
+# Per-group SIGTERM grace before SIGKILL. A hard kill is safe (llama-server
+# holds no persistent state), and SERVER_LOCK_TIMEOUT assumes a full
+# four-group teardown stays near 4x this value.
+_STOP_TIMEOUT_S = 2.5
 # Grace for a llama-server that outlived llama-swap before it is force-killed.
 _ORPHAN_STOP_TIMEOUT_S = 5.0
 # Grace for a SIGKILLed process to exit (and release its VRAM) before the next
@@ -125,14 +122,12 @@ class _SwapState:
 
     pid: int
     pgid: int | None
-    owner_pid: int | None
-    owner_created_at: float | None
     created_at: float | None = None
     member_ports: tuple[int, ...] = ()
     proxy_port: int | None = None
     lilbee_version: str | None = None
-    detached: bool = False
     launches: tuple[dict, ...] = ()
+    engine_pin: str | None = None
 
 
 class SwapManager:
@@ -149,10 +144,15 @@ class SwapManager:
         self._log_path = data_dir / _LOGS_SUBDIR / _LOG_FILENAME_TEMPLATE.format(group=group.value)
         self._state_path = data_dir / _state_filename(os.getpid(), group.value)
         self._proc: subprocess.Popen[bytes] | None = None
-        self._adopted: _SwapState | None = None
         self._log_file: BinaryIO | None = None
         self._port: int | None = None
         self._member_ports: list[int] = []
+        # The serving contract (per-role model/ctx/slots) persisted in every
+        # state write, so a guest lilbee can bind to this live fleet.
+        self._launches_payload: list[dict] = []
+        # True when this manager uses an engine another process built: it then
+        # never writes state, never reaps, and never signals engine processes.
+        self._bound = False
 
     def start(self, launches: list[InstanceLaunch], *, ttl_seconds: int = 0) -> None:
         """Write the config and spawn llama-swap, waiting for its proxy to answer.
@@ -173,6 +173,7 @@ class SwapManager:
         ports = _pick_free_ports(1 + len(launches))
         member_ports = dict(zip([launch.model_id for launch in launches], ports[1:], strict=True))
         self._member_ports = sorted(member_ports.values())
+        self._launches_payload = [launch.to_state() for launch in launches]
         self._config_path.parent.mkdir(parents=True, exist_ok=True)
         self._config_path.write_text(
             build_swap_config(
@@ -201,12 +202,12 @@ class SwapManager:
         self._write_state()
         self._await_health()
 
-    def reap_stale(self, *, keep_detached: bool = False) -> None:
-        """Kill every dead owner's surviving llama-swap; see :func:`reap_stale`."""
-        reap_stale(self._data_dir, keep_detached=keep_detached)
+    def reap_stale(self) -> None:
+        """Kill every dead or unhealthy recorded engine; see :func:`reap_stale`."""
+        reap_stale(self._data_dir)
 
     def _process_identity(self) -> tuple[int, int | None, float | None] | None:
-        """(pid, pgid, create time) of the swap this manager runs or adopted."""
+        """(pid, pgid, create time) of the swap this manager runs, or None."""
         if self._proc is not None:
             pid = self._proc.pid
             pgid: int | None = None
@@ -217,11 +218,9 @@ class SwapManager:
             with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
                 created_at = psutil.Process(pid).create_time()
             return pid, pgid, created_at
-        if self._adopted is not None:
-            return self._adopted.pid, self._adopted.pgid, self._adopted.created_at
         return None
 
-    def _write_state(self, *, detached: bool = False, launches: list[dict] | None = None) -> None:
+    def _write_state(self) -> None:
         """Record the swap's pid/pgid/create time, member ports, and our identity.
 
         The write is atomic (tmp file then ``os.replace``) so a sibling's reap
@@ -235,14 +234,12 @@ class SwapManager:
             _STATE_KEY_PID: swap_pid,
             _STATE_KEY_PGID: pgid,
             _STATE_KEY_CREATED_AT: created_at,
-            _STATE_KEY_OWNER_PID: os.getpid(),
-            _STATE_KEY_OWNER_CREATED_AT: psutil.Process().create_time(),
             _STATE_KEY_NAME: _LLAMA_SWAP_PROCESS_NAME,
             _STATE_KEY_MEMBER_PORTS: self._member_ports,
             _STATE_KEY_PROXY_PORT: self._port,
             _STATE_KEY_LILBEE_VERSION: _pkg_version("lilbee"),
-            _STATE_KEY_DETACHED: detached,
-            _STATE_KEY_LAUNCHES: launches or [],
+            _STATE_KEY_LAUNCHES: self._launches_payload,
+            _STATE_KEY_ENGINE_PIN: engine_pin(),
         }
         tmp_path = self._state_path.with_name(
             f"{_STATE_TMP_PREFIX}{self._state_path.name}{_STATE_TMP_SUFFIX}"
@@ -278,17 +275,16 @@ class SwapManager:
         """Whether this manager currently has a spawned llama-swap process."""
         return self._proc is not None
 
-    def detach(self, launches: list[dict]) -> None:
-        """Leave llama-swap running for the next launch to adopt; mark the state file."""
-        self._write_state(detached=True, launches=launches)
-        self._close_log()
-        self._proc = None
+    @property
+    def bound(self) -> bool:
+        """Whether this manager rides an engine built by another process."""
+        return self._bound
 
-    def adopt(self, state: _SwapState, state_path: Path) -> bool:
-        """Bind to a detached fleet's running proxy; False leaves this manager unbound.
+    def bind(self, state: _SwapState) -> bool:
+        """Use a running engine's proxy without taking any ownership of it.
 
-        Success rewrites ownership under this process (its own state file) and
-        removes the detached record so the fleet cannot be adopted twice.
+        The engine's own state record stays untouched: the binder writes
+        nothing, and shutdown() merely drops the binding.
         """
         if state.proxy_port is None:
             return False
@@ -298,10 +294,8 @@ class SwapManager:
             self._port = None
             self._member_ports = []
             return False
-        self._adopted = state
-        self._write_state()
-        if state_path != self._state_path:
-            state_path.unlink(missing_ok=True)
+        self._launches_payload = [dict(launch) for launch in state.launches]
+        self._bound = True
         return True
 
     def _proxy_answers(self) -> bool:
@@ -319,10 +313,16 @@ class SwapManager:
         tracked ``Popen``: a warm-up/reset race or a reload can leave several
         llama-swap processes this lilbee spawned, any of them reparented to init
         (still holding the engine binary open) -- trusting one handle would leak
-        them. Every llama-swap running against our config is reaped (sparing a
-        live sibling lilbee at the same data_dir). Unlinks only this owner's state
-        file; another instance's record stays.
+        them. Every llama-swap running against our config is reaped. Unlinks only
+        this owner's state file; another instance's record stays.
         """
+        if self._bound:
+            # Not ours to stop: drop the binding and leave the engine serving.
+            self._bound = False
+            self._port = None
+            self._member_ports = []
+            self._launches_payload = []
+            return
         _stop_own_fleet(self._config_path, tuple(self._member_ports))
         self._state_path.unlink(missing_ok=True)
         self._proc = None
@@ -450,55 +450,81 @@ def _swaps_for_config(config_path: Path) -> list[psutil.Process]:
     return swaps
 
 
-def _live_sibling_swap_pids(data_dir: Path) -> set[int]:
-    """Swap pids a live *other* owner recorded at *data_dir* (spare these).
+def find_live_state(data_dir: Path, group: SwapGroup) -> _SwapState | None:
+    """The newest recorded state for *group* at *data_dir* (no liveness check).
 
-    A concurrent sibling lilbee on the same data_dir (e.g. ``lilbee sync`` beside
-    the server) shares the config path, so a config-path reap would otherwise
-    kill its healthy swap. Its state file names the swap pid to protect.
+    A record's presence does not prove the engine is up; callers that need that
+    probe it with ``state_is_healthy``. The name reflects that a record is written
+    only for a running engine, not that this function verifies it.
     """
-    our_pid = os.getpid()
-    protected: set[int] = set()
-    for state_path in data_dir.glob(_STATE_FILE_GLOB):
-        state = _load_state(state_path)
-        if state is None or state.owner_pid in (None, our_pid):
-            continue
-        if _owner_alive(state.owner_pid, state.owner_created_at):
-            protected.add(state.pid)
-    return protected
-
-
-def find_detached_state(data_dir: Path, group: SwapGroup) -> tuple[_SwapState, Path] | None:
-    """The newest detached state for *group*, or None when nothing was left warm."""
-    best: tuple[_SwapState, Path] | None = None
+    best: _SwapState | None = None
     for state_path in sorted(data_dir.glob(_STATE_FILE_GLOB)):
         if f".{group.value}." not in f".{state_path.name}":
             continue
         state = _load_state(state_path)
-        if state is None or not state.detached:
+        if state is None:
             continue
-        if best is None or (state.created_at or 0) > (best[0].created_at or 0):
-            best = (state, state_path)
+        if best is None or (state.created_at or 0) > (best.created_at or 0):
+            best = state
     return best
 
 
-def reap_stale(data_dir: Path, *, keep_detached: bool = False) -> None:
-    """Kill every dead owner's surviving llama-swap at *data_dir*.
+def state_is_healthy(state: _SwapState) -> bool:
+    """Whether the engine behind *state* answers on its recorded proxy port."""
+    if state.proxy_port is None:
+        return False
+    try:
+        resp = httpx.get(
+            f"http://{_HOST}:{state.proxy_port}{_RUNNING_PATH}", timeout=_HTTP_TIMEOUT_S
+        )
+    except (OSError, httpx.HTTPError):
+        return False
+    return resp.status_code < httpx.codes.BAD_REQUEST
+
+
+def engine_record_exists(data_dir: Path) -> bool:
+    """Whether any engine state file is present, without probing proxy health.
+
+    A filesystem fact, unlike a proxy HTTP probe: it is true for an engine that
+    is live but momentarily unprobeable (fd exhaustion, host thrash), so the
+    ladder can clear a recorded engine before building rather than double-build
+    beside one an HTTP probe failed to see.
+    """
+    return any(data_dir.glob(_STATE_FILE_GLOB))
+
+
+def stop_engine(data_dir: Path) -> None:
+    """Stop every engine the dir's state files record, regardless of liveness.
+
+    The unconditional off switch behind ``lilbee engine stop`` and the
+    last-user-out path: each recorded swap is terminated through its state
+    record (never a Popen handle, so it works on engines this process did
+    not build) and its file removed. Unparseable files are left alone, as
+    in reap_stale: they may be a sibling's in-flight write.
+    """
+    for state_path in sorted(data_dir.glob(_STATE_FILE_GLOB)):
+        state = _load_state(state_path)
+        if state is None:
+            continue
+        _stop_stale_swap(state)
+        state_path.unlink(missing_ok=True)
+
+
+def reap_stale(data_dir: Path) -> None:
+    """Kill every dead or unhealthy recorded engine at *data_dir*.
 
     An OOM-killed lilbee leaves llama-swap (and its servers) holding VRAM,
     so planning would otherwise see artificially reduced free memory; the
-    provider calls this before its GPU probe. Every state file in the data
-    dir is scanned (all groups, including the legacy shared-name file): a
-    dead owner's swap is reaped and its file removed; a live owner's swap
-    and file are left alone, so a second lilbee at the same data_dir (e.g.
-    ``lilbee sync`` beside the server) never kills the live owner's healthy
-    swap. Recorded create times guard against owner- and swap-pid reuse; the
-    cmdline match covers legacy files without a swap create time. An
+    ladder calls this before its GPU probe. Every state file is scanned
+    (all groups, including legacy names): an engine that is alive AND
+    answering on its proxy is spared regardless of who started it (a
+    reload's own healthy groups, or a bindable engine the ladder skipped);
+    everything else is stopped through its record and its file removed. An
     unparseable file is skipped, never deleted: it may be a sibling's
-    in-flight write, and a truly corrupt file is its owner's to overwrite.
-    When the swap itself is dead, its servers (each in its own process
-    group) may still be alive holding VRAM; they are matched by name plus
-    recorded member port and stopped before the file is removed.
+    in-flight write. When the swap itself is dead, its servers (each in
+    its own process group) may still be alive holding VRAM; they are
+    matched by name plus recorded member port and stopped before the file
+    is removed.
 
     Module-level (not a method) because it must run before planning decides
     which role groups exist, when no per-group manager has been built yet.
@@ -509,10 +535,9 @@ def reap_stale(data_dir: Path, *, keep_detached: bool = False) -> None:
         state = _load_state(state_path)
         if state is None:
             continue
-        if _owner_alive(state.owner_pid, state.owner_created_at):
-            continue
-        if state.detached and keep_detached:
-            # A deliberately-left warm fleet; the next launch adopts or replaces it.
+        if state_is_healthy(state):
+            # An answering engine is in use (bind accepts on exactly this
+            # test); reaping must never disagree with binding.
             continue
         if _is_live_llama_swap(state):
             _stop_stale_swap(state)
@@ -544,34 +569,20 @@ def _clean_stale_configs(data_dir: Path) -> None:
             config_path.unlink(missing_ok=True)
 
 
-def sweep_owned(data_dir: Path) -> None:
-    """Stop every llama-swap this process owns at *data_dir*, across all groups.
-
-    The provider's fallback teardown path: when it holds no tracked managers, an
-    in-flight build may still have spawned swaps it never adopted. Config files
-    are per owner-pid, so this sweeps only this process's group configs; a
-    sibling lilbee's swaps are its own to stop. Cross-run leftovers are
-    ``reap_stale``'s job, not this sweep's.
-    """
-    for config_path in sorted(data_dir.glob(_own_config_glob(os.getpid()))):
-        _stop_own_fleet(config_path, ())
-
-
 def _stop_own_fleet(config_path: Path, member_ports: tuple[int, ...]) -> None:
     """Stop every llama-swap this lilbee owns at *config_path* and reap upstreams.
 
     Keyed on config-path identity rather than a tracked Popen or the live process
     tree: a warm-up/reload race can leave several llama-swap processes this lilbee
     started, any of which may be reparented to init, so no single handle or child
-    scan finds them all. Every llama-swap running against our config is reaped
-    EXCEPT one a live *other* owner recorded -- a concurrent sibling lilbee at the
-    same data_dir is left alone. Each swap runs each llama-server in its own
-    process group, so the upstreams are swept separately: captured descendants
-    plus any llama-server still bound to one of our member ports (a respawned
-    upstream the descendant snapshot missed), then confirmed gone.
+    scan finds them all. Every llama-swap running against our config is reaped:
+    the build lock guarantees one builder per engine dir, so no sibling sparing
+    applies. Each swap runs each llama-server in its own process group, so the
+    upstreams are swept separately: captured descendants plus any llama-server
+    still bound to one of our member ports (a respawned upstream the descendant
+    snapshot missed), then confirmed gone.
     """
-    protected = _live_sibling_swap_pids(config_path.parent)
-    swaps = [swap for swap in _swaps_for_config(config_path) if swap.pid not in protected]
+    swaps = list(_swaps_for_config(config_path))
     children: list[psutil.Process] = []
     for swap in swaps:
         children.extend(_live_children(swap.pid))
@@ -615,44 +626,21 @@ def _load_state(path: Path) -> _SwapState | None:
     try:
         payload = json.loads(path.read_text())
         raw_pgid = payload.get(_STATE_KEY_PGID)
-        raw_owner = payload.get(_STATE_KEY_OWNER_PID)
-        raw_owner_created = payload.get(_STATE_KEY_OWNER_CREATED_AT)
         raw_created = payload.get(_STATE_KEY_CREATED_AT)
         raw_ports = payload.get(_STATE_KEY_MEMBER_PORTS) or []
         raw_proxy = payload.get(_STATE_KEY_PROXY_PORT)
         return _SwapState(
             pid=int(payload[_STATE_KEY_PID]),
             pgid=int(raw_pgid) if raw_pgid is not None else None,
-            owner_pid=int(raw_owner) if raw_owner is not None else None,
-            owner_created_at=float(raw_owner_created) if raw_owner_created is not None else None,
             created_at=float(raw_created) if raw_created is not None else None,
             member_ports=tuple(int(port) for port in raw_ports),
             proxy_port=int(raw_proxy) if raw_proxy is not None else None,
             lilbee_version=payload.get(_STATE_KEY_LILBEE_VERSION),
-            detached=bool(payload.get(_STATE_KEY_DETACHED, False)),
             launches=tuple(payload.get(_STATE_KEY_LAUNCHES) or ()),
+            engine_pin=payload.get(_STATE_KEY_ENGINE_PIN),
         )
     except (OSError, ValueError, KeyError, TypeError):
         return None
-
-
-def _owner_alive(pid: int | None, created_at: float | None) -> bool:
-    """True when the recorded owner lilbee process is still running (not a zombie).
-
-    A live process at *pid* whose create time differs from *created_at* is a
-    pid-reuse impostor, so the owner counts as dead.
-    """
-    if pid is None:
-        return False
-    try:
-        proc = psutil.Process(pid)
-        status = str(proc.status())
-        create_time = proc.create_time()
-    except (psutil.NoSuchProcess, psutil.AccessDenied):
-        return False
-    if created_at is not None and abs(create_time - created_at) > _CREATE_TIME_TOLERANCE_S:
-        return False
-    return status != str(psutil.STATUS_ZOMBIE)
 
 
 def _is_live_llama_swap(state: _SwapState) -> bool:
@@ -755,11 +743,6 @@ def _state_owner_pid(name: str) -> int | None:
 def _config_filename(pid: int, group: str) -> str:
     """This owner's config filename for *group* (``llama-swap-<group>.<pid>.json``)."""
     return _CONFIG_FILENAME_TEMPLATE.format(group=group, pid=pid)
-
-
-def _own_config_glob(pid: int) -> str:
-    """Glob matching only *pid*'s per-group config files."""
-    return f"llama-swap-*.{pid}.json"
 
 
 def _config_owner_pid(name: str) -> int | None:

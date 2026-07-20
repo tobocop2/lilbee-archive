@@ -13,6 +13,8 @@ from lilbee.providers.base import ProviderError
 from lilbee.providers.fleet import binary as binary_mod
 from lilbee.providers.fleet.binary import (
     EngineTool,
+    _engine_build_id,
+    engine_pin,
     llama_server_runtime_env,
     resolve_engine_tool,
     resolve_gguf_parser,
@@ -170,3 +172,76 @@ def test_runtime_env_delegates_to_cuda_runtime(monkeypatch: pytest.MonkeyPatch) 
         lambda: {"LD_LIBRARY_PATH": "/wheel/lib"},
     )
     assert llama_server_runtime_env() == {"LD_LIBRARY_PATH": "/wheel/lib"}
+
+
+class TestEnginePin:
+    """The pin identifies the engine BUILD a lilbee would spawn; sharing keys on it."""
+
+    def test_custom_llama_server_path_is_its_own_identity(self, tmp_path: Path) -> None:
+        exe = tmp_path / "llama-server"
+        exe.write_text("#!/bin/sh\n")
+        original = cfg.llama_server_path
+        cfg.llama_server_path = str(exe)
+        try:
+            assert _engine_build_id() == f"custom:{exe}"
+        finally:
+            cfg.llama_server_path = original
+
+    def test_bundled_wheel_pin_wins_when_no_custom_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake = _fake_engine(tmp_path, make_files=True)
+        fake.get_engine_pin = lambda: "llama-cpp-9.9.9+swap-v999+gguf-v9.9.9"
+        monkeypatch.setitem(sys.modules, "lilbee_engine", fake)
+        assert _engine_build_id() == "llama-cpp-9.9.9+swap-v999+gguf-v9.9.9"
+
+    def test_path_fallback_identity_when_wheel_absent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setitem(sys.modules, "lilbee_engine", None)
+        monkeypatch.setattr(_WHICH, lambda name: f"/opt/homebrew/bin/{name}")
+        assert _engine_build_id() == "path:/opt/homebrew/bin/llama-server"
+
+    def test_unpinned_when_nothing_resolves(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setitem(sys.modules, "lilbee_engine", None)
+        monkeypatch.setattr(_WHICH, lambda name: None)
+        assert _engine_build_id() == "unpinned"
+
+    def test_wheel_without_pin_accessor_reports_its_version(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake = _fake_engine(tmp_path, make_files=True)  # no get_engine_pin attribute
+        monkeypatch.setitem(sys.modules, "lilbee_engine", fake)
+        monkeypatch.setattr("lilbee.providers.fleet.binary._pkg_version", lambda name: "0.6.91")
+        assert _engine_build_id() == "wheel:0.6.91"
+
+    def test_pin_folds_in_load_affecting_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Same build, different expert-offload config: the pins must differ so two
+        # processes with conflicting load flags never share one engine.
+        monkeypatch.setattr(binary_mod, "_engine_build_id", lambda: "build-x")
+        monkeypatch.setattr(cfg, "cpu_moe", False)
+        pin_off = engine_pin()
+        monkeypatch.setattr(cfg, "cpu_moe", True)
+        pin_on = engine_pin()
+        assert pin_off != pin_on
+        assert pin_on.startswith("build-x|")  # build identity still leads the pin
+
+    def test_pin_is_stable_for_identical_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The load signature is deterministic: identical config yields the same pin
+        # (a jittering pin would make same-setup peers overflow instead of share).
+        monkeypatch.setattr(binary_mod, "_engine_build_id", lambda: "build-x")
+        assert engine_pin() == engine_pin()
+
+    def test_checked_in_pins_match_engine_versions_env(self) -> None:
+        import lilbee_engine
+
+        env = {}
+        env_path = Path(__file__).parent.parent / "engine-versions.env"
+        for line in env_path.read_text().splitlines():
+            if line.startswith("ENGINE_") and "=" in line:
+                key, value = line.split("=", 1)
+                env[key.strip()] = value.strip()
+        pin = lilbee_engine.get_engine_pin()
+        assert env["ENGINE_LLAMA_CPP_VERSION"] in pin
+        assert env["ENGINE_LLAMA_SWAP_VERSION"] in pin
+        assert env["ENGINE_GGUF_PARSER_REF"] in pin

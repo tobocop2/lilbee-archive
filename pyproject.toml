@@ -123,7 +123,13 @@ dev = [
 pythonpath = [".", "tests"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "--ignore=tests/integration"
+# tests/evals is excluded here and run by its own CI job. The harness is a
+# separate uv project (evals/pyproject.toml) whose deps -- ir_measures, scipy,
+# ragas, sklearn, pyterrier -- are deliberately not lilbee's. Collected in this
+# run they either import-error or slip past an importorskip, and a measurement
+# instrument whose tests silently skip is how the previous harness published
+# wrong numbers.
+addopts = "--ignore=tests/integration --ignore=tests/evals"
 timeout = 60
 markers = [
     "slow: integration tests that download models or take >10s",

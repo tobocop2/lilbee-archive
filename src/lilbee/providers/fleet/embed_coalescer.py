@@ -40,7 +40,9 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from typing import cast
 
-Vectors = list[list[float]]
+from lilbee.core.vectors import Vector
+
+Vectors = list[Vector]
 DispatchFn = Callable[[list[str]], Vectors]
 
 # How long the batcher waits after the first queued request for more to arrive

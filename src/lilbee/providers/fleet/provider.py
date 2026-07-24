@@ -27,6 +27,7 @@ import httpx
 
 from lilbee.catalog import clean_display_name
 from lilbee.core.config import cfg
+from lilbee.core.vectors import Vector
 from lilbee.modelhub.registry import ModelRegistry
 from lilbee.providers.base import (
     GENERATION_RESERVE_TOKENS,
@@ -1610,7 +1611,7 @@ class FleetProvider:
             )
         return result.messages
 
-    def embed(self, texts: list[str]) -> list[list[float]]:
+    def embed(self, texts: list[str]) -> list[Vector]:
         # Under a bulk ingest on a fleet big enough to be dispatch-bound, merge
         # concurrent one-passage calls into full batches so the fixed per-request
         # cost is not paid per passage. The interactive query/chat path (no
@@ -1630,10 +1631,10 @@ class FleetProvider:
         with self._coalescer_lock:
             return self._embed_replicas() >= _COALESCE_MIN_REPLICAS
 
-    def _embed_batch(self, texts: list[str]) -> list[list[float]]:
+    def _embed_batch(self, texts: list[str]) -> list[Vector]:
         return self._with_rediscover(lambda: self._embed_once(texts))
 
-    def _embed_once(self, texts: list[str]) -> list[list[float]]:
+    def _embed_once(self, texts: list[str]) -> list[Vector]:
         clients = self._require_clients(WorkerRole.EMBED)
         return _call_with_failover(clients, lambda client: client.embed(texts))
 

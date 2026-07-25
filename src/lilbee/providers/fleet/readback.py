@@ -39,6 +39,7 @@ import logging
 import re
 from pathlib import Path
 
+from lilbee.providers.fleet.devices import FleetDevice
 from lilbee.providers.roles import WorkerRole
 
 log = logging.getLogger(__name__)
@@ -119,6 +120,17 @@ def device_footprint(text: str) -> int:
     )
 
 
+def device_label(device: FleetDevice) -> str:
+    """The name the engine prints for *device*, and the join between the two sides.
+
+    ``ggml_backend_dev_name`` produces ``CUDA0`` / ``MTL0`` / ``Vulkan1``, which is
+    the same token ``--device`` and ``--tensor-split`` take and the same one the
+    buffer report is keyed by. Joining on it keeps the check out of the index-space
+    ambiguity that ``FleetDevice.from_loader`` exists to mark.
+    """
+    return f"{device.backend}{device.index}"
+
+
 def report_divergence(
     role: WorkerRole,
     model: str,
@@ -184,9 +196,22 @@ def engine_log_env(log_dir: Path, model_id: str) -> dict[str, str]:
 
 
 def check_launch(
-    log_dir: Path, model_id: str, role: WorkerRole, model: str, estimated_bytes: int
+    log_dir: Path,
+    model_id: str,
+    role: WorkerRole,
+    model: str,
+    estimated_bytes: int,
+    est_by_device: dict[str, int] | None = None,
 ) -> bool:
     """Compare the engine's own report for *model_id* against the estimate.
+
+    Checked per device when *est_by_device* says what each card was planned for,
+    because per device is the only dimension the planner decides in: a split is a
+    ratio, a placement is a card, and a shortfall is recorded against a role on a
+    card. Two cards planned 50/50 that land 80/20 sum to exactly the planned
+    total, so a scalar comparison sees nothing while card 0 is the one that runs
+    out. Falls back to the total for a model the estimator could only size as one
+    number.
 
     Three outcomes, and the third is the one that matters. The engine has no API
     for any of this: /props carries no memory keys and /metrics is token
@@ -204,7 +229,14 @@ def check_launch(
     except OSError:
         # No log yet: the engine has not started writing. Nothing to say.
         return False
-    actual = device_footprint(text)
+    per_device = {
+        label: size
+        for label, size in parse_device_buffers(text).items()
+        if not _is_host_device(label)
+    }
+    actual = sum(per_device.values())
+    if actual > 0 and est_by_device:
+        return _report_per_device(role, model, est_by_device, per_device)
     if actual <= 0:
         if load_finished(text):
             log.warning(
@@ -225,3 +257,40 @@ def check_launch(
 # enough that the estimator's normal error is quiet, narrow enough to catch the
 # whole-slot and whole-cache mistakes this exists to surface.
 _TOLERANCE = 0.25
+
+
+def _report_per_device(
+    role: WorkerRole,
+    model: str,
+    estimated: dict[str, int],
+    actual: dict[str, int],
+) -> bool:
+    """Warn about the card that diverged worst, naming both figures.
+
+    One warning rather than one per card: the operator needs to know the plan did
+    not hold and which card to look at, and a split that skews puts every card out
+    at once by construction.
+    """
+    worst_label, worst_gap, worst_over = "", 0.0, False
+    for label in set(estimated) | set(actual):
+        planned, landed = estimated.get(label, 0), actual.get(label, 0)
+        gap = abs(landed - planned) / planned if planned else float(landed)
+        over = landed > planned
+        # An overrun outranks an equal shortfall: a card holding more than it was
+        # planned for is the one that fails to load, while its partner holding
+        # less is only the symptom of the same skew.
+        if (over, gap) > (worst_over, worst_gap):
+            worst_label, worst_gap, worst_over = label, gap, over
+    if not worst_label or (estimated.get(worst_label) and worst_gap <= _TOLERANCE):
+        return False
+    log.warning(
+        "The %s model %s did not land where it was planned: %s holds %.1f GiB but was "
+        "planned for %.1f GiB. Placement, the tensor split and the context were all "
+        "decided per card, so a total that looks right can still overrun one of them.",
+        role.value,
+        model,
+        worst_label,
+        actual.get(worst_label, 0) / 1024**3,
+        estimated.get(worst_label, 0) / 1024**3,
+    )
+    return True

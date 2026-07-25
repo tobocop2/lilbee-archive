@@ -1075,6 +1075,29 @@ def _non_chat_reservation(
     return reserved
 
 
+def _charge_by_device(
+    chosen: tuple[FleetDevice, ...], ratio: tuple[int, ...], total: int
+) -> dict[str, int]:
+    """What each of *chosen* was charged, keyed by the name the engine prints.
+
+    A single-card instance carries the whole charge. A split carries it in the
+    proportions it launches with, which is what the planner decided and therefore
+    what the engine's own report should be compared against.
+    """
+    from lilbee.providers.fleet.readback import device_label
+
+    if total <= 0 or not chosen:
+        return {}
+    if len(chosen) == 1:
+        return {device_label(chosen[0]): total}
+    weights = ratio if len(ratio) == len(chosen) else (1,) * len(chosen)
+    denominator = sum(weights) or len(chosen)
+    return {
+        device_label(device): total * weight // denominator
+        for device, weight in zip(chosen, weights, strict=True)
+    }
+
+
 def _launch_for(
     plan: InstancePlan,
     model_ref: str,
@@ -1215,6 +1238,7 @@ def _launch_for(
         # What placement charged this instance, for the post-launch check against
         # the engine's own report of what it really allocated.
         est_vram_bytes=est_vram_bytes,
+        est_vram_by_device=_charge_by_device(chosen, plan.tensor_split, est_vram_bytes),
     )
 
 

@@ -129,3 +129,81 @@ class TestEveryVendorGetsTheWarning:
         with caplog.at_level(logging.WARNING, logger="lilbee.providers.fleet.planning"):
             planning_mod.resolve_devices(Path("/bin/llama-server"))
         assert "reported none" not in caplog.text
+
+
+class TestABootTimeEmptyAnswerIsRetried:
+    """A driver not ready when the daemon starts must not decide the whole run.
+
+    The plan snapshot is taken once, on a clean box, and is not re-taken until a
+    full teardown. An empty first answer therefore persists for the daemon's
+    life, so a GPU host that booted a second too early served on CPU until
+    someone restarted it.
+    """
+
+    @staticmethod
+    def _answers(monkeypatch, results: list[list[object]]) -> list[int]:
+        from lilbee.providers.fleet import planning as planning_mod
+
+        calls: list[int] = []
+
+        def _resolve(_binary):
+            calls.append(1)
+            return list(results[min(len(calls) - 1, len(results) - 1)]), False
+
+        monkeypatch.setattr(planning_mod, "resolve_llama_server", lambda: Path("/bin/srv"))
+        monkeypatch.setattr("lilbee.providers.fleet.gpu_env.apply_fleet_gpu_env", lambda: None)
+        monkeypatch.setattr(
+            "lilbee.providers.fleet.cuda_runtime.apply_cuda_runtime_env", lambda: None
+        )
+        monkeypatch.setattr(planning_mod, "_resolve_devices_and_refusal", _resolve)
+        monkeypatch.setattr(planning_mod, "_PROBE_RETRY_DELAY_S", 0.0)
+        return calls
+
+    def test_a_gpu_host_probes_again_before_accepting_nothing(self, monkeypatch) -> None:
+        from lilbee.providers.fleet import planning as planning_mod
+        from lilbee.providers.fleet.devices import FleetDevice
+
+        card = FleetDevice("CUDA", 0, "gpu", 1, 1)
+        calls = self._answers(monkeypatch, [[], [], [card]])
+        monkeypatch.setattr(
+            "lilbee.providers.fleet.gpu_hardware.installed_gpu_vendor_ids",
+            lambda: frozenset({0x10DE}),
+        )
+        devices, _refused = planning_mod._probe_engine_devices()
+        assert devices == [card]
+        assert len(calls) == 3
+
+    def test_a_host_with_no_gpu_accepts_the_first_answer(self, monkeypatch) -> None:
+        from lilbee.providers.fleet import planning as planning_mod
+
+        calls = self._answers(monkeypatch, [[]])
+        monkeypatch.setattr(
+            "lilbee.providers.fleet.gpu_hardware.installed_gpu_vendor_ids", frozenset
+        )
+        devices, _refused = planning_mod._probe_engine_devices()
+        assert devices == []
+        assert len(calls) == 1
+
+    def test_a_first_answer_with_devices_is_not_retried(self, monkeypatch) -> None:
+        from lilbee.providers.fleet import planning as planning_mod
+        from lilbee.providers.fleet.devices import FleetDevice
+
+        calls = self._answers(monkeypatch, [[FleetDevice("CUDA", 0, "gpu", 1, 1)]])
+        planning_mod._probe_engine_devices()
+        assert len(calls) == 1
+
+    def test_a_card_that_never_appears_gives_up_and_says_nothing_is_there(
+        self, monkeypatch
+    ) -> None:
+        # A card the engine genuinely cannot use (no driver, wrong build) must not
+        # retry forever; the fleet still has to start, on CPU, with the warning.
+        from lilbee.providers.fleet import planning as planning_mod
+
+        calls = self._answers(monkeypatch, [[]])
+        monkeypatch.setattr(
+            "lilbee.providers.fleet.gpu_hardware.installed_gpu_vendor_ids",
+            lambda: frozenset({0x1002}),
+        )
+        devices, _refused = planning_mod._probe_engine_devices()
+        assert devices == []
+        assert len(calls) == 1 + planning_mod._PROBE_RETRIES

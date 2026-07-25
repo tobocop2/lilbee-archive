@@ -11,6 +11,7 @@ from lilbee.providers.fleet.readback import (
     parse_device_buffers,
     report_divergence,
 )
+from lilbee.providers.roles import WorkerRole
 
 
 def _mib(*values: float) -> int:
@@ -72,7 +73,7 @@ class TestReportDivergence:
     def test_warns_when_the_engine_used_materially_more(self, caplog) -> None:
         with caplog.at_level(logging.WARNING, logger="lilbee.providers.fleet.readback"):
             warned = report_divergence(
-                "chat", "org/m.gguf", 4 * 1024**3, 6 * 1024**3, tolerance=0.15
+                WorkerRole.CHAT, "org/m.gguf", 4 * 1024**3, 6 * 1024**3, tolerance=0.15
             )
         assert warned is True
         assert "allocated 6.0 GiB" in caplog.text
@@ -83,7 +84,7 @@ class TestReportDivergence:
         # Quieter, but it is why a role gets fewer slots or a split it did not need.
         with caplog.at_level(logging.WARNING, logger="lilbee.providers.fleet.readback"):
             warned = report_divergence(
-                "rerank", "org/r.gguf", 8 * 1024**3, 2 * 1024**3, tolerance=0.15
+                WorkerRole.RERANK, "org/r.gguf", 8 * 1024**3, 2 * 1024**3, tolerance=0.15
             )
         assert warned is True
         assert "-75%" in caplog.text
@@ -91,7 +92,7 @@ class TestReportDivergence:
     def test_stays_quiet_inside_the_tolerance(self, caplog) -> None:
         with caplog.at_level(logging.WARNING, logger="lilbee.providers.fleet.readback"):
             warned = report_divergence(
-                "chat", "org/m.gguf", 4 * 1024**3, int(4.3 * 1024**3), tolerance=0.15
+                WorkerRole.CHAT, "org/m.gguf", 4 * 1024**3, int(4.3 * 1024**3), tolerance=0.15
             )
         assert warned is False
         assert caplog.text == ""
@@ -100,8 +101,8 @@ class TestReportDivergence:
         # No buffer report, or a model enrolled at its file size with no estimate:
         # there is no comparison to make, and a warning would be noise.
         with caplog.at_level(logging.WARNING, logger="lilbee.providers.fleet.readback"):
-            assert report_divergence("chat", "m", 0, 6 * 1024**3, tolerance=0.15) is False
-            assert report_divergence("chat", "m", 4 * 1024**3, 0, tolerance=0.15) is False
+            assert report_divergence(WorkerRole.CHAT, "m", 0, 6 * 1024**3, tolerance=0.15) is False
+            assert report_divergence(WorkerRole.CHAT, "m", 4 * 1024**3, 0, tolerance=0.15) is False
         assert caplog.text == ""
 
 
@@ -141,7 +142,7 @@ class TestTheCheckRunsOnARealLog:
         log.write_text((Path(__file__).parent / "fixtures" / "engine-load-metal.log").read_text())
         with caplog.at_level(logging.WARNING, logger="lilbee.providers.fleet.readback"):
             # The engine really allocated ~0.22 GiB; planning charged 4 GiB.
-            warned = check_launch(tmp_path, "chat-0", "chat", "org/m.gguf", 4 * 1024**3)
+            warned = check_launch(tmp_path, "chat-0", WorkerRole.CHAT, "org/m.gguf", 4 * 1024**3)
         assert warned is True
         assert "planned for 4.0 GiB" in caplog.text
 
@@ -149,7 +150,7 @@ class TestTheCheckRunsOnARealLog:
         from lilbee.providers.fleet.readback import check_launch
 
         with caplog.at_level(logging.WARNING, logger="lilbee.providers.fleet.readback"):
-            assert check_launch(tmp_path, "chat-0", "chat", "m", 4 * 1024**3) is False
+            assert check_launch(tmp_path, "chat-0", WorkerRole.CHAT, "m", 4 * 1024**3) is False
         assert caplog.text == ""
 
     def test_the_engine_is_told_where_to_write_and_how_loudly(self, tmp_path) -> None:

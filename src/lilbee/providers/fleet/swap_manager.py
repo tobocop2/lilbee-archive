@@ -355,7 +355,7 @@ class SwapManager:
             check_launch(
                 self._log_path.parent,
                 model_id,
-                launch.role.value,
+                launch.role,
                 launch.model,
                 launch.est_vram_bytes,
             )

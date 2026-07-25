@@ -17,6 +17,8 @@ import logging
 import re
 from pathlib import Path
 
+from lilbee.providers.roles import WorkerRole
+
 log = logging.getLogger(__name__)
 
 MIB = 1024 * 1024
@@ -65,14 +67,12 @@ def parse_device_buffers(text: str) -> dict[str, int]:
 def device_footprint(text: str) -> int:
     """Total GPU bytes the engine reported, host buffers excluded."""
     return sum(
-        size
-        for device, size in parse_device_buffers(text).items()
-        if not _is_host_device(device)
+        size for device, size in parse_device_buffers(text).items() if not _is_host_device(device)
     )
 
 
 def report_divergence(
-    role: str,
+    role: WorkerRole,
     model: str,
     estimated_bytes: int,
     actual_bytes: int,
@@ -98,7 +98,7 @@ def report_divergence(
         "The %s model %s allocated %.1f GiB of GPU memory but was planned for %.1f GiB "
         "(%+.0f%%). Placement decisions for this model were made on the smaller figure; "
         "if it fails to load or runs slowly, that gap is why.",
-        role,
+        role.value,
         model,
         actual_bytes / 1024**3,
         estimated_bytes / 1024**3,
@@ -135,7 +135,9 @@ def engine_log_env(log_dir: Path, model_id: str) -> dict[str, str]:
     }
 
 
-def check_launch(log_dir: Path, model_id: str, role: str, model: str, estimated_bytes: int) -> bool:
+def check_launch(
+    log_dir: Path, model_id: str, role: WorkerRole, model: str, estimated_bytes: int
+) -> bool:
     """Compare the engine's own report for *model_id* against the estimate.
 
     Returns whether a warning was emitted. Silent when the log is absent or

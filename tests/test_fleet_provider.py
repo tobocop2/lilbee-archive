@@ -3486,9 +3486,20 @@ class TestLaunchStateRoundTrip:
             ctx=4096,
             replica=1,
             rerank_mode=RerankMode.LLM,
+            est_vram_bytes=7 * 1024**3,
         )
         rebuilt = InstanceLaunch.from_state(launch.to_state())
         assert rebuilt == launch
+
+    def test_a_state_file_written_before_the_estimate_existed_still_loads(self) -> None:
+        # Every field carries a default on the way in, so an engine recorded by an
+        # older lilbee is readable rather than a hard failure on upgrade.
+        payload = {
+            "role": "chat",
+            "argv": ["/bin/llama-server"],
+            "model": "o/c-GGUF/c.gguf",
+        }
+        assert InstanceLaunch.from_state(payload).est_vram_bytes == 0
 
 
 # ── The engine acquisition ladder ───────────────────────────────────

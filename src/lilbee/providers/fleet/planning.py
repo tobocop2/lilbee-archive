@@ -1613,6 +1613,30 @@ def _capped_by_device_memory(budget: int, devices: Sequence[FleetDevice]) -> int
     return min(budget, sum(d.total_bytes for d in devices))
 
 
+def _device_capacity(devices: list[FleetDevice], charge_against_free: bool) -> dict[int, int]:
+    """Per-device memory placement may charge against, keyed by device index.
+
+    A card's total is what it holds, not what is going spare. A compositor, a
+    browser, or a training job sitting on VRAM is invisible in the total, and the
+    usable fraction placement applies covers fragmentation and driver overhead
+    rather than other tenants, so a plan fits on paper and OOMs at load.
+
+    Free bytes answer that, but only where they mean "everyone else's residency":
+    that is the clean-box snapshot, taken after stale servers are reaped and
+    before anything is built. Read live on a warm box they also exclude the
+    fleet's own models, and since a plan always describes the complete intended
+    residency, charging them there would count the fleet against itself and
+    report a running plan as unplaceable. Those callers keep the total.
+
+    Placement applies its usable fraction to whatever this returns, so a card
+    with a tenant keeps a proportional margin rather than being packed to its
+    last free byte, where fragmentation is worst.
+    """
+    if not charge_against_free:
+        return {d.index: d.total_bytes for d in devices}
+    return {d.index: min(d.total_bytes, d.free_bytes) for d in devices}
+
+
 def _resolve_placement(
     placement: PlacementSpec | None,
     inputs: list[ModelPlacementInput],
@@ -1620,15 +1644,11 @@ def _resolve_placement(
     devices: list[FleetDevice],
     *,
     unified_budget: int | None,
+    charge_against_free: bool = False,
 ) -> Placement:
     """Resolve a Placement from the manual spec when set, else the auto planner."""
     estimate_peak = _peak_estimator(model_refs)
-    # Size placement against each card's TOTAL capacity, not its instantaneous
-    # free VRAM. plan_launches always plans the complete fleet, so the plan
-    # defines the full intended residency; charging it against live free_bytes
-    # double-counts models the fleet has already loaded (a warm get_placement or
-    # reload would then falsely report the plan as unplaceable). bb-a8f.
-    capacity = {d.index: d.total_bytes for d in devices}
+    capacity = _device_capacity(devices, charge_against_free)
     if placement is not None:
         return placement_from_spec(
             placement,
@@ -1636,16 +1656,15 @@ def _resolve_placement(
             capacity,
             estimate_peak=estimate_peak,
         )
-    # The chat split's card count is decided against the snapshot's free VRAM (what the launch
-    # sizes its context against) so placement and launch agree; charging still uses
-    # total capacity above, preserving the bb-a8f no-double-count invariant. A split
-    # needs >=2 GPUs, so skip the chat model's gguf read entirely below that.
+    # The chat split's card count is decided against the snapshot's free VRAM (what the
+    # launch sizes its context against) so placement and launch agree. A split needs
+    # >=2 GPUs, so skip the chat model's gguf read entirely below that.
     chat_ctx_fit, chat_ctx_target = (
         _chat_split_ctx_objective(model_refs) if len(capacity) >= _MIN_SPLIT_GPUS else (None, 0)
     )
     return plan_placement(
         inputs,
-        [(idx, total) for idx, total in capacity.items()],
+        [(idx, budget) for idx, budget in capacity.items()],
         estimate_peak=estimate_peak,
         unified_budget=unified_budget,
         chat_ctx_fit=chat_ctx_fit,
@@ -1661,6 +1680,7 @@ def _placement_or_auto(
     devices: list[FleetDevice],
     *,
     unified_budget: int | None,
+    charge_against_free: bool = False,
 ) -> tuple[Placement, bool]:
     """Resolve a saved spec, falling back to auto when it no longer fits the hardware.
 
@@ -1674,11 +1694,21 @@ def _placement_or_auto(
     """
     if placement is None:
         return _resolve_placement(
-            None, inputs, model_refs, devices, unified_budget=unified_budget
+            None,
+            inputs,
+            model_refs,
+            devices,
+            unified_budget=unified_budget,
+            charge_against_free=charge_against_free,
         ), False
     try:
         return _resolve_placement(
-            placement, inputs, model_refs, devices, unified_budget=unified_budget
+            placement,
+            inputs,
+            model_refs,
+            devices,
+            unified_budget=unified_budget,
+            charge_against_free=charge_against_free,
         ), True
     except PlacementError as exc:
         log.warning(
@@ -1687,7 +1717,12 @@ def _placement_or_auto(
             exc,
         )
     return _resolve_placement(
-        None, inputs, model_refs, devices, unified_budget=unified_budget
+        None,
+        inputs,
+        model_refs,
+        devices,
+        unified_budget=unified_budget,
+        charge_against_free=charge_against_free,
     ), False
 
 
@@ -1816,6 +1851,9 @@ def plan_launches(
         model_refs,
         devices,
         unified_budget=_unified_admission_budget(devices),
+        # Only the clean-box snapshot's free bytes mean "what other tenants hold";
+        # a live probe here would also be missing the fleet's own residency.
+        charge_against_free=_plan_probe_store.get() is not None,
     )
     _log_placement_findings(placement, model_refs)
     reserved_by_device = _non_chat_reservation(placement.instances, inputs, placement.co_tenants)

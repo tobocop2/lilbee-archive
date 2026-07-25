@@ -1978,11 +1978,13 @@ class TestSizingBudgetComesFromTheDevice:
         )
         monkeypatch.setattr("lilbee.providers.model_cache.total_system_memory", lambda: host_ram)
         monkeypatch.setattr("lilbee.providers.model_cache.free_system_memory", lambda: host_ram)
-        # What the host-RAM read really answers on a machine with no NVIDIA card.
-        monkeypatch.setattr(
-            "lilbee.providers.model_cache.get_available_memory",
-            lambda frac, **_k: int(host_ram * frac),
-        )
+
+        # Nothing here may fall back to the host-memory read; reaching it is the
+        # defect these tests exist to catch, so make it loud rather than plausible.
+        def _host_read(*_a, **_k):
+            raise AssertionError("sizing budget fell back to the host-memory read")
+
+        monkeypatch.setattr("lilbee.providers.model_cache.get_available_memory", _host_read)
         planning_mod.capture_plan_probe()
 
     def test_discrete_card_is_not_sized_against_host_ram(self, monkeypatch) -> None:
@@ -2033,8 +2035,8 @@ class TestSizingBudgetComesFromTheDevice:
         # just because the host has the RAM.
         igpu = FleetDevice("Vulkan", 0, "Radeon 780M", 8 * _GB, 8 * _GB, unified=True)
         self._capture(monkeypatch, [igpu], host_ram=64 * _GB)
-        assert planning_mod._unified_memory_budget([igpu]) <= 8 * _GB
-        assert planning_mod._unified_admission_budget([igpu]) <= 8 * _GB
+        assert planning_mod._unified_memory_budget([igpu]) == 8 * _GB
+        assert planning_mod._unified_admission_budget([igpu]) == 8 * _GB
 
 
 class TestPlacementFindingsLog:
@@ -2832,7 +2834,6 @@ def test_capturing_the_plan_snapshot_probes_the_engine_once(monkeypatch) -> None
         "lilbee.providers.fleet.cuda_runtime.assert_gpu_devices_usable", lambda *_a: None
     )
     monkeypatch.setattr(planning_mod, "probe_devices", _counting)
-    monkeypatch.setattr("lilbee.providers.model_cache.get_available_memory", lambda _f: 20 * _GB)
     monkeypatch.setattr("lilbee.providers.model_cache.free_system_memory", lambda: 64 * _GB)
     planning_mod.clear_plan_probe()
     try:

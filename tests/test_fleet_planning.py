@@ -317,8 +317,7 @@ def test_unified_memory_budget_subtracts_os_floor_when_no_gpu(monkeypatch) -> No
     monkeypatch.setattr("lilbee.providers.model_cache.free_system_memory", lambda: 20 * 10**9)
     monkeypatch.setattr("lilbee.providers.model_cache.total_system_memory", lambda: 64 * 10**9)
     assert (
-        planning_mod._unified_memory_budget([])
-        == 20 * 10**9 - planning_mod._SYSTEM_MEMORY_FLOOR_CAP_BYTES
+        planning_mod._unified_memory_budget([]) == 20 * 10**9 - planning_mod._system_memory_floor()
     )
 
 
@@ -891,8 +890,8 @@ class TestBuildFleetWiring:
 
         chat = planning_mod._estimate_role(WorkerRole.CHAT, "ref")
         embed = planning_mod._estimate_role(WorkerRole.EMBED, "ref")
-        # chat charged at the serve budget: 10000 * (USABLE_VRAM_FRACTION / 0.75); embed raw.
-        assert chat.est_vram_bytes == int(10000 * (planning_mod.USABLE_VRAM_FRACTION / 0.75))
+        # chat charged at the serve budget: 10000 * (usable fraction / 0.75); embed raw.
+        assert chat.est_vram_bytes == int(10000 * (planning_mod.usable_vram_fraction() / 0.75))
         assert embed.est_vram_bytes == 10000
 
     def test_launch_for_vision_passes_mmproj(self, tmp_path, monkeypatch) -> None:

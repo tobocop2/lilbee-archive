@@ -43,7 +43,7 @@ from lilbee.providers.fleet.placement import (
 )
 from lilbee.providers.fleet.placement_spec import PlacementError, PlacementSpec
 from lilbee.providers.fleet.replicas import resolve_replica_count
-from lilbee.providers.fleet.vram import USABLE_VRAM_FRACTION, estimate_instance_footprint
+from lilbee.providers.fleet.vram import estimate_instance_footprint, usable_vram_fraction
 from lilbee.providers.model_ref import parse_model_ref
 from lilbee.providers.roles import ROLE_REGISTRY, RerankMode, WorkerRole
 
@@ -113,7 +113,6 @@ _LLM_RERANK_VRAM_FRACTION = 0.5
 # RAM kept free for the OS when placing against system memory (no discrete GPU):
 # a quarter of total RAM, capped at 4 GiB. A fixed 4 GiB floor leaves a small
 # host (7-8 GB) with no budget at all, refusing to serve even tiny models.
-_SYSTEM_MEMORY_FLOOR_CAP_BYTES = 4 * 1024**3
 _SYSTEM_MEMORY_FLOOR_DIVISOR = 4
 # A GPU driver still initializing at boot answers with no devices. Ask again
 # before letting that decide the daemon's whole run; two extra probes cost a
@@ -600,7 +599,7 @@ def _estimate_role(
 def _chat_serve_budget_footprint(footprint: int) -> int:
     """Charge a chat instance against the serve budget, not the placement headroom.
 
-    The planner fits instances within ``USABLE_VRAM_FRACTION`` of a card, but a
+    The planner fits instances within ``cfg.usable_vram_fraction`` of a card, but a
     single-card chat then sizes its KV cache against the smaller
     ``cfg.gpu_memory_fraction`` budget (``resolve_chat_ctx``). A model that fills a
     card at 0.9 leaves no room for KV at 0.75 and collapses to a few hundred tokens,
@@ -611,7 +610,7 @@ def _chat_serve_budget_footprint(footprint: int) -> int:
     """
     from lilbee.core.config import cfg
 
-    return int(footprint * (USABLE_VRAM_FRACTION / cfg.gpu_memory_fraction))
+    return int(footprint * (usable_vram_fraction() / cfg.gpu_memory_fraction))
 
 
 def _placement_estimate_ctx(role: WorkerRole, model_path: Path, meta: dict[str, str] | None) -> int:
@@ -1667,11 +1666,9 @@ def _unified_memory_budget(devices: list[FleetDevice]) -> int | None:
     # roughly the whole system footprint.
     if any(not device.unified for device in devices):
         return None
-    floor = min(
-        _SYSTEM_MEMORY_FLOOR_CAP_BYTES,
-        model_cache.total_system_memory() // _SYSTEM_MEMORY_FLOOR_DIVISOR,
+    return _capped_by_device_memory(
+        max(0, _plan_free_system_memory() - _system_memory_floor()), devices
     )
-    return _capped_by_device_memory(max(0, _plan_free_system_memory() - floor), devices)
 
 
 def _unified_admission_budget(devices: list[FleetDevice]) -> int | None:
@@ -1687,11 +1684,22 @@ def _unified_admission_budget(devices: list[FleetDevice]) -> int | None:
     """
     if _unified_memory_budget(devices) is None:
         return None
-    floor = min(
-        _SYSTEM_MEMORY_FLOOR_CAP_BYTES,
-        model_cache.total_system_memory() // _SYSTEM_MEMORY_FLOOR_DIVISOR,
+    return _capped_by_device_memory(
+        max(0, model_cache.total_system_memory() - _system_memory_floor()), devices
     )
-    return _capped_by_device_memory(max(0, model_cache.total_system_memory() - floor), devices)
+
+
+def _system_memory_floor() -> int:
+    """RAM held back for the OS when placing against system memory.
+
+    ``cfg.system_memory_reserve_gb``, still capped at a quarter of installed RAM:
+    a fixed reserve leaves a 7-8 GB host with no budget at all and refuses even
+    tiny models, so the proportional cap holds however the reserve is set.
+    """
+    from lilbee.core.config import cfg
+
+    total = model_cache.total_system_memory()
+    return min(int(cfg.system_memory_reserve_gb * 1024**3), total // _SYSTEM_MEMORY_FLOOR_DIVISOR)
 
 
 def _capped_by_device_memory(budget: int, devices: Sequence[FleetDevice]) -> int:

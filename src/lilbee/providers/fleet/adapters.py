@@ -98,6 +98,7 @@ _RERANK_MODE_SPECS: dict[RerankMode, RoleServerSpec] = {
 LLM_RERANK_CONCURRENCY = 8
 
 
+
 def resolve_rerank_mode(reranker_type: RerankerType, arch: str | None) -> RerankMode:
     """Pick the reranker serving mode from the config setting and GGUF arch.
 
@@ -211,6 +212,7 @@ def build_server_argv(
     ``--ctx-size`` is the per-slot context times the slot count, since
     llama-server divides total context across parallel slots. ``n_cpu_moe``
     wins over ``cpu_moe``; the pair would offload the same tensors twice.
+
     """
     argv = [
         str(binary),

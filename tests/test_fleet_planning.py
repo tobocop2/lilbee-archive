@@ -2078,6 +2078,36 @@ class TestPlacementChargesAgainstFreeMemory:
         assert placement.tight_roles == {}
 
 
+class TestFlashAttentionParity:
+    """One decision feeds both the estimate and the launch.
+
+    The estimate's role set and the launch's disagreed: an LLM reranker is
+    generative and launches with flash attention, but the registry marks RERANK
+    as a non-flash role, so it was always sized as though it had none.
+    """
+
+    def test_an_llm_reranker_is_estimated_with_the_flash_it_launches_with(
+        self, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(cfg, "flash_attention", True)
+        monkeypatch.setattr(planning_mod, "_fleet_backend", lambda: "CUDA")
+        assert planning_mod.flash_attn_flag() == "on"
+        assert planning_mod._role_flash(WorkerRole.RERANK, RerankMode.LLM) is True
+
+    def test_a_cross_encoder_reranker_is_still_estimated_without_flash(self, monkeypatch) -> None:
+        monkeypatch.setattr(cfg, "flash_attention", True)
+        monkeypatch.setattr(planning_mod, "_fleet_backend", lambda: "CUDA")
+        assert planning_mod._role_flash(WorkerRole.RERANK, RerankMode.CROSS_ENCODER) is False
+
+    def test_auto_is_still_estimated_as_though_off(self, monkeypatch) -> None:
+        # Under auto the engine decides at load, so the estimate must assume the
+        # larger no-flash cache rather than the one it might not get.
+        monkeypatch.setattr(cfg, "flash_attention", None)
+        monkeypatch.setattr(planning_mod, "_fleet_backend", lambda: "Vulkan")
+        assert planning_mod.flash_attn_flag() == "auto"
+        assert planning_mod._role_flash(WorkerRole.CHAT) is False
+
+
 class TestSlotsAreChargedOnce:
     """The estimator is given a per-slot context and does the multiply itself.
 

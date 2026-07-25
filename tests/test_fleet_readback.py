@@ -1,0 +1,166 @@
+"""Tests for reading the engine's real footprint back out of its startup report."""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+
+from lilbee.providers.fleet.readback import (
+    MIB,
+    device_footprint,
+    parse_device_buffers,
+    report_divergence,
+)
+
+
+def _mib(*values: float) -> int:
+    """Bytes for a set of MiB figures, truncated per line as the parser does."""
+    return sum(int(value * MIB) for value in values)
+
+
+# Real llama.cpp startup output, trimmed to the lines that report allocations.
+_CUDA_LOAD = """
+llama_model_loader: loaded meta data with 30 key-value pairs
+load_tensors: offloading 36 repeating layers to GPU
+load_tensors: offloaded 37/37 layers to GPU
+load_tensors:        CUDA0 model buffer size =  4589.31 MiB
+load_tensors:   CPU_Mapped model buffer size =   315.30 MiB
+llama_context: n_ctx = 8192
+llama_kv_cache_unified:      CUDA0 KV buffer size =  1152.00 MiB
+llama_context:      CUDA0 compute buffer size =   304.00 MiB
+llama_context:        CPU compute buffer size =    24.01 MiB
+"""
+
+_SPLIT_LOAD = """
+load_tensors:        CUDA0 model buffer size =  2000.00 MiB
+load_tensors:        CUDA1 model buffer size =  2048.00 MiB
+llama_kv_cache_unified:      CUDA0 KV buffer size =   512.00 MiB
+llama_kv_cache_unified:      CUDA1 KV buffer size =   512.00 MiB
+"""
+
+
+class TestParseDeviceBuffers:
+    def test_sums_model_kv_and_compute_per_device(self) -> None:
+        buffers = parse_device_buffers(_CUDA_LOAD)
+        assert buffers["CUDA0"] == _mib(4589.31, 1152.00, 304.00)
+        # CPU_Mapped folds into CPU: the mmapped weights are host memory too.
+        assert buffers["CPU"] == _mib(315.30, 24.01)
+
+    def test_keeps_each_card_of_a_split_apart(self) -> None:
+        buffers = parse_device_buffers(_SPLIT_LOAD)
+        assert buffers == {
+            "CUDA0": _mib(2000.00, 512.00),
+            "CUDA1": _mib(2048.00, 512.00),
+        }
+
+    def test_a_log_with_no_buffer_report_parses_empty(self) -> None:
+        # An older engine, a load that died before allocating, or a rotated log.
+        assert parse_device_buffers("llama_model_loader: loaded meta data\n") == {}
+
+
+class TestDeviceFootprint:
+    def test_excludes_host_buffers(self) -> None:
+        # CPU_Mapped is the mmapped weights and CPU is host scratch. Charging
+        # either against a card reports a phantom overrun on every partial offload.
+        assert device_footprint(_CUDA_LOAD) == _mib(4589.31, 1152.00, 304.00)
+
+    def test_sums_every_card_of_a_split(self) -> None:
+        assert device_footprint(_SPLIT_LOAD) == _mib(2000.00, 512.00) + _mib(2048.00, 512.00)
+
+
+class TestReportDivergence:
+    def test_warns_when_the_engine_used_materially_more(self, caplog) -> None:
+        with caplog.at_level(logging.WARNING, logger="lilbee.providers.fleet.readback"):
+            warned = report_divergence(
+                "chat", "org/m.gguf", 4 * 1024**3, 6 * 1024**3, tolerance=0.15
+            )
+        assert warned is True
+        assert "allocated 6.0 GiB" in caplog.text
+        assert "planned for 4.0 GiB" in caplog.text
+        assert "+50%" in caplog.text
+
+    def test_warns_when_the_estimate_was_far_too_large(self, caplog) -> None:
+        # Quieter, but it is why a role gets fewer slots or a split it did not need.
+        with caplog.at_level(logging.WARNING, logger="lilbee.providers.fleet.readback"):
+            warned = report_divergence(
+                "rerank", "org/r.gguf", 8 * 1024**3, 2 * 1024**3, tolerance=0.15
+            )
+        assert warned is True
+        assert "-75%" in caplog.text
+
+    def test_stays_quiet_inside_the_tolerance(self, caplog) -> None:
+        with caplog.at_level(logging.WARNING, logger="lilbee.providers.fleet.readback"):
+            warned = report_divergence(
+                "chat", "org/m.gguf", 4 * 1024**3, int(4.3 * 1024**3), tolerance=0.15
+            )
+        assert warned is False
+        assert caplog.text == ""
+
+    def test_an_unparsed_or_unestimated_instance_says_nothing(self, caplog) -> None:
+        # No buffer report, or a model enrolled at its file size with no estimate:
+        # there is no comparison to make, and a warning would be noise.
+        with caplog.at_level(logging.WARNING, logger="lilbee.providers.fleet.readback"):
+            assert report_divergence("chat", "m", 0, 6 * 1024**3, tolerance=0.15) is False
+            assert report_divergence("chat", "m", 4 * 1024**3, 0, tolerance=0.15) is False
+        assert caplog.text == ""
+
+
+class TestAgainstRealEngineOutput:
+    """The fixture is a real llama-server load, captured with --log-file -lv 4.
+
+    Everything above is a hand-written sample and would keep passing if the
+    engine's format moved. This one fails when it does.
+    """
+
+    @staticmethod
+    def _fixture() -> str:
+        return (Path(__file__).parent / "fixtures" / "engine-load-metal.log").read_text()
+
+    def test_finds_every_buffer_the_engine_reported(self) -> None:
+        buffers = parse_device_buffers(self._fixture())
+        # Weights and scratch on the GPU, weights and output on the host.
+        assert set(buffers) == {"MTL0", "CPU"}
+
+    def test_folds_the_mapped_buffer_into_its_own_device(self) -> None:
+        # The engine reports MTL0_Mapped beside MTL0; both are that card's memory.
+        buffers = parse_device_buffers(self._fixture())
+        assert buffers["MTL0"] == _mib(82.41, 45.00, 97.12)
+
+    def test_charges_only_the_gpu(self) -> None:
+        # CPU_Mapped weights and the CPU output/compute buffers are host memory.
+        assert device_footprint(self._fixture()) == _mib(82.41, 45.00, 97.12)
+
+
+class TestTheCheckRunsOnARealLog:
+    """The whole path: engine log on disk, estimate in hand, one warning."""
+
+    def test_warns_using_the_engine_s_own_report(self, tmp_path, caplog) -> None:
+        from lilbee.providers.fleet.readback import check_launch, engine_log_path
+
+        log = engine_log_path(tmp_path, "chat-0")
+        log.write_text((Path(__file__).parent / "fixtures" / "engine-load-metal.log").read_text())
+        with caplog.at_level(logging.WARNING, logger="lilbee.providers.fleet.readback"):
+            # The engine really allocated ~0.22 GiB; planning charged 4 GiB.
+            warned = check_launch(tmp_path, "chat-0", "chat", "org/m.gguf", 4 * 1024**3)
+        assert warned is True
+        assert "planned for 4.0 GiB" in caplog.text
+
+    def test_a_missing_log_says_nothing(self, tmp_path, caplog) -> None:
+        from lilbee.providers.fleet.readback import check_launch
+
+        with caplog.at_level(logging.WARNING, logger="lilbee.providers.fleet.readback"):
+            assert check_launch(tmp_path, "chat-0", "chat", "m", 4 * 1024**3) is False
+        assert caplog.text == ""
+
+    def test_the_engine_is_told_where_to_write_and_how_loudly(self, tmp_path) -> None:
+        from lilbee.providers.fleet.readback import (
+            ENV_LOG_FILE,
+            ENV_LOG_VERBOSITY,
+            engine_log_env,
+        )
+
+        env = engine_log_env(tmp_path, "rerank-1")
+        assert env[ENV_LOG_FILE].endswith("engine-rerank-1.log")
+        # Below this the engine prints no buffer report at all, so the check
+        # would silently never fire.
+        assert env[ENV_LOG_VERBOSITY] == "4"

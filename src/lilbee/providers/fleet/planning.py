@@ -1079,8 +1079,9 @@ def _launch_for(
 
     chosen = tuple(by_index[i] for i in plan.devices)
     # ctx and slots are sized against the card this role landed on, not the fleet's
-    # smallest, which is all the pre-placement estimate had to go on. A tensor-split
-    # chat has no single card and sizes against per-device headroom below instead.
+    # smallest, which is all the pre-placement estimate had to go on. A role spread
+    # over several cards has no one budget; the split chat, the only such role today,
+    # sizes against per-device headroom below.
     placed_device = chosen[0] if len(chosen) == 1 else None
     is_chat = plan.role is WorkerRole.CHAT
     is_vision = plan.role is WorkerRole.VISION
@@ -1357,7 +1358,9 @@ class _PlanProbe:
     """
 
     devices: tuple[FleetDevice, ...]
-    available_vram: int
+    # What one role may size its ctx and slots against, already scaled by
+    # cfg.gpu_memory_fraction. System memory only on a host with no GPU.
+    sizing_budget: int
     free_system: int
     # The engine listed GPUs and lilbee rejected all of them, so the plan is
     # CPU-shaped while the engine would still choose one of those devices.
@@ -1422,7 +1425,7 @@ def capture_plan_probe() -> None:
     _plan_probe_store.set(
         _PlanProbe(
             devices=tuple(devices),
-            available_vram=_device_sizing_budget(devices),
+            sizing_budget=_device_sizing_budget(devices),
             free_system=model_cache.free_system_memory(),
             engine_devices_all_refused=refused_all,
         )
@@ -1469,7 +1472,7 @@ def plan_sizing_budget(device: FleetDevice | None = None) -> int:
         return int(device.total_bytes * cfg.gpu_memory_fraction)
     probe = _plan_probe_store.get()
     if probe is not None:
-        return probe.available_vram
+        return probe.sizing_budget
     return _device_sizing_budget(_live_sizing_devices())
 
 

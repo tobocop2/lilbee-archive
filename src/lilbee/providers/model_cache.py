@@ -89,7 +89,7 @@ def compute_dynamic_ctx(
     floor: int = _DYNAMIC_CTX_FLOOR,
     quantum: int = _DYNAMIC_CTX_QUANTUM,
 ) -> int:
-    """Pick the n_ctx that best fits target, ceiling, and host RAM.
+    """Pick the n_ctx that best fits target, ceiling, and ``available_bytes``.
 
     Selection rule, in order:
 
@@ -97,10 +97,10 @@ def compute_dynamic_ctx(
        model cannot exceed its training window and the caller may cap below it.
     2. If ``target`` is provided, prefer it (clamped to ``[floor, upper]``)
        so a 40K-context model still loads at 8K when chat doesn't need more,
-       rather than maximising n_ctx just because RAM allows it.
-    3. ``raw_ctx = budget // kv_bytes_per_tok`` is the largest n_ctx the host
-       can physically back. The result is clamped to ``raw_ctx`` so we never
-       over-allocate on memory-constrained boxes.
+       rather than maximising n_ctx just because the memory allows it.
+    3. ``raw_ctx = budget // kv_bytes_per_tok`` is the largest n_ctx the
+       available memory can physically back. The result is clamped to
+       ``raw_ctx`` so we never over-allocate on memory-constrained boxes.
     4. Result is quantized down to ``quantum`` and floored at ``floor``.
     """
     upper = min(training_ctx, ceiling)
@@ -113,7 +113,7 @@ def compute_dynamic_ctx(
     if budget <= 0:
         return floor
     raw_ctx = budget // kv_bytes_per_tok
-    # Aim for target when set, but never above what host RAM or model training_ctx permit.
+    # Aim for target when set, but never above what the memory or training_ctx permit.
     desired = min(target, raw_ctx, upper) if target is not None else min(raw_ctx, upper)
     bounded = max(floor, desired)
     quantized = (bounded // quantum) * quantum

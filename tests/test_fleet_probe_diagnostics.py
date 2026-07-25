@@ -207,3 +207,22 @@ class TestABootTimeEmptyAnswerIsRetried:
         devices, _refused = planning_mod._probe_engine_devices()
         assert devices == []
         assert len(calls) == 1 + planning_mod._PROBE_RETRIES
+
+
+class TestPartialOutputArrivesInEitherShape:
+    """CPython hands back bytes from a timeout even when the pipe is in text mode."""
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            (b"ggml: device hung\n", "ggml: device hung"),
+            ("ggml: device hung\n", "ggml: device hung"),
+            (b"\xff\xfe not utf-8", "�� not utf-8"),
+            (None, "(nothing)"),
+        ],
+        ids=["bytes", "str", "undecodable", "absent"],
+    )
+    def test_the_probe_tail_reads_it_either_way(self, raw: object, expected: str) -> None:
+        from lilbee.providers.fleet.devices import _decoded_output, _probe_tail
+
+        assert _probe_tail(_decoded_output(raw)) == expected

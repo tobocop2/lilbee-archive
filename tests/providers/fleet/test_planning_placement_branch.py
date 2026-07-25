@@ -60,7 +60,7 @@ def test_resolve_placement_plan_uses_read_cache(monkeypatch):
 
     monkeypatch.setattr(planning, "resolve_llama_server", lambda: Path("/fake"))
     monkeypatch.setattr(gpu_env, "apply_fleet_gpu_env", lambda: None)
-    monkeypatch.setattr(cuda_runtime, "apply_cuda_runtime_env", lambda: None)
+    monkeypatch.setattr(cuda_runtime, "apply_cuda_runtime_env", lambda *_a: None)
     monkeypatch.setattr(planning, "resolve_devices", counting)
     monkeypatch.setattr(
         planning,
@@ -190,7 +190,7 @@ def test_interactive_resolve_still_raises(monkeypatch):
     planning.clear_read_device_cache()
     monkeypatch.setattr(planning, "resolve_llama_server", lambda: Path("/fake"))
     monkeypatch.setattr(gpu_env, "apply_fleet_gpu_env", lambda: None)
-    monkeypatch.setattr(cuda_runtime, "apply_cuda_runtime_env", lambda: None)
+    monkeypatch.setattr(cuda_runtime, "apply_cuda_runtime_env", lambda *_a: None)
     monkeypatch.setattr(planning, "resolve_devices", lambda _b: [])
     monkeypatch.setattr(
         planning,
@@ -217,7 +217,7 @@ def test_read_path_reports_the_plan_it_fell_back_to(monkeypatch):
     planning.clear_read_device_cache()
     monkeypatch.setattr(planning, "resolve_llama_server", lambda: Path("/fake"))
     monkeypatch.setattr(gpu_env, "apply_fleet_gpu_env", lambda: None)
-    monkeypatch.setattr(cuda_runtime, "apply_cuda_runtime_env", lambda: None)
+    monkeypatch.setattr(cuda_runtime, "apply_cuda_runtime_env", lambda *_a: None)
     monkeypatch.setattr(planning, "resolve_devices", lambda _b: [])
     monkeypatch.setattr(
         planning,

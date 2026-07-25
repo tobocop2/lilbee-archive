@@ -1462,7 +1462,7 @@ def _probe_engine_devices() -> tuple[list[FleetDevice], bool]:
 
     apply_fleet_gpu_env()
     binary = resolve_llama_server()
-    apply_cuda_runtime_env()
+    apply_cuda_runtime_env(binary)
     devices, refused = _resolve_devices_and_refusal(binary)
     if devices:
         return devices, refused
@@ -1858,7 +1858,7 @@ def resolve_placement_plan(
 
     apply_fleet_gpu_env()
     binary = resolve_llama_server()
-    apply_cuda_runtime_env()
+    apply_cuda_runtime_env(binary)
     devices = _read_device_cache.get(binary)
     unified_budget = _unified_memory_budget(devices)
     inputs, model_refs, _, skipped_not_installed = _server_model_inputs(

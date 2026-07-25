@@ -64,6 +64,17 @@ def parse_device_buffers(text: str) -> dict[str, int]:
     return totals
 
 
+# The engine says this once the weights are in and it is wiring up slots. Its
+# presence means the load finished, which is what separates "the report has not
+# been written yet" from "this engine does not write one where we look".
+_LOAD_FINISHED_RE = re.compile(r"load_model:\s+initializing slots")
+
+
+def load_finished(text: str) -> bool:
+    """Whether the engine got far enough to have reported its buffers."""
+    return _LOAD_FINISHED_RE.search(text) is not None
+
+
 def device_footprint(text: str) -> int:
     """Total GPU bytes the engine reported, host buffers excluded."""
     return sum(
@@ -140,15 +151,33 @@ def check_launch(
 ) -> bool:
     """Compare the engine's own report for *model_id* against the estimate.
 
-    Returns whether a warning was emitted. Silent when the log is absent or
-    carries no report yet: the engine writes it during load, and a caller that
-    asks too early should get nothing rather than a fabricated comparison.
+    Three outcomes, and the third is the one that matters. The engine has no API
+    for any of this: /props carries no memory keys and /metrics is token
+    counters, both checked against a running server, so its log is the only
+    place these numbers exist. That makes this the one part of the fleet whose
+    input is a format nobody promises to keep.
+
+    So a load that finished without a readable report is reported, not swallowed.
+    Left silent it would look exactly like a correct estimate, and the check
+    would quietly become decoration the first time llama.cpp renames a line or
+    renumbers its verbosity levels. Loud, it names itself as the thing to fix.
     """
     try:
         text = engine_log_path(log_dir, model_id).read_text(errors="replace")
     except OSError:
+        # No log yet: the engine has not started writing. Nothing to say.
         return False
     actual = device_footprint(text)
+    if actual <= 0:
+        if load_finished(text):
+            log.warning(
+                "The %s engine finished loading but reported no memory usage where lilbee "
+                "reads it, so its estimate could not be checked. The engine's log format or "
+                "verbosity levels have most likely changed; lilbee's placement estimates are "
+                "unverified until it is updated to match.",
+                role.value,
+            )
+        return False
     return report_divergence(role, model, estimated_bytes, actual, tolerance=_TOLERANCE)
 
 

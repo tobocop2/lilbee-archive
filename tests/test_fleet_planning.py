@@ -24,6 +24,11 @@ from lilbee.providers.roles import RerankMode, WorkerRole
 _GB = 1024**3
 
 
+def _card(total_bytes: int, *, index: int = 0) -> FleetDevice:
+    """A discrete card of *total_bytes*, the memory sizing budgets come from."""
+    return FleetDevice("CUDA", index, f"gpu{index}", total_bytes, total_bytes)
+
+
 def _fixed_estimator(*, vram: int = 1024, unified: int | None = None):
     """A gguf-parser stand-in returning a constant footprint (no subprocess)."""
     total_unified = vram if unified is None else unified
@@ -194,27 +199,33 @@ def test_slots_for_llm_rerank_uses_full_fanout_when_vram_ample(monkeypatch) -> N
     from lilbee.providers.fleet.adapters import LLM_RERANK_CONCURRENCY
 
     monkeypatch.setattr(cfg, "gpu_memory_fraction", 0.75)
-    monkeypatch.setattr("lilbee.providers.model_cache.get_available_memory", lambda _f: 10**12)
     monkeypatch.setattr(
         planning_mod, "estimate_instance_footprint", _slotted_estimator(base=10**8, per_slot=10**7)
     )
     n = planning_mod._slots_for(
-        WorkerRole.RERANK, Path("/m/r.gguf"), 1024, rerank_mode=RerankMode.LLM
+        WorkerRole.RERANK,
+        Path("/m/r.gguf"),
+        1024,
+        rerank_mode=RerankMode.LLM,
+        device=_card(10**12),
     )
     assert n == LLM_RERANK_CONCURRENCY
 
 
 def test_slots_for_llm_rerank_steps_down_when_vram_tight(monkeypatch) -> None:
     monkeypatch.setattr(cfg, "gpu_memory_fraction", 0.75)
-    monkeypatch.setattr("lilbee.providers.model_cache.get_available_memory", lambda _f: 10**9)
-    # budget = 1e9 * _LLM_RERANK_VRAM_FRACTION(0.5) = 5e8; 4e8 + 2e8/slot fits only 1.
+    # budget = 1e9 * 0.75 * _LLM_RERANK_VRAM_FRACTION(0.5) = 3.75e8; 4e8 base fits only 1.
     monkeypatch.setattr(
         planning_mod,
         "estimate_instance_footprint",
         _slotted_estimator(base=4 * 10**8, per_slot=2 * 10**8),
     )
     n = planning_mod._slots_for(
-        WorkerRole.RERANK, Path("/m/r.gguf"), 1024, rerank_mode=RerankMode.LLM
+        WorkerRole.RERANK,
+        Path("/m/r.gguf"),
+        1024,
+        rerank_mode=RerankMode.LLM,
+        device=_card(10**9),
     )
     assert n == 1
 
@@ -222,52 +233,55 @@ def test_slots_for_llm_rerank_steps_down_when_vram_tight(monkeypatch) -> None:
 def test_slots_for_chat_is_vram_aware(monkeypatch) -> None:
     # Chat is no longer a fixed 4: a giant on a ~24GB Metal budget steps down.
     monkeypatch.setattr(cfg, "gpu_memory_fraction", 0.75)
-    monkeypatch.setattr("lilbee.providers.model_cache.get_available_memory", lambda _f: 24 * 10**9)
-    # budget = 24e9 * _CHAT_VRAM_FRACTION(0.8) = 19.2e9; 17e9 + 2e9/slot never fits >1.
+    # budget = 24e9 * 0.75 * _CHAT_VRAM_FRACTION(0.8) = 14.4e9; 17e9 base never fits.
     monkeypatch.setattr(
         planning_mod,
         "estimate_instance_footprint",
         _slotted_estimator(base=17 * 10**9, per_slot=2 * 10**9),
     )
-    assert planning_mod._slots_for(WorkerRole.CHAT, Path("/m/c.gguf"), 65536) == 1
+    assert (
+        planning_mod._slots_for(WorkerRole.CHAT, Path("/m/c.gguf"), 65536, device=_card(24 * 10**9))
+        == 1
+    )
 
 
 def test_resolve_chat_slots_uses_ceiling_when_vram_is_ample(monkeypatch) -> None:
     monkeypatch.setattr(cfg, "gpu_memory_fraction", 0.75)
-    monkeypatch.setattr("lilbee.providers.model_cache.get_available_memory", lambda _f: 10**12)
     monkeypatch.setattr(
         planning_mod,
         "estimate_instance_footprint",
         _slotted_estimator(base=17 * 10**9, per_slot=10**9),
     )
-    assert planning_mod._resolve_chat_slots(Path("/m/c.gguf"), 65536) == 4
+    assert planning_mod._resolve_chat_slots(Path("/m/c.gguf"), 65536, device=_card(10**12)) == 4
 
 
 def test_resolve_chat_slots_drops_to_one_on_constrained_gpu(monkeypatch) -> None:
     # 17 GB base footprint at >1 slots overruns a ~24GB Metal budget (19.2e9) -> 1.
     monkeypatch.setattr(cfg, "gpu_memory_fraction", 0.75)
-    monkeypatch.setattr("lilbee.providers.model_cache.get_available_memory", lambda _f: 24 * 10**9)
     monkeypatch.setattr(
         planning_mod,
         "estimate_instance_footprint",
         _slotted_estimator(base=17 * 10**9, per_slot=2 * 10**9),
     )
-    assert planning_mod._resolve_chat_slots(Path("/m/c.gguf"), 65536) == 1
+    assert planning_mod._resolve_chat_slots(Path("/m/c.gguf"), 65536, device=_card(24 * 10**9)) == 1
 
 
 def test_resolve_chat_slots_steps_down_to_fit_unified_budget(monkeypatch) -> None:
     # Ample VRAM keeps 4 slots, but a tight free-RAM budget forces the count down
     # so the model loads at fewer slots instead of being refused at placement.
     monkeypatch.setattr(cfg, "gpu_memory_fraction", 0.75)
-    monkeypatch.setattr("lilbee.providers.model_cache.get_available_memory", lambda _f: 64 * 10**9)
     monkeypatch.setattr(
         planning_mod,
         "estimate_instance_footprint",
         _slotted_estimator(base=17 * 10**9, per_slot=10**9),
     )
-    assert planning_mod._resolve_chat_slots(Path("/m/c.gguf"), 65536) == 4
+    card = _card(64 * 10**9)
+    assert planning_mod._resolve_chat_slots(Path("/m/c.gguf"), 65536, device=card) == 4
     assert (
-        planning_mod._resolve_chat_slots(Path("/m/c.gguf"), 65536, unified_budget=13 * 10**9) == 1
+        planning_mod._resolve_chat_slots(
+            Path("/m/c.gguf"), 65536, unified_budget=13 * 10**9, device=card
+        )
+        == 1
     )
 
 
@@ -275,17 +289,20 @@ def test_resolve_chat_slots_reservation_shrinks_budget(monkeypatch) -> None:
     # The search reservation is subtracted from the chat budget, so a chat that
     # fits 4 slots with no reservation steps down once embed/rerank are held back.
     monkeypatch.setattr(cfg, "gpu_memory_fraction", 0.75)
-    monkeypatch.setattr("lilbee.providers.model_cache.get_available_memory", lambda _f: 50 * 10**9)
     monkeypatch.setattr(
         planning_mod,
         "estimate_instance_footprint",
         _slotted_estimator(base=30 * 10**9, per_slot=2 * 10**9),
     )
-    # Budget = 50e9 * 0.8 = 40e9. No reservation: 4 slots (38e9) fits.
-    assert planning_mod._resolve_chat_slots(Path("/m/c.gguf"), 65536) == 4
-    # Reserve 9e9 for search -> budget 31e9; even 2 slots (34e9) overruns -> 1.
+    # Budget = 64e9 * 0.75 * 0.8 = 38.4e9. No reservation: 4 slots (38e9) fits.
+    card = _card(64 * 10**9)
+    assert planning_mod._resolve_chat_slots(Path("/m/c.gguf"), 65536, device=card) == 4
+    # Reserve 9e9 for search -> budget 29.4e9; even 2 slots (34e9) overruns -> 1.
     assert (
-        planning_mod._resolve_chat_slots(Path("/m/c.gguf"), 65536, chat_reservation=9 * 10**9) == 1
+        planning_mod._resolve_chat_slots(
+            Path("/m/c.gguf"), 65536, chat_reservation=9 * 10**9, device=card
+        )
+        == 1
     )
 
 
@@ -324,33 +341,32 @@ def test_unified_memory_budget_floors_at_zero_under_pressure(monkeypatch) -> Non
 def test_resolve_vision_slots_uses_ceiling_when_vram_is_ample(monkeypatch) -> None:
     monkeypatch.setattr(cfg, "vision_ocr_concurrency", 4)
     monkeypatch.setattr(cfg, "gpu_memory_fraction", 0.9)
-    monkeypatch.setattr("lilbee.providers.model_cache.get_available_memory", lambda _f: 10**12)
     monkeypatch.setattr(
         planning_mod,
         "estimate_instance_footprint",
         _slotted_estimator(base=2 * 10**9, per_slot=10**9),
     )
-    assert planning_mod._resolve_vision_slots(Path("/m/v.gguf"), 16384) == 4
+    assert planning_mod._resolve_vision_slots(Path("/m/v.gguf"), 16384, device=_card(10**12)) == 4
 
 
 def test_resolve_vision_slots_drops_to_one_on_small_gpu(monkeypatch) -> None:
     # A tiny VRAM budget can't fit multiple slots of vision footprint -> falls back to 1.
     monkeypatch.setattr(cfg, "vision_ocr_concurrency", 4)
     monkeypatch.setattr(cfg, "gpu_memory_fraction", 0.9)
-    monkeypatch.setattr("lilbee.providers.model_cache.get_available_memory", lambda _f: 3 * 10**9)
     monkeypatch.setattr(
         planning_mod,
         "estimate_instance_footprint",
         _slotted_estimator(base=2 * 10**9, per_slot=10**9),
     )
-    assert planning_mod._resolve_vision_slots(Path("/m/v.gguf"), 16384) == 1
+    assert (
+        planning_mod._resolve_vision_slots(Path("/m/v.gguf"), 16384, device=_card(3 * 10**9)) == 1
+    )
 
 
 def test_resolve_vision_slots_ceiling_one_short_circuits(monkeypatch) -> None:
     monkeypatch.setattr(cfg, "vision_ocr_concurrency", 1)
     # Even with huge VRAM, a ceiling of 1 means strictly sequential OCR.
-    monkeypatch.setattr("lilbee.providers.model_cache.get_available_memory", lambda _f: 10**12)
-    assert planning_mod._resolve_vision_slots(Path("/m/v.gguf"), 16384) == 1
+    assert planning_mod._resolve_vision_slots(Path("/m/v.gguf"), 16384, device=_card(10**12)) == 1
 
 
 def test_cache_type_flags_are_absent_for_f16(monkeypatch) -> None:
@@ -1247,9 +1263,8 @@ class TestBuildFleetWiring:
     def test_launch_for_llm_rerank_parallel_matches_fanout(self, tmp_path, monkeypatch) -> None:
         from lilbee.providers.fleet.adapters import LLM_RERANK_CONCURRENCY
 
-        # ample memory + the autouse fixed-footprint estimator => the full fan-out fits
+        # a 24 GiB card + the autouse fixed-footprint estimator => the full fan-out fits
         monkeypatch.setattr(cfg, "reranker_type", RerankerType.AUTO)
-        monkeypatch.setattr("lilbee.providers.model_cache.get_available_memory", lambda _f: 10**12)
         launch = self._launch_rerank(tmp_path, monkeypatch, "qwen3")
         assert launch.argv[launch.argv.index("--parallel") + 1] == str(LLM_RERANK_CONCURRENCY)
 
@@ -1880,7 +1895,14 @@ class TestPlanProbe:
         yield
         planning_mod.clear_plan_probe()
 
-    def _capture(self, monkeypatch, *, free_vram: int, free_ram: int) -> None:
+    @staticmethod
+    def _live_card(monkeypatch, total: int, free: int) -> None:
+        """What a probe run right now would report, snapshot or no snapshot."""
+        card = FleetDevice("CUDA", 0, "A", total, free)
+        monkeypatch.setattr(planning_mod._read_device_cache, "get", lambda _b: [card])
+        monkeypatch.setattr(planning_mod, "resolve_devices", lambda _b: [card])
+
+    def _capture(self, monkeypatch, *, total_vram: int, free_vram: int, free_ram: int) -> None:
         monkeypatch.setattr(planning_mod, "resolve_llama_server", lambda: Path("/bin/srv"))
         monkeypatch.setattr("lilbee.providers.fleet.gpu_env.apply_fleet_gpu_env", lambda: None)
         monkeypatch.setattr(
@@ -1890,47 +1912,129 @@ class TestPlanProbe:
         monkeypatch.setattr(
             planning_mod,
             "_resolve_devices_and_refusal",
-            lambda _b: ([FleetDevice("CUDA", 0, "A", 24 * _GB, free_vram)], False),
+            lambda _b: ([FleetDevice("CUDA", 0, "A", total_vram, free_vram)], False),
         )
-        monkeypatch.setattr(
-            planning_mod,
-            "resolve_devices",
-            lambda _b: [FleetDevice("CUDA", 0, "A", 24 * _GB, free_vram)],
-        )
-        monkeypatch.setattr(
-            "lilbee.providers.model_cache.get_available_memory", lambda _f: free_vram
-        )
+        self._live_card(monkeypatch, total_vram, free_vram)
         monkeypatch.setattr("lilbee.providers.model_cache.free_system_memory", lambda: free_ram)
         planning_mod.capture_plan_probe()
 
     def test_readers_serve_the_snapshot_not_the_live_state(self, monkeypatch) -> None:
-        self._capture(monkeypatch, free_vram=20 * _GB, free_ram=64 * _GB)
-        # The box "fills up" (a loaded fleet): live reads collapse...
-        monkeypatch.setattr("lilbee.providers.model_cache.get_available_memory", lambda _f: 1 * _GB)
+        self._capture(monkeypatch, total_vram=24 * _GB, free_vram=20 * _GB, free_ram=64 * _GB)
+        # The box "fills up" (a loaded fleet) and the card it reports shrinks...
         monkeypatch.setattr("lilbee.providers.model_cache.free_system_memory", lambda: 1 * _GB)
-        monkeypatch.setattr(
-            planning_mod,
-            "resolve_devices",
-            lambda _b: [FleetDevice("CUDA", 0, "A", 24 * _GB, 1 * _GB)],
-        )
+        self._live_card(monkeypatch, 8 * _GB, 1 * _GB)
         # ...but the plan paths keep the clean-box numbers.
-        assert planning_mod._plan_available_memory() == 20 * _GB
+        assert planning_mod.plan_sizing_budget() == int(24 * _GB * cfg.gpu_memory_fraction)
         assert planning_mod._plan_free_system_memory() == 64 * _GB
         assert planning_mod._plan_devices(Path("/bin/srv"))[0].free_bytes == 20 * _GB
 
     def test_clear_returns_readers_to_live_state(self, monkeypatch) -> None:
-        self._capture(monkeypatch, free_vram=20 * _GB, free_ram=64 * _GB)
+        self._capture(monkeypatch, total_vram=24 * _GB, free_vram=20 * _GB, free_ram=64 * _GB)
         planning_mod.clear_plan_probe()
-        monkeypatch.setattr("lilbee.providers.model_cache.get_available_memory", lambda _f: 3 * _GB)
+        self._live_card(monkeypatch, 8 * _GB, 3 * _GB)
         monkeypatch.setattr("lilbee.providers.model_cache.free_system_memory", lambda: 2 * _GB)
-        assert planning_mod._plan_available_memory() == 3 * _GB
+        assert planning_mod.plan_sizing_budget() == int(8 * _GB * cfg.gpu_memory_fraction)
         assert planning_mod._plan_free_system_memory() == 2 * _GB
 
     def test_uncaptured_readers_pass_through_live_state(self, monkeypatch) -> None:
-        monkeypatch.setattr("lilbee.providers.model_cache.get_available_memory", lambda _f: 7 * _GB)
+        monkeypatch.setattr(planning_mod, "resolve_llama_server", lambda: Path("/bin/srv"))
+        self._live_card(monkeypatch, 8 * _GB, 7 * _GB)
         monkeypatch.setattr("lilbee.providers.model_cache.free_system_memory", lambda: 5 * _GB)
-        assert planning_mod._plan_available_memory() == 7 * _GB
+        assert planning_mod.plan_sizing_budget() == int(8 * _GB * cfg.gpu_memory_fraction)
         assert planning_mod._plan_free_system_memory() == 5 * _GB
+
+    def test_an_unreadable_probe_sizes_against_system_memory(self, monkeypatch) -> None:
+        # No snapshot and no engine to ask: the fleet runs on the CPU, where system
+        # memory is the honest budget rather than a stale guess at a card.
+        monkeypatch.setattr(planning_mod, "resolve_llama_server", lambda: Path("/bin/srv"))
+
+        def _no_engine(_binary):
+            raise OSError("no engine")
+
+        monkeypatch.setattr(planning_mod._read_device_cache, "get", _no_engine)
+        monkeypatch.setattr("lilbee.providers.model_cache.total_system_memory", lambda: 32 * _GB)
+        assert planning_mod.plan_sizing_budget() == int(32 * _GB * cfg.gpu_memory_fraction)
+
+
+class TestSizingBudgetComesFromTheDevice:
+    """ctx and slots are sized against the GPU that will run the model."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_probe(self):
+        planning_mod.clear_plan_probe()
+        yield
+        planning_mod.clear_plan_probe()
+
+    @staticmethod
+    def _capture(monkeypatch, devices: list[FleetDevice], *, host_ram: int) -> None:
+        """Snapshot *devices* on a host with *host_ram* bytes of system RAM."""
+        monkeypatch.setattr(planning_mod, "resolve_llama_server", lambda: Path("/bin/srv"))
+        monkeypatch.setattr("lilbee.providers.fleet.gpu_env.apply_fleet_gpu_env", lambda: None)
+        monkeypatch.setattr(
+            "lilbee.providers.fleet.cuda_runtime.apply_cuda_runtime_env", lambda: None
+        )
+        monkeypatch.setattr(
+            planning_mod, "_resolve_devices_and_refusal", lambda _b: (devices, False)
+        )
+        monkeypatch.setattr("lilbee.providers.model_cache.total_system_memory", lambda: host_ram)
+        monkeypatch.setattr("lilbee.providers.model_cache.free_system_memory", lambda: host_ram)
+        # What the host-RAM read really answers on a machine with no NVIDIA card.
+        monkeypatch.setattr(
+            "lilbee.providers.model_cache.get_available_memory",
+            lambda frac, **_k: int(host_ram * frac),
+        )
+        planning_mod.capture_plan_probe()
+
+    def test_discrete_card_is_not_sized_against_host_ram(self, monkeypatch) -> None:
+        # A 24 GiB AMD card in a 128 GiB host. There is no AMD VRAM query, so the
+        # host-RAM read hands the planner a budget four times the card.
+        self._capture(
+            monkeypatch,
+            [FleetDevice("ROCm", 0, "gfx1100", 24 * _GB, 24 * _GB)],
+            host_ram=128 * _GB,
+        )
+        assert planning_mod.plan_sizing_budget() == int(24 * _GB * cfg.gpu_memory_fraction)
+
+    def test_unified_device_is_sized_against_its_own_working_set(self, monkeypatch) -> None:
+        # Metal reports recommendedMaxWorkingSetSize, which is below installed RAM.
+        self._capture(
+            monkeypatch,
+            [FleetDevice("Metal", 0, "M3 Max", 48 * _GB, 48 * _GB, unified=True)],
+            host_ram=64 * _GB,
+        )
+        assert planning_mod.plan_sizing_budget() == int(48 * _GB * cfg.gpu_memory_fraction)
+
+    def test_host_ram_still_sizes_a_gpu_less_host(self, monkeypatch) -> None:
+        self._capture(monkeypatch, [], host_ram=32 * _GB)
+        assert planning_mod.plan_sizing_budget() == int(32 * _GB * cfg.gpu_memory_fraction)
+
+    def test_launch_sizes_ctx_against_the_placed_card(self, tmp_path, monkeypatch) -> None:
+        model = tmp_path / "chat.gguf"
+        model.write_bytes(b"x" * 2048)
+        small = FleetDevice("CUDA", 0, "3090", 24 * _GB, 24 * _GB)
+        large = FleetDevice("CUDA", 1, "A6000", 48 * _GB, 48 * _GB)
+        self._capture(monkeypatch, [small, large], host_ram=128 * _GB)
+        monkeypatch.setattr("lilbee.providers.engine_params.resolve_model_path", lambda _r: model)
+        monkeypatch.setattr("lilbee.providers.gguf_meta.read_gguf_metadata", lambda _p: {})
+        monkeypatch.setattr(cfg, "num_ctx", None)
+        seen: list[int] = []
+
+        def _record_ctx(_path, _meta, *, available_bytes=None):
+            seen.append(available_bytes)
+            return 4096
+
+        monkeypatch.setattr("lilbee.providers.engine_params.resolve_chat_ctx", _record_ctx)
+        plan = InstancePlan(role=WorkerRole.CHAT, devices=(1,))
+        planning_mod._launch_for(plan, "ref", Path("/bin/llama-server"), {0: small, 1: large})
+        assert seen == [int(48 * _GB * cfg.gpu_memory_fraction)]
+
+    def test_unified_budgets_cap_at_the_devices_own_memory(self, monkeypatch) -> None:
+        # An iGPU addressing 8 GiB of a 64 GiB host cannot host 60 GiB of models
+        # just because the host has the RAM.
+        igpu = FleetDevice("Vulkan", 0, "Radeon 780M", 8 * _GB, 8 * _GB, unified=True)
+        self._capture(monkeypatch, [igpu], host_ram=64 * _GB)
+        assert planning_mod._unified_memory_budget([igpu]) <= 8 * _GB
+        assert planning_mod._unified_admission_budget([igpu]) <= 8 * _GB
 
 
 class TestPlacementFindingsLog:

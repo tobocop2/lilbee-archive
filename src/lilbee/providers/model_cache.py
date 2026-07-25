@@ -129,6 +129,11 @@ def get_available_memory(fraction: float, *, total: bool = False) -> int:
     With multiple NVIDIA GPUs, *total* sums every card's memory (whole-fleet
     capacity, for deciding whether a model can run tensor-split across all of
     them); the default sizes against the smallest single card.
+
+    A coarse figure for callers with no device list to hand. The fleet has one
+    and sizes against it instead
+    (:func:`lilbee.providers.fleet.planning.plan_sizing_budget`), because this
+    answers with system RAM on every host without an NVIDIA card.
     """
     import psutil
 
@@ -178,9 +183,9 @@ def _try_nvidia_memory(reducer: Callable[[list[int]], int] = min) -> int | None:
     """NVIDIA GPU total memory the CUDA runtime can actually reach, or ``None``.
 
     *reducer* combines the per-device totals. ``min`` (the default) sizes against
-    the smallest card, the safe budget for a single server or a per-card
-    tensor-split share. ``sum`` gives whole-fleet capacity, used only by the
-    catalog fit chip to decide whether a model can run split across every card.
+    the smallest card, the safe budget for a single server that has not been told
+    which card it will run on. ``sum`` gives whole-fleet capacity, used only by
+    the catalog fit chip to decide whether a model can run split across every card.
 
     Restricted to the devices ``CUDA_VISIBLE_DEVICES`` exposes. Neither NVML nor
     nvidia-smi applies that mask on its own: it is read by the CUDA runtime, and

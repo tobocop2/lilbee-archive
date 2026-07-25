@@ -49,6 +49,8 @@ _CUDA_ORDER_VAR = "CUDA_DEVICE_ORDER"
 _PCI_BUS_ID_ORDER = "PCI_BUS_ID"
 _ROCR_VISIBLE_VAR = "ROCR_VISIBLE_DEVICES"
 _HIP_VISIBLE_VAR = "HIP_VISIBLE_DEVICES"
+# ROCm's third numeric visibility variable, filtering exactly as the other two do.
+_GPU_DEVICE_ORDINAL_VAR = "GPU_DEVICE_ORDINAL"
 _VK_VISIBLE_VAR = "GGML_VK_VISIBLE_DEVICES"
 # "  CUDA0: NVIDIA GeForce RTX 3090 (24268 MiB, 23500 MiB free)"
 _DEVICE_RE = re.compile(
@@ -539,12 +541,21 @@ def amd_visible_var() -> str:
     wrong cards, or none at all: ``1`` on a two-GPU box exposes physical GPU 1 as
     index 0 through ROCr, and HIP then asks for index 1 of a one-device list.
 
-    So exactly one is ever written: the one the environment already restricts,
-    or HIP when it restricts neither. Every caller writing an AMD pin asks here,
-    since two callers each picking their own would put the pair back.
+    ``GPU_DEVICE_ORDINAL`` is the third, and it filters the same way. Writing HIP
+    on top of an ordinal mask both overrode it and re-exposed cards it had
+    hidden, since the indices were enumerated against the list the ordinal had
+    already filtered.
+
+    So exactly one is ever written: whichever the environment already restricts,
+    in the runtime's own precedence (HIP, then the ordinal, then ROCr), or HIP
+    when nothing restricts. An empty value says "no devices" rather than "this is
+    the variable in use", so it does not claim precedence. Every caller writing an
+    AMD pin asks here, since two callers each picking their own would put the
+    pair back.
     """
-    if _ROCR_VISIBLE_VAR in os.environ and _HIP_VISIBLE_VAR not in os.environ:
-        return _ROCR_VISIBLE_VAR
+    for name in (_HIP_VISIBLE_VAR, _GPU_DEVICE_ORDINAL_VAR, _ROCR_VISIBLE_VAR):
+        if os.environ.get(name, "").strip():
+            return name
     return _HIP_VISIBLE_VAR
 
 

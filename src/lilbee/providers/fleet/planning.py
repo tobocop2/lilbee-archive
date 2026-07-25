@@ -295,6 +295,7 @@ def _resolve_llm_rerank_slots(
         mmproj_path=None,
         unified=unified_budget is not None,
         budget=_slot_budget(_LLM_RERANK_VRAM_FRACTION, unified_budget, device),
+        rerank_mode=RerankMode.LLM,
     )
 
 
@@ -320,6 +321,7 @@ def _fit_slots(
     mmproj_path: Path | None,
     unified: bool,
     budget: int,
+    rerank_mode: RerankMode | None = None,
 ) -> int:
     """Largest slot count in ``1..ceiling`` whose instance footprint fits *budget*;
     1 when none larger fit."""
@@ -332,7 +334,7 @@ def _fit_slots(
                 ctx=ctx,
                 slots=slots,
                 gpu_layers=_role_gpu_layers(role),
-                flash_attn=_role_flash(role),
+                flash_attn=_role_flash(role, rerank_mode),
                 kv_cache_type=_role_kv_cache_type(role),
                 kv_cache_type_v=_role_kv_cache_type_v(role),
                 mmproj_path=mmproj_path,
@@ -461,13 +463,26 @@ def flash_attn_flag() -> str:
     return _FLASH_ON if _flash_attention_is_trusted() else _FLASH_AUTO
 
 
-def _role_flash(role: WorkerRole) -> bool:
+def _role_launches_with_flash(role: WorkerRole, rerank_mode: RerankMode | None = None) -> bool:
+    """Whether the launch asks the engine for flash attention on *role*.
+
+    The one place that answers this. The registry marks RERANK as a non-flash
+    role because a cross-encoder pools in one batch, but an LLM reranker is
+    generative and launches exactly like chat, so the mode decides there.
+    """
+    if role is WorkerRole.RERANK:
+        return rerank_mode is RerankMode.LLM
+    return role in _FLASH_ROLES
+
+
+def _role_flash(role: WorkerRole, rerank_mode: RerankMode | None = None) -> bool:
     """Whether the estimate may assume flash attention for *role*.
 
-    Only a definite ``on``. Under ``auto`` the engine decides at load time, and
-    assuming it would size the KV cache below what the launch may need.
+    The launch's own answer, narrowed to a definite ``on``. Under ``auto`` the
+    engine decides at load time, and assuming it would size the KV cache below
+    what the launch may need.
     """
-    return role in _FLASH_ROLES and flash_attn_flag() == _FLASH_ON
+    return _role_launches_with_flash(role, rerank_mode) and flash_attn_flag() == _FLASH_ON
 
 
 def _role_kv_cache_type(role: WorkerRole) -> KvCacheType:
@@ -562,7 +577,7 @@ def _estimate_role(
         ctx=ctx,
         slots=slots,
         gpu_layers=_role_gpu_layers(role),
-        flash_attn=_role_flash(role),
+        flash_attn=_role_flash(role, rerank_mode),
         kv_cache_type=_role_kv_cache_type(role),
         kv_cache_type_v=_role_kv_cache_type_v(role),
         mmproj_path=mmproj,
@@ -649,17 +664,18 @@ def _peak_estimator(model_refs: dict[WorkerRole, str]) -> PeakEstimator:
         mmproj = _vision_mmproj(model_refs[role]) if role is WorkerRole.VISION else None
         slots = _placement_estimate_slots(role, meta)
         ctx = _placement_estimate_ctx(role, path, meta)
+        rerank_mode = _role_rerank_mode(role, meta)
         est = estimate_instance_footprint(
             path,
             ctx=ctx,
             slots=slots,
             gpu_layers=_role_gpu_layers(role),
-            flash_attn=_role_flash(role),
+            flash_attn=_role_flash(role, rerank_mode),
             kv_cache_type=_role_kv_cache_type(role),
             kv_cache_type_v=_role_kv_cache_type_v(role),
             mmproj_path=mmproj,
             tensor_split=ratio,
-            batch_size=_pooled_batch_size(role, _role_rerank_mode(role, meta), ctx),
+            batch_size=_pooled_batch_size(role, rerank_mode, ctx),
             expert_offload=_role_expert_offload(path),
         )
         return est.per_device_vram
@@ -1064,6 +1080,7 @@ def _launch_for(
     unified_budget: int | None = None,
     chat_reservation: int = 0,
     reserved_by_device: dict[int, int] | None = None,
+    est_vram_bytes: int = 0,
 ) -> InstanceLaunch:
     """Build the launch spec (argv + device-pinning env) for one planned instance."""
     from lilbee.providers.engine_params import (
@@ -1167,7 +1184,7 @@ def _launch_for(
         ctx_per_slot=ctx,
         tensor_split=plan.tensor_split,
         mmproj=mmproj,
-        flash_attn=flash_attn_flag() if (is_chat or is_vision or is_llm_rerank) else None,
+        flash_attn=flash_attn_flag() if _role_launches_with_flash(plan.role, rerank_mode) else None,
         cache_type_k=cache_type_k,
         cache_type_v=cache_type_v,
         batch_size=_pooled_batch_size(plan.role, rerank_mode, ctx),
@@ -1191,6 +1208,9 @@ def _launch_for(
         ctx=ctx,
         replica=plan.replica,
         rerank_mode=rerank_mode,
+        # What placement charged this instance, for the post-launch check against
+        # the engine's own report of what it really allocated.
+        est_vram_bytes=est_vram_bytes,
     )
 
 
@@ -1734,6 +1754,10 @@ class ResolvedPlacement:
     instances: tuple[InstancePlan, ...]
     unplaceable_roles: tuple[WorkerRole, ...]
     model_refs: dict[WorkerRole, str]
+    # Roles placed anyway despite not fitting, with the shortfall in bytes. The
+    # planner has always known this and only logged it, so a surface showed a
+    # tight role as comfortably placed.
+    tight_roles: dict[WorkerRole, int] = field(default_factory=dict)
     co_tenants: frozenset[WorkerRole] = frozenset()
     # False when a spec was given but did not fit the hardware, so these instances
     # are the auto planner's and a surface must not present them as the manual plan.
@@ -1782,6 +1806,7 @@ def resolve_placement_plan(
         co_tenants=resolved.co_tenants,
         skipped_not_installed=skipped_not_installed,
         spec_applied=spec_applied,
+        tight_roles=dict(resolved.tight_roles),
     )
 
 
@@ -1857,6 +1882,7 @@ def plan_launches(
     )
     _log_placement_findings(placement, model_refs)
     reserved_by_device = _non_chat_reservation(placement.instances, inputs, placement.co_tenants)
+    charged = {inp.role: inp.est_vram_bytes for inp in inputs}
     return FleetPlan(
         launches=tuple(
             _launch_for(
@@ -1867,6 +1893,7 @@ def plan_launches(
                 unified_budget=unified_budget,
                 chat_reservation=reservation,
                 reserved_by_device=reserved_by_device,
+                est_vram_bytes=charged.get(plan.role, 0),
             )
             for plan in placement.instances
         ),

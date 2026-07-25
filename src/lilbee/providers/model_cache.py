@@ -133,56 +133,20 @@ def get_available_memory(fraction: float, *, total: bool = False) -> int:
     A coarse figure for callers with no device list to hand. The fleet has one
     and sizes against it instead
     (:func:`lilbee.providers.fleet.planning.plan_sizing_budget`), because this
-    answers with system RAM on every host without an NVIDIA card.
+    answers with system RAM on every host without an NVIDIA card. That system
+    figure is the process's, cgroup cap included, not the machine's.
     """
-    import psutil
-
     system = platform.system()
 
     if system == "Darwin":
-        return int(psutil.virtual_memory().total * fraction)
+        return int(total_system_memory() * fraction)
 
     if system in ("Linux", "Windows"):
         nvidia_mem = _try_nvidia_memory(sum if total else min)
         if nvidia_mem is not None:
             return int(nvidia_mem * fraction)
 
-    return int(psutil.virtual_memory().total * fraction)
-
-
-_CGROUP_ROOT = Path("/sys/fs/cgroup")
-
-
-def _cgroup_memory_limit(root: Path) -> int | None:
-    """Bytes this process's cgroup allows, or ``None`` when unlimited or unreadable.
-
-    cgroup v2 keeps the cap in ``memory.max`` (``max`` for unlimited); v1 uses
-    ``memory/memory.limit_in_bytes``, which spells unlimited as a near-int64
-    sentinel rather than a word, and so reads as a limit above installed RAM.
-    Both are read, matching the CPU quota reader in :mod:`lilbee.runtime.cpu`.
-    """
-    for path in (root / "memory.max", root / "memory" / "memory.limit_in_bytes"):
-        try:
-            raw = path.read_text().strip()
-        except OSError:
-            continue
-        if raw == "max":
-            return None
-        try:
-            return int(raw)
-        except ValueError:
-            return None
-    return None
-
-
-def _cgroup_memory_used(root: Path) -> int | None:
-    """Bytes this process's cgroup currently holds, or ``None`` when unreadable."""
-    for path in (root / "memory.current", root / "memory" / "memory.usage_in_bytes"):
-        try:
-            return int(path.read_text().strip())
-        except (OSError, ValueError):
-            continue
-    return None
+    return int(total_system_memory() * fraction)
 
 
 def free_system_memory() -> int:
@@ -191,33 +155,31 @@ def free_system_memory() -> int:
     The load-time counterpart to :func:`get_available_memory`, which scales total
     capacity for sizing rather than reporting what is free this instant.
 
-    psutil reads the host's ``/proc/meminfo``, which a memory-capped container
-    sees in full, so the cgroup's own headroom bounds it: a 4 GiB container on a
-    512 GiB machine would otherwise size itself for the machine and be killed by
-    the OOM reaper on its first load.
+    Bounded by what this process's cgroup still has, for the reason in
+    :func:`lilbee.core.system.cgroup_memory_limit`.
     """
     import psutil
 
+    from lilbee.core.system import cgroup_memory_limit, cgroup_memory_used
+
     host_free = int(psutil.virtual_memory().available)
-    limit = _cgroup_memory_limit(_CGROUP_ROOT)
+    limit = cgroup_memory_limit()
     if limit is None:
         return host_free
-    used = _cgroup_memory_used(_CGROUP_ROOT)
+    used = cgroup_memory_used()
     return min(host_free, limit if used is None else max(0, limit - used))
 
 
 def total_system_memory() -> int:
-    """Total system RAM in bytes this process may use.
+    """Total system RAM in bytes this process may use, cgroup cap included.
 
-    The cgroup limit where one caps the host, for the reason in
-    :func:`free_system_memory`. A limit above installed RAM is no limit at all,
-    which is also how cgroup v1's unlimited sentinel reads.
+    Raises rather than answering zero when the host cannot be read: every caller
+    here is sizing a real placement, and a budget computed from zero refuses
+    every model without saying why.
     """
-    import psutil
+    from lilbee.core.system import capped_total_memory
 
-    host_total = int(psutil.virtual_memory().total)
-    limit = _cgroup_memory_limit(_CGROUP_ROOT)
-    return min(host_total, limit) if limit is not None else host_total
+    return capped_total_memory()
 
 
 def has_nvidia_gpu() -> bool:

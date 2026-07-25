@@ -1962,7 +1962,7 @@ class TestPlanProbe:
         monkeypatch.setattr(planning_mod, "resolve_llama_server", lambda: Path("/bin/srv"))
         monkeypatch.setattr("lilbee.providers.fleet.gpu_env.apply_fleet_gpu_env", lambda: None)
         monkeypatch.setattr(
-            "lilbee.providers.fleet.cuda_runtime.apply_cuda_runtime_env", lambda: None
+            "lilbee.providers.fleet.cuda_runtime.apply_cuda_runtime_env", lambda *_a: None
         )
         # The capture takes devices and the all-refused fact from one probe run.
         monkeypatch.setattr(
@@ -2027,7 +2027,7 @@ class TestPlacementChargesAgainstFreeMemory:
         monkeypatch.setattr(planning_mod, "resolve_llama_server", lambda: Path("/bin/srv"))
         monkeypatch.setattr("lilbee.providers.fleet.gpu_env.apply_fleet_gpu_env", lambda: None)
         monkeypatch.setattr(
-            "lilbee.providers.fleet.cuda_runtime.apply_cuda_runtime_env", lambda: None
+            "lilbee.providers.fleet.cuda_runtime.apply_cuda_runtime_env", lambda *_a: None
         )
         monkeypatch.setattr(
             planning_mod, "_resolve_devices_and_refusal", lambda _b: (devices, False)
@@ -2199,7 +2199,7 @@ class TestSizingBudgetComesFromTheDevice:
         monkeypatch.setattr(planning_mod, "resolve_llama_server", lambda: Path("/bin/srv"))
         monkeypatch.setattr("lilbee.providers.fleet.gpu_env.apply_fleet_gpu_env", lambda: None)
         monkeypatch.setattr(
-            "lilbee.providers.fleet.cuda_runtime.apply_cuda_runtime_env", lambda: None
+            "lilbee.providers.fleet.cuda_runtime.apply_cuda_runtime_env", lambda *_a: None
         )
         monkeypatch.setattr(
             planning_mod, "_resolve_devices_and_refusal", lambda _b: (devices, False)
@@ -3057,7 +3057,9 @@ def test_capturing_the_plan_snapshot_probes_the_engine_once(monkeypatch) -> None
 
     monkeypatch.setattr(planning_mod, "resolve_llama_server", lambda: Path("/bin/srv"))
     monkeypatch.setattr("lilbee.providers.fleet.gpu_env.apply_fleet_gpu_env", lambda: None)
-    monkeypatch.setattr("lilbee.providers.fleet.cuda_runtime.apply_cuda_runtime_env", lambda: None)
+    monkeypatch.setattr(
+        "lilbee.providers.fleet.cuda_runtime.apply_cuda_runtime_env", lambda *_a: None
+    )
     monkeypatch.setattr(
         "lilbee.providers.fleet.cuda_runtime.assert_gpu_devices_usable", lambda *_a: None
     )

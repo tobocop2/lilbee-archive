@@ -79,19 +79,56 @@ def _cuda_wheel_lib_dirs() -> list[Path]:
     return [lib for name in _CUDA_WHEEL_IMPORTS if (lib := _wheel_lib_dir(name)) is not None]
 
 
-def cuda_runtime_env() -> dict[str, str]:
-    """``LD_LIBRARY_PATH`` carrying the CUDA-runtime wheel libs, or empty.
+def _ships_its_own_cuda_runtime(binary: Path) -> bool:
+    """Whether the CUDA runtime sits in the same directory as *binary*.
 
-    Empty off Linux (where the wheels and ``LD_LIBRARY_PATH`` do not apply) and
-    when no wheel is installed. Wheel directories are prepended so they win over
-    any stale system copy, with the caller's existing path preserved behind them.
+    The bundled engine ships its libraries beside itself, and a wheel directory
+    on the search path can only shadow them with a different build.
+    """
+    parent = binary.parent
+    return any(_CUDA_SONAME_RE.search(entry.name) for entry in _dir_entries(parent))
+
+
+def _dir_entries(directory: Path) -> list[Path]:
+    """Entries of *directory*, empty when it cannot be read."""
+    try:
+        return list(directory.iterdir())
+    except OSError:
+        return []
+
+
+def cuda_runtime_env(binary: Path | None = None) -> dict[str, str]:
+    """``LD_LIBRARY_PATH`` for running *binary*, or empty when there is nothing to add.
+
+    Ordering, which matters more than it looks: the binary's own directory, then
+    any CUDA-runtime wheel directories, then whatever the caller already had.
+    ``$ORIGIN`` lands in ``DT_RUNPATH``, which the loader searches *after*
+    ``LD_LIBRARY_PATH``, so a wheel directory in front silently replaces the
+    libraries the engine ships beside itself. On a host that merely has torch
+    installed, that swapped the bundled engine's CUDA runtime for torch's.
+
+    Wheel directories are added only for a binary that actually links CUDA and
+    does not already carry its own runtime. A Vulkan or CPU build has no use for
+    them, and putting them on its path only gives an unrelated install a way to
+    interfere. Without a *binary* to reason about, the wheel directories are
+    returned as before.
+
+    Empty off Linux, where neither the wheels nor ``LD_LIBRARY_PATH`` apply.
     """
     if not sys.platform.startswith("linux"):
         return {}
-    dirs = _cuda_wheel_lib_dirs()
-    if not dirs:
+    parts: list[str] = []
+    if binary is not None:
+        parts.append(str(binary.parent))
+        wants_wheels = _links_cuda_runtime(binary, dict(os.environ)) and not (
+            _ships_its_own_cuda_runtime(binary)
+        )
+    else:
+        wants_wheels = True
+    dirs = _cuda_wheel_lib_dirs() if wants_wheels else []
+    if not parts and not dirs:
         return {}
-    parts = [str(d) for d in dirs]
+    parts += [str(d) for d in dirs]
     # Drop existing entries that are already wheel dirs so calling this on every
     # reload pass (apply_cuda_runtime_env) is idempotent instead of accumulating
     # duplicate copies that get baked into each spawned server's environment.
@@ -101,14 +138,14 @@ def cuda_runtime_env() -> dict[str, str]:
     return {"LD_LIBRARY_PATH": os.pathsep.join(parts)}
 
 
-def apply_cuda_runtime_env() -> None:
+def apply_cuda_runtime_env(binary: Path | None = None) -> None:
     """Put the CUDA-runtime wheel libs on this process's ``LD_LIBRARY_PATH``.
 
     The device probe and the child servers then resolve the same runtime, so a
     zero-device probe reflects a genuinely unusable GPU rather than a probe that
     merely ran without the wheel libraries on its search path.
     """
-    os.environ.update(cuda_runtime_env())
+    os.environ.update(cuda_runtime_env(binary))
 
 
 def _ldd_output(binary: Path, env: dict[str, str]) -> str | None:
@@ -205,7 +242,7 @@ def assert_gpu_devices_usable(binary: Path, devices: list[FleetDevice], probe_ou
     assert_cuda_devices_usable(binary, devices, probe_output)
     if not sys.platform.startswith("linux") or devices:
         return
-    env = {**os.environ, **cuda_runtime_env()}
+    env = {**os.environ, **cuda_runtime_env(binary)}
     if not (_links_hip_runtime(binary, env) and _amd_gpu_present()):
         return
     if not _amd_discrete_gpu_proven():
@@ -249,7 +286,7 @@ def assert_cuda_devices_usable(binary: Path, devices: list[FleetDevice], probe_o
         return
     if devices:
         return
-    env = {**os.environ, **cuda_runtime_env()}
+    env = {**os.environ, **cuda_runtime_env(binary)}
     if not _links_cuda_runtime(binary, env):
         return
     if not model_cache.has_nvidia_gpu():

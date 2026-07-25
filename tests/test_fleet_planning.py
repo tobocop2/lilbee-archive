@@ -651,8 +651,8 @@ def test_peak_estimator_returns_per_device_vector(monkeypatch) -> None:
     monkeypatch.setattr(planning_mod, "estimate_instance_footprint", _est)
     estimate = planning_mod._peak_estimator({WorkerRole.CHAT: "ref"})
     assert estimate(WorkerRole.CHAT, (1, 1)) == (11, 22)
-    # --ctx-size is per-slot x slots, so the estimate is run at that total.
-    assert seen["ctx"] == 2000 and seen["slots"] == 2 and seen["ratio"] == (1, 1)
+    # Per-slot context in; the estimator turns it into a total for the parser.
+    assert seen["ctx"] == 1000 and seen["slots"] == 2 and seen["ratio"] == (1, 1)
     assert seen["mmproj"] is None  # chat carries no projector
 
 
@@ -1798,6 +1798,56 @@ class TestEstimateLaunchParity:
                 f"but launch {kv_flag}={launch_flags.get(kv_flag)}"
             )
 
+    def test_multi_slot_context_is_charged_once_on_both_sides(self, tmp_path, monkeypatch) -> None:
+        """A single-slot fleet cannot tell the two conventions apart.
+
+        With one slot the per-slot context and the total are the same number, so
+        the comparison above holds whichever side does the multiply. Run a role
+        that really batches, where a missing multiply reserves an eighth of the
+        KV the server allocates.
+        """
+        from lilbee.providers.fleet import vram as vram_mod
+        from lilbee.providers.fleet.adapters import LLM_RERANK_CONCURRENCY
+
+        model = tmp_path / "m.gguf"
+        model.write_bytes(b"x" * 64)
+        monkeypatch.setattr("lilbee.providers.engine_params.resolve_model_path", lambda _r: model)
+        monkeypatch.setattr(
+            "lilbee.providers.gguf_meta.read_gguf_metadata", lambda _p: {"architecture": "qwen3"}
+        )
+        monkeypatch.setattr(cfg, "reranker_type", RerankerType.LLM)
+        monkeypatch.setattr(planning_mod, "_role_ctx", lambda _r, _p, _m, *_a: 4096)
+        monkeypatch.setattr(vram_mod, "resolve_gguf_parser", lambda: Path("/fake/gguf-parser"))
+        captured: dict[str, object] = {}
+
+        def _capture(path, **kwargs) -> GgufVramEstimate:
+            captured.update(kwargs, path=path)
+            return GgufVramEstimate(vram_bytes=1, ram_bytes=0, unified_bytes=1)
+
+        monkeypatch.setattr(planning_mod, "estimate_instance_footprint", _capture)
+        device = FleetDevice("CUDA", 0, "gpu", 80 * _GB, 80 * _GB)
+        plan = InstancePlan(role=WorkerRole.RERANK, devices=(0,))
+        launch = planning_mod._launch_for(plan, "ref", Path("/bin/llama-server"), {0: device})
+
+        assert launch.slots == LLM_RERANK_CONCURRENCY > 1, "need a batching role to tell them apart"
+        estimator_argv = vram_mod.estimator_argv(
+            str(captured["path"]),
+            ctx=captured["ctx"],  # type: ignore[arg-type]
+            slots=captured["slots"],  # type: ignore[arg-type]
+            gpu_layers=captured["gpu_layers"],  # type: ignore[arg-type]
+            flash_attn=captured["flash_attn"],  # type: ignore[arg-type]
+            kv_cache_type=captured["kv_cache_type"].value,  # type: ignore[union-attr]
+            kv_cache_type_v=captured["kv_cache_type_v"].value,  # type: ignore[union-attr]
+            mmproj=None,
+            tensor_split=(),
+            batch_size=captured.get("batch_size"),  # type: ignore[arg-type]
+        )
+        launch_flags = _parse_flags(launch.argv)
+        estimator_flags = _parse_flags(estimator_argv)
+        assert launch_flags["--ctx-size"] == str(4096 * LLM_RERANK_CONCURRENCY)
+        assert estimator_flags["--ctx-size"] == launch_flags["--ctx-size"]
+        assert estimator_flags["--parallel"] == launch_flags["--parallel"]
+
 
 class TestWeightsBytes:
     """The cold-load timeout scales with the model's total on-disk weights."""
@@ -1954,6 +2004,76 @@ class TestPlanProbe:
         monkeypatch.setattr(planning_mod._read_device_cache, "get", _no_engine)
         monkeypatch.setattr("lilbee.providers.model_cache.total_system_memory", lambda: 32 * _GB)
         assert planning_mod.plan_sizing_budget() == int(32 * _GB * cfg.gpu_memory_fraction)
+
+
+class TestSlotsAreChargedOnce:
+    """The estimator is given a per-slot context and does the multiply itself.
+
+    llama-server divides --ctx-size across --parallel slots, and the estimator
+    ignores --parallel entirely, so whoever builds its command line has to carry
+    the total. Leaving that to each caller had two of four sites passing the
+    per-slot figure, which under-reserves KV by the whole slot count.
+    """
+
+    def test_estimator_argv_carries_the_total_context(self) -> None:
+        from lilbee.providers.fleet import vram as vram_mod
+
+        argv = vram_mod.estimator_argv(
+            "/m/m.gguf",
+            ctx=4096,
+            slots=4,
+            gpu_layers=-1,
+            flash_attn=True,
+            kv_cache_type="q8_0",
+            kv_cache_type_v="q8_0",
+            mmproj=None,
+            tensor_split=(),
+            batch_size=None,
+        )
+        assert argv[argv.index("--ctx-size") + 1] == "16384"
+        assert argv[argv.index("--parallel") + 1] == "4"
+
+    def test_the_slot_fit_can_step_down(self, tmp_path, monkeypatch) -> None:
+        # Charged per slot, every probe in the descending search costs the same,
+        # so the search can only ever answer its ceiling or 1.
+        import json
+
+        from lilbee.providers.fleet import vram as vram_mod
+
+        model = tmp_path / "m.gguf"
+        model.write_bytes(b"GGUF")
+        vram_mod._cached_footprint.cache_clear()
+        monkeypatch.setattr(
+            planning_mod, "estimate_instance_footprint", vram_mod.estimate_instance_footprint
+        )
+        monkeypatch.setattr(vram_mod, "resolve_gguf_parser", lambda: Path("/fake/gguf-parser"))
+
+        def _priced_by_context(argv: list[str], _path: str) -> str:
+            total = 10**9 + int(argv[argv.index("--ctx-size") + 1]) * 10**5
+            return json.dumps(
+                {
+                    "estimate": {
+                        "items": [
+                            {"ram": {"uma": 0, "nonuma": 0}, "vrams": [{"uma": 0, "nonuma": total}]}
+                        ]
+                    }
+                }
+            )
+
+        monkeypatch.setattr(vram_mod, "_run_parser", _priced_by_context)
+        # 1e9 of weights plus 1e5 per token: two slots of 4096 fit, three do not.
+        assert (
+            planning_mod._fit_slots(
+                4,
+                WorkerRole.CHAT,
+                model,
+                4096,
+                mmproj_path=None,
+                unified=False,
+                budget=10**9 + 8192 * 10**5,
+            )
+            == 2
+        )
 
 
 class TestSizingBudgetComesFromTheDevice:

@@ -651,7 +651,7 @@ def _peak_estimator(model_refs: dict[WorkerRole, str]) -> PeakEstimator:
         ctx = _placement_estimate_ctx(role, path, meta)
         est = estimate_instance_footprint(
             path,
-            ctx=ctx * slots,
+            ctx=ctx,
             slots=slots,
             gpu_layers=_role_gpu_layers(role),
             flash_attn=_role_flash(role),

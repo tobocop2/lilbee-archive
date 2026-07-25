@@ -98,7 +98,6 @@ _RERANK_MODE_SPECS: dict[RerankMode, RoleServerSpec] = {
 LLM_RERANK_CONCURRENCY = 8
 
 
-
 def resolve_rerank_mode(reranker_type: RerankerType, arch: str | None) -> RerankMode:
     """Pick the reranker serving mode from the config setting and GGUF arch.
 

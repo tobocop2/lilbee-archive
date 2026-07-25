@@ -165,3 +165,47 @@ class TestTheCheckRunsOnARealLog:
         # Below this the engine prints no buffer report at all, so the check
         # would silently never fire.
         assert env[ENV_LOG_VERBOSITY] == "4"
+
+
+class TestFormatDriftIsLoud:
+    """The engine's log is not a contract, so its silence must not be.
+
+    llama-server exposes no memory over its API: /props carries none of it and
+    /metrics is token counters. The log is the only source, which makes a format
+    change a real event this has to survive noisily rather than quietly.
+    """
+
+    _MOVED = (
+        "srv    load_model: loading model 'm.gguf'\n"
+        "load_tensors: CUDA0 weights arena = 8192.00 MiB\n"
+        "srv    load_model: initializing slots, n_slots = 4\n"
+    )
+
+    def test_a_finished_load_with_no_readable_report_says_so(self, tmp_path, caplog) -> None:
+        from lilbee.providers.fleet.readback import check_launch, engine_log_path
+        from lilbee.providers.roles import WorkerRole
+
+        engine_log_path(tmp_path, "chat-0").write_text(self._MOVED)
+        with caplog.at_level(logging.WARNING, logger="lilbee.providers.fleet.readback"):
+            check_launch(tmp_path, "chat-0", WorkerRole.CHAT, "m", 4 * 1024**3)
+        assert "reported no memory usage where lilbee reads it" in caplog.text
+        assert "unverified" in caplog.text
+
+    def test_a_load_still_in_progress_stays_quiet(self, tmp_path, caplog) -> None:
+        # The report is written during load; asking early is not a format change.
+        from lilbee.providers.fleet.readback import check_launch, engine_log_path
+        from lilbee.providers.roles import WorkerRole
+
+        engine_log_path(tmp_path, "chat-0").write_text("srv load_model: loading model 'm.gguf'\n")
+        with caplog.at_level(logging.WARNING, logger="lilbee.providers.fleet.readback"):
+            check_launch(tmp_path, "chat-0", WorkerRole.CHAT, "m", 4 * 1024**3)
+        assert caplog.text == ""
+
+    def test_the_real_capture_shows_a_finished_load(self) -> None:
+        # Pins the completion marker against real output, so the branch above
+        # cannot silently stop firing either.
+        from lilbee.providers.fleet.readback import load_finished
+
+        assert load_finished(
+            (Path(__file__).parent / "fixtures" / "engine-load-metal.log").read_text()
+        )

@@ -2006,6 +2006,78 @@ class TestPlanProbe:
         assert planning_mod.plan_sizing_budget() == int(32 * _GB * cfg.gpu_memory_fraction)
 
 
+class TestPlacementChargesAgainstFreeMemory:
+    """VRAM another process is holding is not headroom the fleet can plan into."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_probe(self):
+        planning_mod.clear_plan_probe()
+        yield
+        planning_mod.clear_plan_probe()
+
+    @staticmethod
+    def _snapshot(monkeypatch, devices: list[FleetDevice]) -> None:
+        """Capture the clean-box snapshot, where free bytes exclude only other tenants."""
+        monkeypatch.setattr(planning_mod, "resolve_llama_server", lambda: Path("/bin/srv"))
+        monkeypatch.setattr("lilbee.providers.fleet.gpu_env.apply_fleet_gpu_env", lambda: None)
+        monkeypatch.setattr(
+            "lilbee.providers.fleet.cuda_runtime.apply_cuda_runtime_env", lambda: None
+        )
+        monkeypatch.setattr(
+            planning_mod, "_resolve_devices_and_refusal", lambda _b: (devices, False)
+        )
+        monkeypatch.setattr("lilbee.providers.model_cache.free_system_memory", lambda: 64 * _GB)
+        planning_mod.capture_plan_probe()
+
+    def test_a_tenant_holding_vram_is_not_planned_over(self, monkeypatch) -> None:
+        # A desktop compositor and a browser hold 20 of the card's 24 GiB. Charged
+        # against total capacity the card reads as empty, so a 10 GiB model is
+        # planned onto 4 GiB of real headroom and OOMs at load.
+        held = FleetDevice("CUDA", 0, "gpu", 24 * _GB, 4 * _GB)
+        self._snapshot(monkeypatch, [held])
+        placement = planning_mod._resolve_placement(
+            None,
+            [ModelPlacementInput(WorkerRole.CHAT, 10 * _GB)],
+            {WorkerRole.CHAT: "ref"},
+            [held],
+            unified_budget=None,
+            charge_against_free=True,
+        )
+        assert WorkerRole.CHAT in placement.tight_roles
+
+    def test_an_empty_card_is_still_charged_at_its_usable_capacity(self, monkeypatch) -> None:
+        idle = FleetDevice("CUDA", 0, "gpu", 24 * _GB, 24 * _GB)
+        self._snapshot(monkeypatch, [idle])
+        placement = planning_mod._resolve_placement(
+            None,
+            [ModelPlacementInput(WorkerRole.CHAT, 10 * _GB)],
+            {WorkerRole.CHAT: "ref"},
+            [idle],
+            unified_budget=None,
+            charge_against_free=True,
+        )
+        assert placement.tight_roles == {}
+        assert placement.instances == (InstancePlan(WorkerRole.CHAT, (0,)),)
+
+    def test_a_live_probe_keeps_charging_total_capacity(self, monkeypatch) -> None:
+        """Without the clean-box snapshot, free bytes include the fleet's own models.
+
+        The placement view re-resolves on a warm box, where the fleet's own
+        residency is exactly what free memory is missing. Charging it there would
+        report the running plan as unplaceable.
+        """
+        warm = FleetDevice("CUDA", 0, "gpu", 24 * _GB, 1 * _GB)
+        placement = planning_mod._resolve_placement(
+            None,
+            [ModelPlacementInput(WorkerRole.CHAT, 10 * _GB)],
+            {WorkerRole.CHAT: "ref"},
+            [warm],
+            unified_budget=None,
+            charge_against_free=False,
+        )
+        assert placement.tight_roles == {}
+
+
 class TestSlotsAreChargedOnce:
     """The estimator is given a per-slot context and does the multiply itself.
 

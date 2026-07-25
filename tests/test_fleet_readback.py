@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+import pytest
+
 from lilbee.providers.fleet.readback import (
     MIB,
     device_footprint,
@@ -246,3 +248,42 @@ class TestFormatDriftIsLoud:
         with caplog.at_level(logging.WARNING, logger="lilbee.providers.fleet.readback"):
             check_launch(tmp_path, "chat-0", WorkerRole.CHAT, "m", 4 * 1024**3)
         assert "build unknown" in caplog.text
+
+
+class TestTheUpstreamFormatStrings:
+    """Built from llama.cpp's own printf specifiers, not from a captured sample.
+
+    The fixture proves the parser handled one real load. This proves it handles
+    the format that produced it, including the exact %12s and %10s padding, so a
+    reader can compare these three strings against upstream source directly.
+    """
+
+    @pytest.mark.parametrize(
+        ("source", "template", "device", "mib"),
+        [
+            (
+                "src/llama-model.cpp",
+                "load_tensors: %12s model buffer size = %8.2f MiB",
+                "CUDA0",
+                4589.31,
+            ),
+            (
+                "src/llama-kv-cache.cpp",
+                "llama_kv_cache: %10s KV buffer size = %8.2f MiB",
+                "CUDA0",
+                1152.0,
+            ),
+            (
+                "src/llama-context.cpp",
+                "sched_reserve: %10s compute buffer size = %8.2f MiB",
+                "MTL0",
+                304.0,
+            ),
+        ],
+        ids=["model", "kv", "compute"],
+    )
+    def test_a_line_rendered_from_upstream_parses(
+        self, source: str, template: str, device: str, mib: float
+    ) -> None:
+        assert source  # names where the format lives, for the next reader
+        assert parse_device_buffers(template % (device, mib)) == {device: int(mib * MIB)}

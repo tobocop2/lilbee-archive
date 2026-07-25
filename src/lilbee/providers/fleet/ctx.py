@@ -69,7 +69,7 @@ def fit_split_ctx(
     def _peak_fits(per_slot: int) -> bool:
         est = estimate_instance_footprint(
             model_path,
-            ctx=per_slot * slots,
+            ctx=per_slot,
             slots=slots,
             gpu_layers=gpu_layers,
             flash_attn=flash_attn,

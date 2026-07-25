@@ -9,6 +9,28 @@ llama.cpp prints its per-device buffer sizes on every load, so the truth is
 already in the log. Reading it back turns silent estimator drift into one warning
 naming the role, the estimate and the reality, and it costs a regex over a log
 tail that is already on disk.
+
+WHY A LOG AND NOT AN API. There is no API. ``llama_model_size`` gives the whole
+model's weights and nothing per device; ``llama_state_get_size`` is session
+state. The per-device figures come from ``ggml_backend_buffer_get_size`` on
+buffer handles the server holds and never exposes, and llama-server's HTTP
+surface carries none of it either: ``/props`` is model and template metadata,
+``/metrics`` is token counters, and both were checked against a running server.
+The log is the only place these numbers leave the process.
+
+THE FORMAT THIS PARSES, and where it comes from upstream:
+
+    src/llama-model.cpp     "%s: %12s model buffer size = %8.2f MiB"
+    src/llama-kv-cache.cpp  "%s: %10s KV buffer size = %8.2f MiB"
+    src/llama-context.cpp   "%s: %10s compute buffer size = %8.2f MiB"
+
+Verified against llama.cpp build 9310 (e2ef8fe42), which is the build the
+checked-in fixture was captured from. These are plain format strings in upstream
+source, not an interface anyone has promised to keep, so treat a version bump of
+the bundled engine as a change that can break this: re-capture the fixture and
+confirm :func:`parse_device_buffers` still finds every line. A build that stops
+matching is reported rather than swallowed (see :func:`check_launch`), so the
+failure announces itself instead of turning the check into decoration.
 """
 
 from __future__ import annotations
@@ -22,6 +44,11 @@ from lilbee.providers.roles import WorkerRole
 log = logging.getLogger(__name__)
 
 MIB = 1024 * 1024
+
+# The llama.cpp build the buffer-report format above was verified against, and
+# the one the checked-in fixture came from. Named in the drift warning so a
+# report says what to compare with.
+VERIFIED_ENGINE_BUILD = "9310 (e2ef8fe42)"
 
 # "load_tensors:  MTL0_Mapped model buffer size =    82.41 MiB", plus the KV,
 # compute and output lines that follow under different prefixes (load_tensors,
@@ -68,6 +95,16 @@ def parse_device_buffers(text: str) -> dict[str, int]:
 # presence means the load finished, which is what separates "the report has not
 # been written yet" from "this engine does not write one where we look".
 _LOAD_FINISHED_RE = re.compile(r"load_model:\s+initializing slots")
+# "common_params_print_info: build 9310 (e2ef8fe42) with AppleClang ...", the
+# engine's own first line. Carried into the format-drift warning so the report
+# names the exact build to re-verify against.
+_BUILD_RE = re.compile(r"build\s+(?P<build>\d+)\s+\((?P<commit>[0-9a-f]+)\)")
+
+
+def engine_build(text: str) -> str:
+    """The engine build the log was written by, or empty when it does not say."""
+    match = _BUILD_RE.search(text)
+    return f"{match.group('build')} ({match.group('commit')})" if match else ""
 
 
 def load_finished(text: str) -> bool:
@@ -171,11 +208,14 @@ def check_launch(
     if actual <= 0:
         if load_finished(text):
             log.warning(
-                "The %s engine finished loading but reported no memory usage where lilbee "
-                "reads it, so its estimate could not be checked. The engine's log format or "
-                "verbosity levels have most likely changed; lilbee's placement estimates are "
-                "unverified until it is updated to match.",
+                "The %s engine (build %s) finished loading but reported no memory usage where "
+                "lilbee reads it, so its estimate could not be checked. The engine's log format "
+                "or verbosity levels have most likely changed since build %s, which lilbee's "
+                "parser was written against; placement estimates are unverified until it is "
+                "updated to match.",
                 role.value,
+                engine_build(text) or "unknown",
+                VERIFIED_ENGINE_BUILD,
             )
         return False
     return report_divergence(role, model, estimated_bytes, actual, tolerance=_TOLERANCE)

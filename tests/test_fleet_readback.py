@@ -209,3 +209,40 @@ class TestFormatDriftIsLoud:
         assert load_finished(
             (Path(__file__).parent / "fixtures" / "engine-load-metal.log").read_text()
         )
+
+    def test_the_drift_warning_names_both_builds(self, tmp_path, caplog) -> None:
+        # The report has to say what was seen and what it was verified against,
+        # or the reader cannot tell which one moved.
+        from lilbee.providers.fleet.readback import (
+            VERIFIED_ENGINE_BUILD,
+            check_launch,
+            engine_log_path,
+        )
+        from lilbee.providers.roles import WorkerRole
+
+        engine_log_path(tmp_path, "chat-0").write_text(
+            "common_params_print_info: build 9999 (deadbee) with clang for Linux\n" + self._MOVED
+        )
+        with caplog.at_level(logging.WARNING, logger="lilbee.providers.fleet.readback"):
+            check_launch(tmp_path, "chat-0", WorkerRole.CHAT, "m", 4 * 1024**3)
+        assert "9999 (deadbee)" in caplog.text
+        assert VERIFIED_ENGINE_BUILD in caplog.text
+
+    def test_the_verified_build_matches_the_fixture(self) -> None:
+        # The constant is the pin. If the fixture is re-captured from a newer
+        # engine without updating it, the pin has stopped meaning anything.
+        from lilbee.providers.fleet.readback import VERIFIED_ENGINE_BUILD, engine_build
+
+        captured = engine_build(
+            (Path(__file__).parent / "fixtures" / "engine-load-metal.log").read_text()
+        )
+        assert captured == VERIFIED_ENGINE_BUILD
+
+    def test_a_log_with_no_build_line_still_warns(self, tmp_path, caplog) -> None:
+        from lilbee.providers.fleet.readback import check_launch, engine_log_path
+        from lilbee.providers.roles import WorkerRole
+
+        engine_log_path(tmp_path, "chat-0").write_text(self._MOVED)
+        with caplog.at_level(logging.WARNING, logger="lilbee.providers.fleet.readback"):
+            check_launch(tmp_path, "chat-0", WorkerRole.CHAT, "m", 4 * 1024**3)
+        assert "build unknown" in caplog.text

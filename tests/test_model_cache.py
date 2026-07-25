@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import platform
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import pytest
 
+from lilbee.providers import model_cache as mc
 from lilbee.providers.model_cache import (
     _BUFFER_OVERHEAD_FRACTION,
     _DYNAMIC_CTX_FLOOR,
@@ -222,9 +224,11 @@ class TestGetAvailableMemory:
 
 
 class TestFreeSystemMemory:
-    def test_returns_live_psutil_available(self, monkeypatch) -> None:
+    def test_returns_live_psutil_available(self, monkeypatch, tmp_path) -> None:
         # Unlike get_available_memory (total capacity), this is what's free right
         # now -- the number that decides whether a model load would swap-thrash.
+        # No cgroup, so the host figure stands; CI itself runs in a capped one.
+        monkeypatch.setattr(mc, "_CGROUP_ROOT", tmp_path / "absent")
         fake_psutil = mock.MagicMock()
         fake_psutil.virtual_memory.return_value.available = 7_000_000_000
         monkeypatch.setitem(__import__("sys").modules, "psutil", fake_psutil)
@@ -232,7 +236,8 @@ class TestFreeSystemMemory:
 
 
 class TestTotalSystemMemory:
-    def test_returns_psutil_total(self, monkeypatch) -> None:
+    def test_returns_psutil_total(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setattr(mc, "_CGROUP_ROOT", tmp_path / "absent")
         fake_psutil = mock.MagicMock()
         fake_psutil.virtual_memory.return_value.total = 8_000_000_000
         monkeypatch.setitem(__import__("sys").modules, "psutil", fake_psutil)
@@ -441,3 +446,93 @@ class TestNvidiaSmiRowsThatDoNotParse:
         from lilbee.providers.model_cache import _parse_smi_row
 
         assert _parse_smi_row("8192") == ("", 8192 * 1024 * 1024)
+
+
+class TestCgroupMemoryLimits:
+    """A memory-capped container is sized against its cap, not the host's RAM."""
+
+    @staticmethod
+    def _cgroup(monkeypatch, tmp_path, **files: str):
+        for name, text in files.items():
+            (tmp_path / name.replace("_", ".")).write_text(text)
+        monkeypatch.setattr(mc, "_CGROUP_ROOT", tmp_path)
+
+    def test_total_is_capped_by_the_cgroup_limit(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setattr(
+            "psutil.virtual_memory",
+            lambda: SimpleNamespace(total=64 * 1024**3, available=60 * 1024**3),
+        )
+        self._cgroup(monkeypatch, tmp_path, memory_max=f"{8 * 1024**3}\n")
+        assert mc.total_system_memory() == 8 * 1024**3
+
+    def test_free_is_the_cap_minus_what_the_cgroup_holds(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setattr(
+            "psutil.virtual_memory",
+            lambda: SimpleNamespace(total=64 * 1024**3, available=60 * 1024**3),
+        )
+        self._cgroup(
+            monkeypatch,
+            tmp_path,
+            memory_max=f"{8 * 1024**3}\n",
+            memory_current=f"{3 * 1024**3}\n",
+        )
+        assert mc.free_system_memory() == 5 * 1024**3
+
+    def test_an_uncapped_cgroup_leaves_the_host_figures_alone(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setattr(
+            "psutil.virtual_memory",
+            lambda: SimpleNamespace(total=64 * 1024**3, available=60 * 1024**3),
+        )
+        self._cgroup(monkeypatch, tmp_path, memory_max="max\n")
+        assert mc.total_system_memory() == 64 * 1024**3
+        assert mc.free_system_memory() == 60 * 1024**3
+
+    def test_a_v1_limit_is_read_too(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setattr(
+            "psutil.virtual_memory",
+            lambda: SimpleNamespace(total=64 * 1024**3, available=60 * 1024**3),
+        )
+        v1 = tmp_path / "memory"
+        v1.mkdir()
+        (v1 / "memory.limit_in_bytes").write_text(f"{4 * 1024**3}\n")
+        (v1 / "memory.usage_in_bytes").write_text(f"{1024**3}\n")
+        monkeypatch.setattr(mc, "_CGROUP_ROOT", tmp_path)
+        assert mc.total_system_memory() == 4 * 1024**3
+        assert mc.free_system_memory() == 3 * 1024**3
+
+    def test_a_limit_larger_than_the_machine_is_ignored(self, monkeypatch, tmp_path) -> None:
+        # cgroup v1 spells "unlimited" as a near-int64 sentinel rather than a word.
+        monkeypatch.setattr(
+            "psutil.virtual_memory",
+            lambda: SimpleNamespace(total=64 * 1024**3, available=60 * 1024**3),
+        )
+        v1 = tmp_path / "memory"
+        v1.mkdir()
+        (v1 / "memory.limit_in_bytes").write_text("9223372036854771712\n")
+        monkeypatch.setattr(mc, "_CGROUP_ROOT", tmp_path)
+        assert mc.total_system_memory() == 64 * 1024**3
+
+    def test_no_cgroup_at_all_leaves_the_host_figures_alone(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setattr(
+            "psutil.virtual_memory",
+            lambda: SimpleNamespace(total=32 * 1024**3, available=16 * 1024**3),
+        )
+        monkeypatch.setattr(mc, "_CGROUP_ROOT", tmp_path / "absent")
+        assert mc.total_system_memory() == 32 * 1024**3
+        assert mc.free_system_memory() == 16 * 1024**3
+
+    def test_an_unreadable_limit_is_treated_as_no_limit(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setattr(
+            "psutil.virtual_memory",
+            lambda: SimpleNamespace(total=64 * 1024**3, available=60 * 1024**3),
+        )
+        self._cgroup(monkeypatch, tmp_path, memory_max="not-a-number\n")
+        assert mc.total_system_memory() == 64 * 1024**3
+
+    def test_a_cap_with_no_usage_file_bounds_free_at_the_cap(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setattr(
+            "psutil.virtual_memory",
+            lambda: SimpleNamespace(total=64 * 1024**3, available=60 * 1024**3),
+        )
+        self._cgroup(monkeypatch, tmp_path, memory_max=f"{8 * 1024**3}\n")
+        assert mc.free_system_memory() == 8 * 1024**3

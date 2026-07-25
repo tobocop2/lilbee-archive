@@ -150,22 +150,74 @@ def get_available_memory(fraction: float, *, total: bool = False) -> int:
     return int(psutil.virtual_memory().total * fraction)
 
 
+_CGROUP_ROOT = Path("/sys/fs/cgroup")
+
+
+def _cgroup_memory_limit(root: Path) -> int | None:
+    """Bytes this process's cgroup allows, or ``None`` when unlimited or unreadable.
+
+    cgroup v2 keeps the cap in ``memory.max`` (``max`` for unlimited); v1 uses
+    ``memory/memory.limit_in_bytes``, which spells unlimited as a near-int64
+    sentinel rather than a word, and so reads as a limit above installed RAM.
+    Both are read, matching the CPU quota reader in :mod:`lilbee.runtime.cpu`.
+    """
+    for path in (root / "memory.max", root / "memory" / "memory.limit_in_bytes"):
+        try:
+            raw = path.read_text().strip()
+        except OSError:
+            continue
+        if raw == "max":
+            return None
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+    return None
+
+
+def _cgroup_memory_used(root: Path) -> int | None:
+    """Bytes this process's cgroup currently holds, or ``None`` when unreadable."""
+    for path in (root / "memory.current", root / "memory" / "memory.usage_in_bytes"):
+        try:
+            return int(path.read_text().strip())
+        except (OSError, ValueError):
+            continue
+    return None
+
+
 def free_system_memory() -> int:
     """Live allocatable system RAM in bytes (free + reclaimable), right now.
 
     The load-time counterpart to :func:`get_available_memory`, which scales total
     capacity for sizing rather than reporting what is free this instant.
+
+    psutil reads the host's ``/proc/meminfo``, which a memory-capped container
+    sees in full, so the cgroup's own headroom bounds it: a 4 GiB container on a
+    512 GiB machine would otherwise size itself for the machine and be killed by
+    the OOM reaper on its first load.
     """
     import psutil
 
-    return int(psutil.virtual_memory().available)
+    host_free = int(psutil.virtual_memory().available)
+    limit = _cgroup_memory_limit(_CGROUP_ROOT)
+    if limit is None:
+        return host_free
+    used = _cgroup_memory_used(_CGROUP_ROOT)
+    return min(host_free, limit if used is None else max(0, limit - used))
 
 
 def total_system_memory() -> int:
-    """Total installed system RAM in bytes."""
+    """Total system RAM in bytes this process may use.
+
+    The cgroup limit where one caps the host, for the reason in
+    :func:`free_system_memory`. A limit above installed RAM is no limit at all,
+    which is also how cgroup v1's unlimited sentinel reads.
+    """
     import psutil
 
-    return int(psutil.virtual_memory().total)
+    host_total = int(psutil.virtual_memory().total)
+    limit = _cgroup_memory_limit(_CGROUP_ROOT)
+    return min(host_total, limit) if limit is not None else host_total
 
 
 def has_nvidia_gpu() -> bool:

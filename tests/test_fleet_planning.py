@@ -1520,20 +1520,26 @@ class TestResolveDevicesProbeFailureWarning:
             "probe_devices",
             lambda _binary: DeviceProbe([], "Available devices:\n", spoke_protocol=True),
         )
-        monkeypatch.setattr("lilbee.providers.model_cache.has_nvidia_gpu", lambda: True)
+        # Any installed GPU vendor triggers it now, not only NVIDIA.
+        monkeypatch.setattr(
+            "lilbee.providers.fleet.gpu_hardware.installed_gpu_vendor_ids",
+            lambda: frozenset({0x10DE}),
+        )
         monkeypatch.setattr("lilbee.providers.fleet.gpu_select.enumerate_gpu_vram", lambda: [])
         with caplog.at_level("WARNING", logger=planning_mod.__name__):
             devices = planning_mod.resolve_devices(Path("/bin/llama-server"))
         assert devices == []
         assert any("shared-memory mode" in record.message for record in caplog.records)
 
-    def test_no_warning_without_an_nvidia_gpu(self, monkeypatch, caplog) -> None:
+    def test_no_warning_without_any_gpu(self, monkeypatch, caplog) -> None:
         monkeypatch.setattr(
             planning_mod,
             "probe_devices",
             lambda _binary: DeviceProbe([], "Available devices:\n", spoke_protocol=True),
         )
-        monkeypatch.setattr("lilbee.providers.model_cache.has_nvidia_gpu", lambda: False)
+        monkeypatch.setattr(
+            "lilbee.providers.fleet.gpu_hardware.installed_gpu_vendor_ids", frozenset
+        )
         monkeypatch.setattr("lilbee.providers.fleet.gpu_select.enumerate_gpu_vram", lambda: [])
         with caplog.at_level("WARNING", logger=planning_mod.__name__):
             planning_mod.resolve_devices(Path("/bin/llama-server"))

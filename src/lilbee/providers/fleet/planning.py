@@ -1219,6 +1219,46 @@ def resolve_devices(binary: Path) -> list[FleetDevice]:
     return _resolve_devices_and_refusal(binary)[0]
 
 
+# The visibility variable each vendor's runtime reads, named in the warning so
+# the reader checks the one that applies to the card they actually have.
+_VENDOR_VISIBILITY_HINT = {
+    "NVIDIA": "CUDA_VISIBLE_DEVICES",
+    "AMD": "ROCR_VISIBLE_DEVICES / HIP_VISIBLE_DEVICES",
+    "Intel": "ONEAPI_DEVICE_SELECTOR",
+}
+
+
+def _warn_gpu_present_but_unenumerated(binary: Path) -> None:
+    """Say so when the host has a GPU the engine did not list.
+
+    Previously asked only whether an NVIDIA card was present, so an AMD or Intel
+    host whose engine enumerated nothing produced the identical symptom, a fleet
+    quietly planned for CPU, and said nothing. The vendor lookup is the same one
+    the Vulkan ICD rules use, and it works on Windows as well as Linux.
+    """
+    from lilbee.providers.fleet.gpu_hardware import installed_gpu_vendor_ids
+    from lilbee.providers.fleet.gpu_select import PCIVendorID
+
+    present = installed_gpu_vendor_ids()
+    names = sorted(
+        v.name.title() if v.name == "INTEL" else v.name for v in PCIVendorID if v in present
+    )
+    if not names:
+        return
+    hints = sorted(
+        {_VENDOR_VISIBILITY_HINT[name] for name in names if name in _VENDOR_VISIBILITY_HINT}
+    )
+    log.warning(
+        "This host has a %s GPU but the engine's device probe (%s --list-devices) "
+        "reported none; placement is falling back to shared-memory mode with unpinned "
+        "GPUs. Check the GPU driver, %s, and that this llama-server build supports "
+        "that GPU.",
+        " and ".join(names),
+        binary,
+        " / ".join(hints) if hints else "the vendor's visibility variable",
+    )
+
+
 def _resolve_devices_and_refusal(binary: Path) -> tuple[list[FleetDevice], bool]:
     """:func:`resolve_devices`, plus whether every GPU the engine listed was refused.
 
@@ -1246,14 +1286,8 @@ def _resolve_devices_and_refusal(binary: Path) -> tuple[list[FleetDevice], bool]
     # accusing its driver of failing to initialize would be both wrong and fatal.
     if probe.spoke_protocol:
         assert_gpu_devices_usable(binary, devices, probe.output)
-    if not devices and probe.spoke_protocol and model_cache.has_nvidia_gpu():
-        log.warning(
-            "This host has an NVIDIA GPU but the engine's device probe "
-            "(%s --list-devices) reported none; placement is falling back to "
-            "shared-memory mode with unpinned GPUs. Check the GPU driver, "
-            "CUDA_VISIBLE_DEVICES, and that the llama-server build has CUDA support.",
-            binary,
-        )
+    if not devices and probe.spoke_protocol:
+        _warn_gpu_present_but_unenumerated(binary)
     if not devices and not probe.spoke_protocol:
         # Only when the binary never answered the question. An engine that ran
         # and listed nothing is reporting a fact, not a gap: believing the host

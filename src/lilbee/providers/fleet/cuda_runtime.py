@@ -17,6 +17,7 @@ from __future__ import annotations
 import importlib.util
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -29,17 +30,23 @@ from lilbee.providers.base import ProviderError
 if TYPE_CHECKING:
     from lilbee.providers.fleet.devices import FleetDevice
 
-# Subpackages the nvidia-*-cu12 wheels install under the ``nvidia`` namespace
-# (the ``cuda12`` extra: nvidia-cuda-runtime-cu12, nvidia-cublas-cu12,
-# nvidia-cuda-nvrtc-cu12).
+# Subpackages the NVIDIA runtime wheels install under the ``nvidia`` namespace.
+# The distribution name carries the CUDA major (nvidia-cuda-runtime-cu12,
+# -cu13) but the import path does not, so this resolves whichever major is
+# installed and needs no version of its own. Only the packaging extra is
+# major-specific; see the ``cuda12`` extra in pyproject.toml.
 _CUDA_WHEEL_IMPORTS: tuple[str, ...] = (
     "nvidia.cuda_runtime",
     "nvidia.cublas",
     "nvidia.cuda_nvrtc",
 )
-# The sonames those wheels provide, used to tell from ``ldd`` whether a binary is a
-# CUDA build (it lists the soname whether or not the runtime resolves).
-_CUDA_SONAMES: tuple[str, ...] = ("libcudart.so.12", "libcublas.so.12", "libnvrtc.so.12")
+# The CUDA runtime sonames, matched by library name with the major read out of
+# the version suffix rather than pinned into the string. A build linking
+# libcudart.so.13 is as much a CUDA build as one linking .so.12, and pinning the
+# major meant the whole guard returned early on the newer one: a cu13 engine that
+# could not initialize a device fell to CPU in exactly the silence this exists to
+# break. Mirrors ollama's cudaRuntimeSORegex (discover/llama_server.go).
+_CUDA_SONAME_RE = re.compile(r"\blib(?:cudart|cublas|nvrtc)\.so\.(\d+)")
 # The HIP equivalents. A ROCm build links these and none of the CUDA sonames, so
 # the CUDA guard above never fired for it.
 _HIP_SONAMES: tuple[str, ...] = ("libamdhip64.so", "librocblas.so", "libhipblas.so")
@@ -124,12 +131,16 @@ def _ldd_output(binary: Path, env: dict[str, str]) -> str | None:
     return proc.stdout
 
 
+def _linked_cuda_major(ldd_output: str) -> int | None:
+    """The CUDA runtime major *ldd_output* links, or ``None`` when it links none."""
+    match = _CUDA_SONAME_RE.search(ldd_output)
+    return int(match.group(1)) if match else None
+
+
 def _links_cuda_runtime(binary: Path, env: dict[str, str]) -> bool:
     """True when *binary* lists a CUDA runtime soname (a CUDA build), resolved or not."""
     out = _ldd_output(binary, env)
-    if out is None:
-        return False
-    return any(soname in out for soname in _CUDA_SONAMES)
+    return out is not None and _linked_cuda_major(out) is not None
 
 
 def _device_probe_diagnostic(probe_output: str) -> str:
@@ -248,9 +259,11 @@ def assert_cuda_devices_usable(binary: Path, devices: list[FleetDevice], probe_o
         "The engine links the CUDA runtime and this host has an NVIDIA GPU, but it "
         "enumerated no CUDA-capable device, so GPU work would silently fall back to CPU.\n"
         f"The engine reported: {diagnostic}\n"
-        "Likely causes: the installed CUDA runtime is newer than the GPU driver supports "
-        "(check the driver's CUDA version with 'nvidia-smi' and match the "
-        "nvidia-cuda-runtime-cu12 / nvidia-cublas-cu12 / nvidia-cuda-nvrtc-cu12 wheels to "
-        "the engine's CUDA build, e.g. 12.4.x for a cu124 build, or update the driver); a "
+        "Likely causes: MIG is enabled on the card, whose parent device answers as an "
+        "NVIDIA GPU while CUDA enumerates only its instances (list them with "
+        "'nvidia-smi -L' and name one in CUDA_VISIBLE_DEVICES by its MIG- UUID); the "
+        "installed CUDA runtime is newer than the GPU driver supports (check the driver's "
+        "CUDA version with 'nvidia-smi' and match the nvidia-cuda-runtime / nvidia-cublas / "
+        "nvidia-cuda-nvrtc wheels to the engine's CUDA build, or update the driver); a "
         "restrictive CUDA_VISIBLE_DEVICES; or the runtime libraries missing from the path."
     )

@@ -12,12 +12,17 @@ nowhere is placed tight (best-effort, with a warning). See docs/architecture.md.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from functools import reduce
+from math import gcd
 
 from lilbee.providers.fleet.placement_spec import PlacementError, PlacementSpec, RolePlacement
 from lilbee.providers.fleet.vram import usable_vram_fraction
 from lilbee.providers.roles import ROLE_REGISTRY, WorkerRole
+
+log = logging.getLogger(__name__)
 
 # (role, per-device tensor-split ratio) -> the instance's per-device VRAM footprint
 # vector aligned to that ratio. A split is accepted only when every card's entry
@@ -382,33 +387,58 @@ def _place_split(
     busiest card (which OOMs first) gates the split, not the summed pool. A chat
     split widens past the fewest fitting cards via *chat_ctx_fit* (see
     :func:`plan_placement`); every other split takes the fewest that fit.
+
+    Each card count is tried at several proportions (:func:`_split_ratio_candidates`),
+    because a footprint that does not scale with the shard can overflow the
+    smallest card at the proportional ratio and fit at a shifted one. The sweep
+    stops after ``_MAX_SPLIT_ESTIMATES`` estimator calls and says so, since each
+    call is a subprocess.
     """
     from lilbee.providers.base import ProviderError
 
     by_free = sorted(remaining, key=lambda idx: remaining[idx], reverse=True)
     best: tuple[int, list[int], tuple[int, ...], tuple[int, ...]] | None = None
+    spent = 0
     for count in range(2, len(by_free) + 1):
         chosen = by_free[:count]
-        ratio = _vram_proportional_split(chosen, remaining)
-        try:
-            per_device = estimate_peak(model.role, ratio)
-        except (ProviderError, OSError):
-            # An unsizable model cannot evaluate a split; the tight single-card
-            # path downstream still places it.
-            continue
-        if len(per_device) != count or not all(
-            peak <= remaining[idx] for idx, peak in zip(chosen, per_device, strict=True)
-        ):
-            continue
-        # Only chat is widened past the fewest fitting cards; everything else (and
-        # the no-fitter generic path) takes the first shard that fits.
-        if model.role is not WorkerRole.CHAT or chat_ctx_fit is None or free_headroom is None:
-            return _charge_split(model, chosen, ratio, per_device, remaining)
-        served = chat_ctx_fit(ratio, [free_headroom[idx] for idx in chosen])
-        if served >= chat_ctx_target:
-            return _charge_split(model, chosen, ratio, per_device, remaining)
-        if best is None or served > best[0]:
-            best = (served, chosen, ratio, per_device)
+        for ratio in _split_ratio_candidates(chosen, remaining):
+            if spent >= _MAX_SPLIT_ESTIMATES:
+                log.info(
+                    "Stopped looking for a tensor split for %s after %d estimates; "
+                    "wider layouts and finer proportions were not tried.",
+                    model.role.value,
+                    spent,
+                )
+                return _best_or_none(best, model, remaining)
+            spent += 1
+            try:
+                per_device = estimate_peak(model.role, ratio)
+            except (ProviderError, OSError):
+                # An unsizable model cannot evaluate a split; the tight single-card
+                # path downstream still places it.
+                continue
+            if len(per_device) != count or not all(
+                peak <= remaining[idx] for idx, peak in zip(chosen, per_device, strict=True)
+            ):
+                continue
+            # Only chat is widened past the fewest fitting cards; everything else (and
+            # the no-fitter generic path) takes the first shard that fits.
+            if model.role is not WorkerRole.CHAT or chat_ctx_fit is None or free_headroom is None:
+                return _charge_split(model, chosen, ratio, per_device, remaining)
+            served = chat_ctx_fit(ratio, [free_headroom[idx] for idx in chosen])
+            if served >= chat_ctx_target:
+                return _charge_split(model, chosen, ratio, per_device, remaining)
+            if best is None or served > best[0]:
+                best = (served, chosen, ratio, per_device)
+    return _best_or_none(best, model, remaining)
+
+
+def _best_or_none(
+    best: tuple[int, list[int], tuple[int, ...], tuple[int, ...]] | None,
+    model: ModelPlacementInput,
+    remaining: dict[int, float],
+) -> _Placed | None:
+    """Charge the widest chat split found short of the target, if there was one."""
     if best is not None:
         _served, chosen, ratio, per_device = best
         return _charge_split(model, chosen, ratio, per_device, remaining)
@@ -585,9 +615,11 @@ def placement_from_spec(
 
 
 def _vram_proportional_split(
-    devices: Sequence[int], remaining: dict[int, float]
+    devices: Sequence[int], remaining: dict[int, float], *, divisor: int = 1
 ) -> tuple[int, ...]:
     """Tensor-split ratio proportional to each card's remaining usable VRAM.
+
+    *divisor* sets the resolution: 1 is whole GiB, 4 is quarter-GiB shares.
 
     Each card's shard tracks its remaining VRAM (whole GiB, min 1), so a card
     already carrying other roles takes a smaller share. This is the single source
@@ -597,7 +629,75 @@ def _vram_proportional_split(
     the same way the planner charges the identical layout, instead of an even split
     that would falsely reject a fit the planner itself serves.
     """
-    return tuple(max(1, int(remaining[idx] / 1024**3)) for idx in devices)
+    return tuple(max(1, int(remaining[idx] * divisor / 1024**3)) for idx in devices)
+
+
+# How many proportions the sweep will try per card count, and how many estimator
+# calls the whole sweep may spend. The estimator shells out to gguf-parser, so an
+# unbounded ladder on a wide box turns a plan into a minute of subprocesses; the
+# cap is what keeps the search's cost linear in cards rather than in cards times
+# candidates.
+_MAX_RATIO_CANDIDATES = 3
+_MAX_SPLIT_ESTIMATES = 24
+# Sub-GiB resolution for the shifted candidates. Whole GiB is coarse enough that
+# two cards 700 MiB apart quantize to the same share.
+_RATIO_QUANTUM_DIVISOR = 4
+
+
+def _split_ratio_candidates(
+    devices: Sequence[int], remaining: dict[int, float]
+) -> tuple[tuple[int, ...], ...]:
+    """Proportions worth trying for a split across *devices*, best-first.
+
+    The VRAM-proportional ratio leads, because it is right whenever the footprint
+    scales with the shard. It is not always right: KV, compute buffers and a
+    fixed per-device overhead do not scale, so the proportional shard can
+    overflow the smallest card while the group has room. The rest of the ladder
+    shifts load toward the roomiest card at finer resolution, which is the
+    direction that helps when it does not.
+
+    Deduplicated by proportion rather than by tuple, so equal cards cost one
+    estimate rather than three: (24, 24) and (96, 96) are the same split asked
+    twice, and each ask is a subprocess.
+    """
+    quantum = _vram_proportional_split(devices, remaining, divisor=_RATIO_QUANTUM_DIVISOR)
+    candidates = [
+        _vram_proportional_split(devices, remaining),
+        quantum,
+        _shifted_toward_roomiest(devices, remaining, quantum),
+    ]
+    seen: dict[tuple[int, ...], tuple[int, ...]] = {}
+    for candidate in candidates:
+        seen.setdefault(_normalized(candidate), candidate)
+    return tuple(seen.values())[:_MAX_RATIO_CANDIDATES]
+
+
+def _normalized(ratio: tuple[int, ...]) -> tuple[int, ...]:
+    """*ratio* in lowest terms, so the same proportion compares equal."""
+    divisor = reduce(gcd, ratio)
+    return tuple(part // divisor for part in ratio)
+
+
+def _shifted_toward_roomiest(
+    devices: Sequence[int], remaining: dict[int, float], base: tuple[int, ...]
+) -> tuple[int, ...]:
+    """*base* with a share moved from the tightest card to the roomiest.
+
+    A tenth of the tightest card's share, which is enough to clear a fixed
+    per-device overhead without distorting a proportion that was nearly right.
+    Cards with identical room have nowhere to shift to, so *base* is returned
+    unchanged rather than making one of them worse. A lone card takes the same
+    path, being trivially equal to itself.
+    """
+    order = sorted(range(len(devices)), key=lambda pos: remaining[devices[pos]])
+    tightest, roomiest = order[0], order[-1]
+    if remaining[devices[tightest]] == remaining[devices[roomiest]]:
+        return base
+    moved = max(1, base[tightest] // 10)
+    shifted = list(base)
+    shifted[tightest] = max(1, shifted[tightest] - moved)
+    shifted[roomiest] += moved
+    return tuple(shifted)
 
 
 def _required_entry(

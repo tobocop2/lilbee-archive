@@ -51,16 +51,24 @@ MIB = 1024 * 1024
 # report says what to compare with.
 VERIFIED_ENGINE_BUILD = "9310 (e2ef8fe42)"
 
-# "load_tensors:  MTL0_Mapped model buffer size =    82.41 MiB", plus the KV,
-# compute and output lines that follow under different prefixes (load_tensors,
-# llama_context, llama_kv_cache, sched_reserve). The device label is whatever the
-# backend calls itself: CUDA0, MTL0, Vulkan1, CPU. Sizes are always MiB.
-# A timestamp and level prefix the line when the engine writes to --log-file, so
-# the match is not anchored to the start.
-_BUFFER_RE = re.compile(
-    r"\S+:\s+(?P<device>\S+)\s+(?:model|KV|compute|output)\s+"
-    r"buffer size\s*=\s*(?P<mib>[\d.]+)\s*MiB"
-)
+# "load_tensors:  MTL0_Mapped model buffer size =    82.41 MiB", and its siblings.
+#
+# Deliberately does NOT enumerate the buffer kinds. Listing them by hand meant
+# reading two logs and hardcoding the four that happened to appear, which
+# silently dropped LoRA (every adapter), RS (every Mamba and RWKV model) and the
+# DeepSeek V4 state buffer. Upstream is free to add another tomorrow. The shape
+# is what is stable: a prefix, the device, some words, "buffer size = N MiB".
+#
+# What the "= N MiB" requirement keeps out is the point of writing it that way.
+# llama.cpp has three other lines carrying these words that are not allocations:
+# the self-check pair reading "compute buffer size is N MiB, matches expectation"
+# and "... of N MiB, does not match expectation", plus ggml-opencl's "buffer size
+# reduced from A to B". None uses "=", so none is counted.
+#
+# The device label is whatever the backend calls itself: CUDA0, MTL0, Vulkan1,
+# CPU. A timestamp and level prefix the line under --log-file, so the match is
+# not anchored to the start.
+_BUFFER_RE = re.compile(r"\S+:\s+(?P<device>\S+)\s+.*?buffer size\s*=\s*(?P<mib>[\d.]+)\s*MiB")
 # The engine names an mmapped weight buffer "<device>_Mapped" beside the same
 # device's other buffers. Same memory, so the suffix is folded away rather than
 # splitting one card's total across two keys.

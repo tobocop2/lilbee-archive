@@ -1352,7 +1352,11 @@ def _launch_for(
 
         split_slots, ctx = _resolve_split_chat_slots(_split_fit)
     else:
-        ctx = _role_ctx(plan.role, model_path, meta, placed_device)
+        # Downshifted here and not only in the estimate: the role resolvers are
+        # pure functions of model and config, so without this the retry after a
+        # load OOM re-emits a byte-identical argv and dies the same way. The
+        # split branch above already inherits it through its ctx_ceiling.
+        ctx = apply_ctx_downshift(plan.role, _role_ctx(plan.role, model_path, meta, placed_device))
     rerank_mode = _role_rerank_mode(plan.role, meta)
     is_llm_rerank = rerank_mode is RerankMode.LLM
     # A multi-card chat runs as many full-context slots as its cards' KV headroom

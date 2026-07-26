@@ -15,8 +15,9 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -429,6 +430,8 @@ class SwapManager:
             self._launches_payload = []
             return
         _stop_own_fleet(self._config_path, tuple(self._member_ports))
+        # Nothing is coming back to bind these, so the picker can offer them again.
+        release_reserved_ports([*self._member_ports, *([self._port] if self._port else [])])
         self._state_path.unlink(missing_ok=True)
         if self._proc is not None:
             # Free this engine's death pipe so its watcher exits now, not at our death.
@@ -524,6 +527,30 @@ def _ephemeral_range() -> tuple[int, int] | None:
 _PORT_SEARCH_FLOOR = 20000
 _PORT_SEARCH_ATTEMPTS = 200
 
+# Ports handed to a child that has not bound them yet. llama-swap binds a member
+# port only on that member's first request, so the probe socket is long closed
+# by then and the port looks free to every later probe. Without this the picker
+# hands the next group exactly what it gave the last one, every time.
+_reserved_ports: set[int] = set()
+_reserved_lock = threading.Lock()
+
+
+def release_reserved_ports(ports: Iterable[int]) -> None:
+    """Give *ports* back to the picker, once nothing is expected to bind them."""
+    with _reserved_lock:
+        _reserved_ports.difference_update(ports)
+
+
+def _search_start(ceiling: tuple[int, int]) -> int:
+    """Where this process begins its scan of the sub-ephemeral window.
+
+    Spread by pid. Reservation only covers this process, and two lilbee starts
+    racing each other cannot see each other's picks at all, so beginning at a
+    different offset per process is what keeps them apart.
+    """
+    span = max(1, min(ceiling[0], _PORT_SEARCH_FLOOR + _PORT_SEARCH_ATTEMPTS) - _PORT_SEARCH_FLOOR)
+    return _PORT_SEARCH_FLOOR + os.getpid() % span
+
 
 def _pick_free_ports(count: int) -> list[int]:
     """Bind *count* free localhost ports at once and return them.
@@ -550,16 +577,27 @@ def _pick_free_ports(count: int) -> list[int]:
 
 
 def _bind_below_ephemeral(sock: socket.socket, ceiling: tuple[int, int] | None) -> None:
-    """Bind *sock* under the ephemeral floor, or let the OS choose if it cannot."""
+    """Bind *sock* to a free, unreserved port under the ephemeral floor.
+
+    Falls back to letting the OS choose when the range is unknown or the window
+    is used up, which keeps a fleet start working at the cost of returning to the
+    ephemeral range for those ports.
+    """
     if ceiling is not None and ceiling[0] > _PORT_SEARCH_FLOOR:
-        for port in range(
-            _PORT_SEARCH_FLOOR, min(ceiling[0], _PORT_SEARCH_FLOOR + _PORT_SEARCH_ATTEMPTS)
-        ):
-            try:
-                sock.bind((_HOST, port))
-            except OSError:
-                continue
-            return
+        top = min(ceiling[0], _PORT_SEARCH_FLOOR + _PORT_SEARCH_ATTEMPTS)
+        span = top - _PORT_SEARCH_FLOOR
+        start = _search_start(ceiling)
+        for offset in range(span):
+            port = _PORT_SEARCH_FLOOR + (start - _PORT_SEARCH_FLOOR + offset) % span
+            with _reserved_lock:
+                if port in _reserved_ports:
+                    continue
+                try:
+                    sock.bind((_HOST, port))
+                except OSError:
+                    continue
+                _reserved_ports.add(port)
+                return
     sock.bind((_HOST, 0))
 
 

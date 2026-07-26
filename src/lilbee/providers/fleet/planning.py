@@ -864,16 +864,31 @@ def _expert_offload_configured() -> bool:
     return bool(cfg.cpu_moe) or (cfg.n_cpu_moe is not None and cfg.n_cpu_moe >= 1)
 
 
-def _weights_exceed_hardware(size: int, total_vram: int, *, is_moe: bool) -> bool:
-    """True when a model's weight bytes alone cannot fit the fleet's physical VRAM.
+def _weights_exceed_everything(size: int, *, total_vram: int, total_ram: int) -> bool:
+    """True when a model's weights fit neither the GPUs nor system memory.
 
     File size is ground truth, not an estimate, so this bound cannot repeat the
-    false-refusal class: no estimator error makes a 40 GiB file fit a 1 GiB card.
-    It stands down for a per-layer offload (``n_gpu_layers``, which moves dense
-    layers too) on any model, and for expert offload only on a mixture-of-experts
-    model, where the experts genuinely leave the GPU. A dense model with expert
-    offload set keeps its refusal: the launch would emit no offload flags, so the
-    weights really must fit, and a guided refusal beats a raw load-time OOM.
+    false-refusal class: no estimator error makes a 40 GiB file fit a 1 GiB box.
+    Past both pools there is nowhere for a layer to go and no launch can win, so
+    saying so beats a load that thrashes and then dies.
+    """
+    ceiling = total_vram + total_ram
+    return ceiling > 0 and size > ceiling
+
+
+def _weights_exceed_hardware(size: int, total_vram: int, *, is_moe: bool) -> bool:
+    """True when this model cannot be served on this machine at all.
+
+    Exceeding VRAM alone is not that. The engine chooses how many layers fit and
+    keeps the rest in system memory, so a model larger than every card is a
+    partial offload and lilbee's job is to launch it and say what will happen.
+    Refusing there meant the fit never ran and the role was skipped, which left
+    the user hand-tuning n_gpu_layers to get back what the engine does by itself.
+
+    What still refuses is a model past VRAM and system memory together, where no
+    arrangement of layers exists. A user-set n_gpu_layers or expert offload keeps
+    standing the bound down entirely, since the user has said where the weights
+    should go.
     """
     from lilbee.core.config import cfg
 
@@ -881,7 +896,9 @@ def _weights_exceed_hardware(size: int, total_vram: int, *, is_moe: bool) -> boo
         return False
     if is_moe and _expert_offload_configured():
         return False
-    return total_vram > 0 and size > total_vram
+    return _weights_exceed_everything(
+        size, total_vram=total_vram, total_ram=model_cache.total_system_memory()
+    )
 
 
 def _vision_without_mmproj(role: WorkerRole, ref: str) -> bool:
@@ -969,6 +986,8 @@ def _admit_estimate(
     if _weights_exceed_hardware(weights, total_vram, is_moe=_ref_is_moe(ref)):
         _warn_weights_exceed(role, ref, weights, total_vram)
         return None
+    if total_vram > 0 and weights > total_vram:
+        _warn_weights_spill(role, ref, weights, total_vram)
     if _host_memory_refuses(role, ref, ram_bytes, host_committed):
         return None
     return estimate
@@ -1153,20 +1172,28 @@ def _host_memory_refuses(role: WorkerRole, ref: str, ram_bytes: int, committed: 
 
 
 def _warn_weights_exceed(role: WorkerRole, ref: str, weights: int, total_vram: int) -> None:
-    # Cutting GPU layers on a sparse model slows all of it; offload the experts.
-    remedy = (
-        "set cpu_moe to keep its expert weights in system memory"
-        if _ref_is_moe(ref)
-        else "set n_gpu_layers to offload part of it to system memory"
-    )
     log.warning(
-        "The %s model %s cannot load: its weights alone are %.1f GiB and the GPU "
-        "memory is %.1f GiB in total. Use a smaller model, or %s.",
+        "The %s model %s cannot load: its weights are %.1f GiB and this machine has "
+        "%.1f GiB of GPU memory and %.1f GiB of system memory, so there is nowhere "
+        "for its layers to go. Use a smaller model or a smaller quantization.",
         role.value,
         ref,
         weights / 1024**3,
         total_vram / 1024**3,
-        remedy,
+        model_cache.total_system_memory() / 1024**3,
+    )
+
+
+def _warn_weights_spill(role: WorkerRole, ref: str, weights: int, total_vram: int) -> None:
+    """Say that a model larger than the GPUs will run partly in system memory."""
+    log.warning(
+        "The %s model %s is %.1f GiB and this machine has %.1f GiB of GPU memory, so "
+        "the engine will keep the layers that fit on the GPU and the rest in system "
+        "memory. It will run, and it will be slower than a model that fits.",
+        role.value,
+        ref,
+        weights / 1024**3,
+        total_vram / 1024**3,
     )
 
 

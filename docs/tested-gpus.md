@@ -11,6 +11,7 @@ This page records what has been run and what has not. A backend listed as untest
 | 2x NVIDIA A40 (46 GB) | CUDA | 9665 `e3a74b299` | Per-device buffer reporting on a tensor split, `CUDA0`/`CUDA1` labels, `CUDA_Host` excluded from device memory, cgroup memory limits honoured over `/proc/meminfo` |
 | NVIDIA GTX 1070 Ti (8 GB) | Vulkan | 9665 `e3a74b299` | `Vulkan0` labels, `Vulkan_Host` excluded from device memory, vision projector accounting, Vulkan device enumeration and its crash isolation |
 | Apple Silicon | Metal | 9310 `e2ef8fe42` | `MTL0` labels, unified-memory budgeting |
+| Intel UHD (CometLake) | Vulkan | 9665 `e3a74b299` | `Vulkan0` and `Vulkan_Host` on non-NVIDIA silicon, chat and vision loads, reported figures identical to the same loads on a discrete card |
 | Intel UHD (CometLake) + GTX 1650 Ti | Vulkan + CUDA, hybrid | 9665 `e3a74b299` | Two adapters of different types on one host: the integrated one classified as shared memory, the discrete one as dedicated |
 | Intel Xeon Platinum 8481C | CPU | 9665 `e3a74b299` | Host-only load with no GPU present, `CPU`/`CPU_Mapped` attribution |
 
@@ -28,6 +29,12 @@ Vulkan is where every AMD and Intel GPU lands, so its wording matters well beyon
 
 A vision model on the same card settled a second question: a projector's weights appear in **no** buffer line at all. The engine reports them only as prose, so the estimate has to be corrected before it is compared, or every correctly-sized vision load reports a shortfall that is not there.
 
+### What the Intel iGPU settled
+
+Vulkan's wording had only ever been seen on an NVIDIA ICD, so `Vulkan0` and `Vulkan_Host` were verified for one vendor and assumed for the rest. An Intel CometLake iGPU produces the same labels, and the same two loads produce the same figures to the last two decimals: a chat model reports 157.13 MiB on the card, a vision model 215.73 MiB, with host allocators excluded from both.
+
+That the numbers match a discrete NVIDIA card exactly is the useful part. The buffer report describes what the model asked for, not what the silicon is, so the readback does not need a per-vendor table.
+
 ### What the hybrid laptop settled
 
 With the NVIDIA driver loaded, the Vulkan loader enumerates both adapters and reports their types correctly: the GTX 1650 Ti as discrete, the CometLake iGPU as integrated. lilbee then classifies each the way it should, the discrete card against its own 4 GB and the integrated one against host memory. That is the case this machine demonstrates, and it works.
@@ -41,7 +48,8 @@ The same machine with no NVIDIA driver installed enumerates the iGPU alone while
 | Backend | Status |
 |---------|--------|
 | ROCm (AMD Instinct, Radeon) | No hardware run. Device naming, `ROCm_Host`, and the same-rank backend tie-break are all unverified |
-| Vulkan on AMD or Intel silicon | No hardware run. Vulkan itself is verified, but only on an NVIDIA ICD |
+| Vulkan on AMD silicon | No hardware run. Vulkan is verified on NVIDIA and on an Intel iGPU; AMD is untested |
+| Intel discrete (Arc, Max) | No hardware run. Only Intel integrated graphics has been tested |
 | SYCL (Intel Arc, Max) | No engine wheel is published for SYCL, so this cannot be tested on any hardware today |
 | CANN (Huawei Ascend) | No hardware run |
 | Mixed-vendor host with two discrete cards | Partly covered. A hybrid Intel plus NVIDIA laptop is verified above; two discrete cards from different vendors in one machine is not, and cloud providers do not sell it |

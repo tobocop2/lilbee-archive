@@ -2308,10 +2308,12 @@ class TestPlacementFindingsLog:
         assert "0.1 GiB" in caplog.text
 
 
-class TestSizingFailureFallsBackToFileSize:
-    """A model the estimator cannot size is enrolled at its weight bytes, so the
-    load, not the estimator, decides. Weight bytes are also a physics bound:
-    weights alone exceeding total VRAM refuses with a clear message."""
+class TestSizingFailureFallsBackToAnAnalyticFloor:
+    """A model the estimator cannot size is enrolled at weights plus the cache and
+    buffers it will allocate, not at weight bytes alone: the engine allocates all
+    three, and charging only the first fits models that cannot fit. Weight bytes
+    remain a physics bound: weights alone exceeding total VRAM refuses with a
+    clear message."""
 
     @pytest.fixture
     def _sizing_boom(self, tmp_path, monkeypatch):
@@ -2337,14 +2339,15 @@ class TestSizingFailureFallsBackToFileSize:
         monkeypatch.setattr(cfg, "vision_model", "")
         return model
 
-    def test_unsizable_model_enrolls_at_its_file_size(self, _sizing_boom, caplog) -> None:
+    def test_unsizable_model_enrolls_above_its_file_size(self, _sizing_boom, caplog) -> None:
         import logging
 
         with caplog.at_level(logging.WARNING):
             inputs, _refs, _res, _skipped = planning_mod._server_model_inputs(total_vram=24 * _GB)
         by_role = {i.role: i for i in inputs}
-        assert by_role[WorkerRole.CHAT].est_vram_bytes == 4096
-        assert "Using its file size" in caplog.text
+        # The file is 4096 bytes; the KV cache it will allocate dwarfs that.
+        assert by_role[WorkerRole.CHAT].est_vram_bytes > 4096
+        assert "floor rather than an estimate" in caplog.text
 
     def test_weights_beyond_total_vram_refuse_with_a_clear_message(
         self, _sizing_boom, caplog
@@ -2424,7 +2427,8 @@ class TestSizingFailureFallsBackToFileSize:
         with caplog.at_level(logging.WARNING):
             inputs, _refs, _res, _skipped = planning_mod._server_model_inputs(total_vram=24 * _GB)
         by_role = {i.role: i for i in inputs}
-        assert by_role[WorkerRole.VISION].est_vram_bytes == 4096 + 1024
+        # The projector still counts toward the weights the floor is built on.
+        assert by_role[WorkerRole.VISION].est_vram_bytes > 4096 + 1024
 
     def test_fit_slots_returns_single_slot_when_estimator_fails(
         self, tmp_path, monkeypatch

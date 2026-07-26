@@ -186,8 +186,16 @@ _ENGINE_LOG_TEMPLATE = "engine-{model_id}.log"
 # environment rather than argv because the launch is planned before the data
 # directory that holds these logs is chosen, and because neither affects sizing,
 # which is what the estimate-versus-launch argv parity test covers.
+# Both spellings, because the engine renamed them and lilbee has to work with
+# whichever build is installed. common/arg.cpp registers LLAMA_ARG_LOG_FILE and
+# LLAMA_ARG_LOG_VERBOSITY on current master; builds around 9310 read the same
+# settings as LLAMA_LOG_FILE and LLAMA_LOG_VERBOSITY, verified by running both
+# pairs against one. An unread variable costs nothing, and picking one meant the
+# readback silently produced no log at all on half the builds in the wild.
 ENV_LOG_FILE = "LLAMA_LOG_FILE"
 ENV_LOG_VERBOSITY = "LLAMA_LOG_VERBOSITY"
+ENV_ARG_LOG_FILE = "LLAMA_ARG_LOG_FILE"
+ENV_ARG_LOG_VERBOSITY = "LLAMA_ARG_LOG_VERBOSITY"
 # Level 4 ("trace") is where the per-device buffer report appears. Measured
 # against the bundled engine: the default 3 omits it entirely, and 5 adds a
 # per-layer and per-slot flood for the same six lines.
@@ -201,9 +209,12 @@ def engine_log_path(log_dir: Path, model_id: str) -> Path:
 
 def engine_log_env(log_dir: Path, model_id: str) -> dict[str, str]:
     """Environment that makes the engine report what it allocated, and where."""
+    path = str(engine_log_path(log_dir, model_id))
     return {
-        ENV_LOG_FILE: str(engine_log_path(log_dir, model_id)),
+        ENV_LOG_FILE: path,
+        ENV_ARG_LOG_FILE: path,
         ENV_LOG_VERBOSITY: LOAD_REPORT_VERBOSITY,
+        ENV_ARG_LOG_VERBOSITY: LOAD_REPORT_VERBOSITY,
     }
 
 
@@ -239,7 +250,11 @@ def check_launch(
     try:
         text = engine_log_path(log_dir, model_id).read_text(errors="replace")
     except OSError:
-        # No log yet: the engine has not started writing. Nothing to say.
+        # No log at all. Usually the engine simply has not written one yet, so
+        # this is silent by default. It is also exactly what a wrong environment
+        # variable name looks like, which is how an earlier spelling went
+        # unnoticed: the check returned False forever and read as "estimate fine".
+        # report_missing_log is how a caller that knows the engine is up says so.
         return False
     per_device = {
         label: size
@@ -304,5 +319,29 @@ def _report_per_device(
         worst_label,
         actual.get(worst_label, 0) / 1024**3,
         estimated.get(worst_label, 0) / 1024**3,
+    )
+    return True
+
+
+def report_missing_log(log_dir: Path, model_id: str, role: WorkerRole) -> bool:
+    """Warn when a ready engine wrote no log where lilbee told it to.
+
+    Separate from :func:`check_launch` because only the caller knows the engine
+    finished loading; an absent file before that is ordinary. After it, the file
+    should exist, and its absence means the engine never accepted the settings
+    that produce it. That is a silent no-op rather than a wrong answer, which is
+    the harder kind to notice, so it is stated.
+    """
+    if engine_log_path(log_dir, model_id).exists():
+        return False
+    log.warning(
+        "The %s engine is running but wrote no log to %s, so its memory use could not "
+        "be checked against the estimate. The engine build most likely does not read "
+        "the variables lilbee sets to ask for one (%s or %s); placement estimates are "
+        "unverified until that is updated.",
+        role.value,
+        engine_log_path(log_dir, model_id),
+        ENV_LOG_FILE,
+        ENV_ARG_LOG_FILE,
     )
     return True

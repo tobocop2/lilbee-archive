@@ -135,6 +135,7 @@ def estimate_instance_footprint(
 
     def run(mmproj: Path | None) -> GgufVramEstimate:
         return _cached_footprint(
+            engine_build_identity(),
             str(model_path),
             model_path.stat().st_mtime_ns,
             ctx,
@@ -178,8 +179,22 @@ def _corrected_projector_estimate(
     )
 
 
+def engine_build_identity() -> str:
+    """Which engine build these numbers describe.
+
+    Part of the memo key. The estimate prices what one particular llama-server
+    will allocate, and the key held the model, the sizing and the parser's own
+    arguments without a trace of that, so swapping the engine kept the previous
+    engine's answers.
+    """
+    from lilbee.providers.fleet.binary import _engine_build_id
+
+    return _engine_build_id()
+
+
 @lru_cache(maxsize=_CACHE_SIZE)
 def _cached_footprint(
+    _engine_id: str,
     path_str: str,
     _mtime_ns: int,
     ctx: int,
@@ -194,10 +209,11 @@ def _cached_footprint(
     batch_size: int | None,
     expert_offload: tuple[str, ...],
 ) -> GgufVramEstimate:
-    """Memoised gguf-parser run keyed on path + mtime + sizing.
+    """Memoised gguf-parser run keyed on engine + path + mtime + sizing.
 
-    The mtime args participate in the cache key only; a re-pulled file at the same
-    path invalidates automatically because its mtime changes.
+    The mtime and engine args participate in the cache key only; a re-pulled file
+    at the same path invalidates automatically because its mtime changes, and a
+    swapped engine invalidates because its build identity does.
     """
     argv = estimator_argv(
         path_str,

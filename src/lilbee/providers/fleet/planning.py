@@ -933,6 +933,31 @@ def _estimate_or_fallback(
     return estimate
 
 
+def _analytic_footprint_floor(
+    weights: int, *, meta: dict[str, str] | None, ctx: int, slots: int
+) -> int:
+    """The least this instance can occupy: weights, its KV cache, and overhead.
+
+    Used when the estimator cannot answer. Charging weight bytes alone was a
+    knowing under-charge: the engine allocates a KV cache sized by context and
+    slot count, plus compute buffers, and omitting all of it lets placement fit a
+    model that cannot fit. The comment said the load would decide, and it did, by
+    running out of memory.
+
+    A floor rather than an estimate. It is derived from the header the same way
+    the in-process sizing path derives it, and it is deliberately the smallest
+    defensible number, because refusing a model that would have fit is its own
+    failure. Without a readable header the per-token fallback still applies:
+    zero is the one answer that is certainly wrong.
+    """
+    from lilbee.providers import model_cache
+    from lilbee.providers.engine_params import _kv_elem_bytes_for_cfg
+
+    kv_bytes = model_cache.kv_bytes_per_token(meta, _kv_elem_bytes_for_cfg()) * ctx * max(slots, 1)
+    overhead = int(weights * model_cache._BUFFER_OVERHEAD_FRACTION)
+    return weights + kv_bytes + overhead
+
+
 def _sizing_failure_fallback(
     role: WorkerRole,
     ref: str,
@@ -941,9 +966,9 @@ def _sizing_failure_fallback(
     device_count: int,
     total_vram: int,
 ) -> ModelPlacementInput | None:
-    """Weights-bytes placement input for an installed model the estimator cannot
-    size, so the load, not the estimator, decides; ``None`` skips the role (the
-    file is unresolvable, or its weights alone exceed the hardware)."""
+    """Analytic-floor placement input for an installed model the estimator cannot
+    size; ``None`` skips the role (the file is unresolvable, or its weights alone
+    exceed the hardware)."""
     weights = _role_weights_bytes(role, ref)
     if weights == 0:
         log.warning("Skipping %s server: could not size model %r (%s).", role.value, ref, exc)
@@ -951,14 +976,36 @@ def _sizing_failure_fallback(
     if _weights_exceed_hardware(weights, total_vram, is_moe=_ref_is_moe(ref)):
         _warn_weights_exceed(role, ref, weights, total_vram)
         return None
+    floor = _fallback_floor_for(role, ref, weights)
     log.warning(
-        "Could not size the %s model %s (%s). Using its file size and letting the load decide.",
+        "Could not size the %s model %s (%s). Charging %.1f GiB, its weights plus the "
+        "cache and buffers it will allocate, which is a floor rather than an estimate: "
+        "the load may still need more.",
         role.value,
         ref,
         exc,
+        floor / 1024**3,
     )
     return ModelPlacementInput(
-        role=role, est_vram_bytes=weights, replicas=_replica_count(role, device_count)
+        role=role, est_vram_bytes=floor, replicas=_replica_count(role, device_count)
+    )
+
+
+def _fallback_floor_for(role: WorkerRole, ref: str, weights: int) -> int:
+    """:func:`_analytic_footprint_floor` for *role*, reading what metadata it can."""
+    from lilbee.providers.base import ProviderError
+    from lilbee.providers.engine_params import resolve_model_path
+    from lilbee.providers.gguf_meta import read_gguf_metadata
+
+    try:
+        path = resolve_model_path(ref)
+        meta = read_gguf_metadata(path)
+    except (ProviderError, OSError, ValueError):
+        meta = None
+        path = None
+    ctx = _placement_estimate_ctx(role, path, meta) if path is not None else _MIN_USABLE_CHAT_CTX
+    return _analytic_footprint_floor(
+        weights, meta=meta, ctx=ctx, slots=_placement_estimate_slots(role, meta)
     )
 
 

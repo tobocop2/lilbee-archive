@@ -483,20 +483,84 @@ class SwapManager:
         raise ProviderError(message, provider=_PROVIDER, kind=ProviderErrorKind.SERVER)
 
 
+# Linux publishes the range here; every other platform is asked via sysctl.
+_PROC_PORT_RANGE = Path("/proc/sys/net/ipv4/ip_local_port_range")
+
+
+def _port_range_from(path: Path) -> tuple[int, int] | None:
+    """The two integers in *path*, or ``None`` when it is absent or unreadable."""
+    try:
+        low, high = path.read_text().split()[:2]
+        return int(low), int(high)
+    except (OSError, ValueError):
+        return None
+
+
+def _ephemeral_range() -> tuple[int, int] | None:
+    """The port range the kernel hands out for unbound sockets, if it says.
+
+    ``None`` when neither source answers, which is the signal to fall back to
+    letting the OS choose.
+    """
+    from_proc = _port_range_from(_PROC_PORT_RANGE)
+    if from_proc is not None:
+        return from_proc
+    try:  # macOS and the BSDs, which have no procfs entry for this
+        out = subprocess.run(
+            ["/usr/sbin/sysctl", "-n", "net.inet.ip.portrange.first", "net.inet.ip.portrange.last"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        low, high = out.stdout.split()[:2]
+        return int(low), int(high)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+# Where lilbee looks for engine ports when the kernel's ephemeral range is known.
+# Above the registered-service crowd, below every default ephemeral range.
+_PORT_SEARCH_FLOOR = 20000
+_PORT_SEARCH_ATTEMPTS = 200
+
+
 def _pick_free_ports(count: int) -> list[int]:
-    """Bind *count* ephemeral localhost ports at once and return them.
+    """Bind *count* free localhost ports at once and return them.
 
     All sockets stay open until every port is claimed so the OS cannot hand the
     same port out twice within one allocation.
+
+    Picked from below the kernel's ephemeral range rather than inside it. The
+    gap between lilbee picking a port and llama-server binding it spans the whole
+    lazy-spawn wait, and a port inside the ephemeral range can be handed to any
+    passing outbound connection during that gap; one below it cannot be handed to
+    anybody, so the only way to lose it is another server binding that exact port
+    on purpose. Falls back to letting the OS choose when the range is unknown.
     """
+    ceiling = _ephemeral_range()
     sockets = [socket.socket(socket.AF_INET, socket.SOCK_STREAM) for _ in range(count)]
     try:
         for sock in sockets:
-            sock.bind((_HOST, 0))
+            _bind_below_ephemeral(sock, ceiling)
         return [int(sock.getsockname()[1]) for sock in sockets]
     finally:
         for sock in sockets:
             sock.close()
+
+
+def _bind_below_ephemeral(sock: socket.socket, ceiling: tuple[int, int] | None) -> None:
+    """Bind *sock* under the ephemeral floor, or let the OS choose if it cannot."""
+    if ceiling is not None and ceiling[0] > _PORT_SEARCH_FLOOR:
+        for port in range(
+            _PORT_SEARCH_FLOOR, min(ceiling[0], _PORT_SEARCH_FLOOR + _PORT_SEARCH_ATTEMPTS)
+        ):
+            try:
+                sock.bind((_HOST, port))
+            except OSError:
+                continue
+            return
+    sock.bind((_HOST, 0))
 
 
 def _live_children(pid: int) -> list[psutil.Process]:

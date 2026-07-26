@@ -287,6 +287,14 @@ def _format_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # {model} and makes clear the cause sits with the user's provider account or
 # network, not with lilbee. UNKNOWN has no entry and falls back to the raw error.
 _KIND_MESSAGES: dict[ProviderErrorKind, str] = {
+    ProviderErrorKind.PORT_CONFLICT: (
+        "{model}'s server could not claim a local port. Something else on this "
+        "machine is holding it; stop that process or restart lilbee."
+    ),
+    ProviderErrorKind.CAPACITY: (
+        "{model} ran out of memory while loading. Lower num_ctx, use a smaller "
+        "quantization, or free the GPU of other work, then try again."
+    ),
     ProviderErrorKind.RATE_LIMIT: (
         "{model} is rate-limited or out of quota. That's a limit on your provider "
         "API key, not a lilbee problem. Check your plan and billing with the "

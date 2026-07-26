@@ -36,11 +36,16 @@ class ModelPlacementInput:
 
     ``replicas`` > 1 requests N data-parallel instances (one per GPU) for the role,
     each charged ``est_vram_bytes``; capped at runtime by the GPUs with room.
+
+    ``est_ram_bytes`` is what the same estimate puts in system memory, which is
+    non-zero only when something offloads. Placement divides GPUs and so does not
+    read it; admission does, because system memory is a bound too.
     """
 
     role: WorkerRole
     est_vram_bytes: int
     replicas: int = 1
+    est_ram_bytes: int = 0
 
 
 @dataclass(frozen=True)
@@ -226,6 +231,21 @@ def _place_beside_disjoint(
     return None, frozenset()
 
 
+def _tight_device_group(needed: int, remaining: dict[int, float]) -> tuple[int, ...]:
+    """Cards to give a model that fits nowhere: the fewest that could hold it.
+
+    The most-free card alone when that is enough, else every card with headroom,
+    ordered most-free first so the split's main device is the roomiest.
+    """
+    by_room = sorted(remaining, key=lambda idx: remaining[idx], reverse=True)
+    if not by_room:
+        return ()
+    if remaining[by_room[0]] >= needed:
+        return (by_room[0],)
+    usable = [idx for idx in by_room if remaining[idx] > 0]
+    return tuple(usable or by_room[:1])
+
+
 def _place_tight(
     model: ModelPlacementInput,
     remaining: dict[int, float],
@@ -234,21 +254,29 @@ def _place_tight(
     """Place an oversize *model* best-effort instead of refusing it.
 
     Refunds every phase-disjoint charged role (they become *model*'s swap group),
-    pins *model* to the card with the most headroom, and drains that card so the
-    elastic tier places nothing on it. Returns the estimated shortfall in bytes.
+    then gives *model* the widest set of cards that helps, and drains them so the
+    elastic tier places nothing there. Returns the estimated shortfall in bytes.
+
+    Widest rather than the single most-free card. Pinned to one card with the
+    others excluded by that pin, a model too big for it has nowhere to go and the
+    tight placement is only a slower refusal; given the group, llama-server can
+    split across them. One card is still used when one card is enough, since a
+    split it does not need costs it interconnect bandwidth.
     """
     refunds = {r: c for r, c in charges.items() if _phase_disjoint(r, model.role)}
     for charged in refunds.values():
         for idx, held in charged.items():
             remaining[idx] += held
-    device = max(remaining, key=lambda idx: remaining[idx])
-    available = remaining[device]
-    remaining[device] = 0.0
-    slot = _group_slot({device: available}, refunds, remaining)
+    devices = _tight_device_group(model.est_vram_bytes, remaining)
+    claimed = {idx: remaining[idx] for idx in devices}
+    available = sum(claimed.values())
+    for idx in devices:
+        remaining[idx] = 0.0
+    slot = _group_slot(claimed, refunds, remaining)
     for role in refunds:
         del charges[role]
     placed = _Placed(
-        plan=InstancePlan(role=model.role, devices=(device,)),
+        plan=InstancePlan(role=model.role, devices=devices),
         charges=slot,
     )
     group = frozenset(refunds) | {model.role} if refunds else frozenset()

@@ -1637,6 +1637,49 @@ def capture_plan_probe() -> None:
     )
 
 
+def refresh_plan_devices() -> None:
+    """Re-read which devices exist, keeping the clean-box memory figures.
+
+    The snapshot is captured once and only a full teardown clears it, so an eGPU
+    unplugged, a driver reset, or a VM hot-remove left the fleet pinning a device
+    that is no longer there and every rebuild replanning onto it.
+
+    Only the structural half is restated. The memory figures are what make a
+    reload plan the way the boot did, and re-taking them while the fleet is
+    resident would charge it against itself, which is the whole reason the
+    snapshot exists.
+
+    A probe that cannot run leaves the snapshot alone: the last known device list
+    is a better answer than none, and the loud paths for an unreachable engine
+    live in the build, not here.
+    """
+    probe = _plan_probe_store.get()
+    if probe is None:
+        return
+    clear_read_device_cache()
+    try:
+        devices, refused_all = _probe_engine_devices()
+    except (ProviderError, OSError) as exc:
+        log.debug("Device rediscovery could not run, keeping the previous list: %s", exc)
+        return
+    if tuple(devices) == probe.devices:
+        return
+    log.info(
+        "The set of GPUs changed since this fleet was planned (%d device(s) now, %d before); "
+        "replanning against the ones that are here.",
+        len(devices),
+        len(probe.devices),
+    )
+    _plan_probe_store.set(
+        _PlanProbe(
+            devices=tuple(devices),
+            sizing_budget=_device_sizing_budget(devices),
+            free_system=probe.free_system,
+            engine_devices_all_refused=refused_all,
+        )
+    )
+
+
 def clear_plan_probe() -> None:
     """Drop the plan snapshot (full fleet teardown); the next build re-captures."""
     _plan_probe_store.clear()

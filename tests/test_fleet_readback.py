@@ -10,6 +10,7 @@ import pytest
 from lilbee.providers.fleet.readback import (
     MIB,
     device_footprint,
+    load_finished,
     parse_device_buffers,
     report_divergence,
 )
@@ -287,3 +288,35 @@ class TestTheUpstreamFormatStrings:
     ) -> None:
         assert source  # names where the format lives, for the next reader
         assert parse_device_buffers(template % (device, mib)) == {device: int(mib * MIB)}
+
+
+class TestAgainstRealCudaOutput:
+    """A two-A40 tensor-split load, captured on real hardware.
+
+    The Metal fixture could not show this: CUDA names its pinned-host allocator
+    CUDA_Host, which was being charged to the GPU as though it were a third card.
+    """
+
+    @staticmethod
+    def _fixture() -> str:
+        return (Path(__file__).parent / "fixtures" / "engine-load-cuda-split.log").read_text()
+
+    def test_pinned_host_memory_is_not_charged_to_a_card(self) -> None:
+        # CUDA_Host holds the output and compute staging buffers in host RAM.
+        assert device_footprint(self._fixture()) == _mib(37.86, 24.00, 24.91) + _mib(
+            61.08, 21.00, 24.91
+        )
+
+    def test_both_cards_are_reported_separately(self) -> None:
+        buffers = parse_device_buffers(self._fixture())
+        assert buffers["CUDA0"] == _mib(37.86, 24.00, 24.91)
+        assert buffers["CUDA1"] == _mib(61.08, 21.00, 24.91)
+
+    def test_an_even_split_request_did_not_land_evenly(self) -> None:
+        # Launched with --tensor-split 1,1 and the cards still differ by 23%.
+        # This is the case the per-device check exists for: the total is right.
+        buffers = parse_device_buffers(self._fixture())
+        assert buffers["CUDA1"] > buffers["CUDA0"] * 1.2
+
+    def test_the_capture_is_from_a_finished_load(self) -> None:
+        assert load_finished(self._fixture())

@@ -65,16 +65,20 @@ _BUFFER_RE = re.compile(
 # device's other buffers. Same memory, so the suffix is folded away rather than
 # splitting one card's total across two keys.
 _MAPPED_SUFFIX = "_Mapped"
-# Devices that are host memory rather than a GPU. The engine names the mmapped
-# weight buffer CPU_Mapped and its scratch CPU; neither occupies VRAM, so
-# charging them against a card's budget would report a phantom overrun on every
-# partially offloaded model.
-_HOST_DEVICES = ("CPU",)
+# Devices that are host memory rather than a GPU. Two shapes, both from ggml:
+# the CPU backend's own buffers (CPU, CPU_Mapped), and every GPU backend's
+# pinned-host allocator, which it names "<backend>_Host" (ggml-cuda.cu returns
+# GGML_CUDA_NAME "_Host", and ggml-sycl, ggml-vulkan and ggml-cann do the same).
+# None of it occupies VRAM, so charging it to a card reports a phantom overrun on
+# every partially offloaded model. Found on real CUDA hardware, where CUDA_Host
+# was being counted as a third GPU.
+_HOST_PREFIXES = ("CPU",)
+_HOST_SUFFIX = "_Host"
 
 
 def _is_host_device(device: str) -> bool:
     """Whether *device* names host memory rather than a GPU."""
-    return device.upper().startswith(_HOST_DEVICES)
+    return device.startswith(_HOST_PREFIXES) or device.endswith(_HOST_SUFFIX)
 
 
 def parse_device_buffers(text: str) -> dict[str, int]:

@@ -114,6 +114,18 @@ _BACKEND_VISIBLE_VARS: dict[str, tuple[str, ...]] = {
 }
 
 
+_CUDA_BACKEND = "CUDA"
+_CUDA_ORDER_VAR = "CUDA_DEVICE_ORDER"
+# The runtime's default, and the one nvidia-smi also uses.
+_CUDA_BUS_ORDER = "PCI_BUS_ID"
+
+
+def _cuda_order_is_reordered() -> bool:
+    """Whether CUDA_DEVICE_ORDER puts the runtime out of step with nvidia-smi."""
+    order = os.environ.get(_CUDA_ORDER_VAR, "").strip().upper()
+    return bool(order) and order != _CUDA_BUS_ORDER
+
+
 def _physical_index(backend_name: str, fleet_index: int) -> int | None:
     """The index the vendor's SMI tool uses for the fleet's device *fleet_index*.
 
@@ -133,7 +145,16 @@ def _physical_index(backend_name: str, fleet_index: int) -> int | None:
     every unmasked host. Intel is absent because ONEAPI_DEVICE_SELECTOR is a
     selector grammar rather than an index list, and xpu-smi is called with the
     fleet index directly.
+
+    A reordered index space is the same problem without a mask. CUDA_DEVICE_ORDER
+    set to FASTEST_FIRST makes the runtime enumerate by speed while nvidia-smi
+    keeps enumerating by bus, so the two index spaces name different cards and no
+    arithmetic relates them. Correlating on a stable identity (UUID or PCI bus
+    id) is what would make this structural; until the probe carries one, an
+    honest refusal beats a confident mismatch.
     """
+    if backend_name == _CUDA_BACKEND and _cuda_order_is_reordered():
+        return None
     index = fleet_index
     for var in _BACKEND_VISIBLE_VARS.get(backend_name, ()):
         raw = os.environ.get(var)

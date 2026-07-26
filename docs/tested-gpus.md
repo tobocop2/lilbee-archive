@@ -57,13 +57,18 @@ The same machine with no NVIDIA driver installed enumerates the iGPU alone while
 | Backend | Status |
 |---------|--------|
 | ROCm (AMD Instinct, Radeon) | No hardware run. Device naming, `ROCm_Host`, and the same-rank backend tie-break are all unverified |
-| Vulkan on AMD silicon | No hardware run. Vulkan is verified on NVIDIA and on an Intel iGPU; AMD is untested |
-| Intel discrete (Arc, Max) | No hardware run. Only Intel integrated graphics has been tested |
+| Vulkan on AMD silicon | No hardware run. Vulkan is verified on NVIDIA and on an Intel iGPU; AMD is the one vendor untested |
 | SYCL (Intel Arc, Max) | No engine wheel is published for SYCL, so this cannot be tested on any hardware today |
 | CANN (Huawei Ascend) | No hardware run |
 | Mixed-vendor host with two discrete cards | Partly covered. A hybrid Intel plus NVIDIA laptop is verified above; two discrete cards from different vendors in one machine is not, and cloud providers do not sell it |
 | MIG-partitioned NVIDIA | No hardware run. Needs an A100 or H100 plus root to partition it |
 | AMX-enabled CPU build | Not reachable. The published CPU wheel is an AVX2 baseline with AMX compiled out, verified on a Xeon that has the instructions |
+
+### Deliberately not chased
+
+**Intel discrete parts** (Arc, Max). Through Vulkan an Arc card reports the same labels as the integrated part already tested, from the same driver stack, and its only meaningful difference is typing as discrete rather than integrated. Both sides of that branch are already covered on the hybrid laptop, where an NVIDIA card and an Intel iGPU sit side by side. A third instance of a covered path is not evidence.
+
+What an Intel discrete card would genuinely add is SYCL, which is blocked on the wheel rather than on hardware.
 
 ## Reproducing any of these
 

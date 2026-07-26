@@ -66,6 +66,12 @@ _BACKEND_RANK = {"CUDA": 3, "ROCm": 3, "HIP": 3, "MTL": 3, "Metal": 3, "SYCL": 2
 # Backends whose memory is always the host's: Apple Silicon reports a working-set
 # slice of system RAM, never a dedicated pool.
 _UNIFIED_BACKENDS = frozenset({"MTL", "Metal"})
+# Below this, a reported total is a BIOS carveout rather than a card's own pool.
+# An APU hands out a fixed slice of system RAM as "VRAM", often a few hundred
+# MiB, and planned as a dedicated device that size it refuses every role while
+# the machine has the whole system's memory to share. No real discrete GPU worth
+# serving from ships with less.
+_DEDICATED_VRAM_FLOOR = 2 * 1024 * MIB
 
 
 @dataclass(frozen=True)
@@ -319,7 +325,7 @@ def _parse_devices(text: str) -> list[FleetDevice]:
                 name.strip(),
                 total,
                 free,
-                unified=_is_unified(backend, name.strip()),
+                unified=_is_unified(backend, name.strip()) or total < _DEDICATED_VRAM_FLOOR,
             )
         )
     return devices

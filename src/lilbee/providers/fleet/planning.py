@@ -1846,9 +1846,28 @@ def _device_capacity(devices: list[FleetDevice], charge_against_free: bool) -> d
     with a tenant keeps a proportional margin rather than being packed to its
     last free byte, where fragmentation is worst.
     """
+    packable = _packable_devices(devices)
     if not charge_against_free:
-        return {d.index: d.total_bytes for d in devices}
-    return {d.index: min(d.total_bytes, d.free_bytes) for d in devices}
+        return {d.index: d.total_bytes for d in packable}
+    return {d.index: min(d.total_bytes, d.free_bytes) for d in packable}
+
+
+def _packable_devices(devices: list[FleetDevice]) -> list[FleetDevice]:
+    """The devices bin-packing may charge against.
+
+    An integrated GPU's memory is the host's. Packing it beside a dedicated card
+    promises the same RAM twice, once to its own budget and once to everything
+    else on the machine, and its heap is often the larger number, so the packer
+    prefers it: a 32 GiB shared heap outbids a 24 GiB card that actually has the
+    memory. Where a dedicated device exists it is the one to serve from, and the
+    integrated one is left to the shared-memory budget.
+
+    A host with nothing but integrated devices keeps them. There is nothing else
+    to serve from, and that path is governed by the system budget rather than by
+    per-device packing.
+    """
+    dedicated = [d for d in devices if not d.unified]
+    return dedicated or devices
 
 
 def _resolve_placement(

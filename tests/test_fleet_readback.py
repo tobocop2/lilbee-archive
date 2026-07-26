@@ -320,3 +320,27 @@ class TestAgainstRealCudaOutput:
 
     def test_the_capture_is_from_a_finished_load(self) -> None:
         assert load_finished(self._fixture())
+
+
+class TestBothEnvSpellingsAreSet:
+    """llama.cpp renamed these, so lilbee cannot pick one and be right.
+
+    common/arg.cpp registers LLAMA_ARG_LOG_FILE and LLAMA_ARG_LOG_VERBOSITY on
+    current master. Builds around 9310 read the same settings without the ARG,
+    verified by running both pairs against one binary: the unprefixed pair
+    produced the report and the prefixed pair produced no file at all.
+    """
+
+    def test_every_name_carries_the_same_value(self, tmp_path) -> None:
+        from lilbee.providers.fleet.readback import (
+            ENV_ARG_LOG_FILE,
+            ENV_ARG_LOG_VERBOSITY,
+            ENV_LOG_FILE,
+            ENV_LOG_VERBOSITY,
+            engine_log_env,
+        )
+
+        env = engine_log_env(tmp_path, "chat-0")
+        assert env[ENV_LOG_FILE] == env[ENV_ARG_LOG_FILE]
+        assert env[ENV_LOG_VERBOSITY] == env[ENV_ARG_LOG_VERBOSITY] == "4"
+        assert env[ENV_LOG_FILE].endswith("engine-chat-0.log")

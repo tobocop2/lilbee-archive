@@ -30,7 +30,7 @@ A vision model on the same card settled a second question: a projector's weights
 
 ### What the hybrid laptop settled
 
-Optimus and its equivalents leave the discrete card powered down until something asks for it, so the Vulkan loader enumerates the integrated adapter alone while a dedicated card sits on the PCI bus. Reading that list as the whole truth marked a real 4 GB card as sharing system memory and shrank its budget to match.
+The Vulkan loader can enumerate an integrated adapter alone while a dedicated card sits on the PCI bus, and reading that list as the whole truth marked a real 4 GB card as sharing system memory. On the machine tested, the discrete card had no driver claiming it; the same reading is produced by an Optimus setup that keeps the card idle until something asks through prime-run, and by any host where the vendor's Vulkan ICD is not active. What lilbee sees is identical in all three, which is why the fix keys on PCI presence rather than on the reason.
 
 The integrated adapter also reported 11.5 GB of "VRAM", which is system RAM it can borrow rather than memory it owns. Both halves matter: an integrated GPU must be budgeted against the host's memory, and a discrete one must not be, and on this machine the two live side by side.
 

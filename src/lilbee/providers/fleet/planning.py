@@ -1108,6 +1108,7 @@ def _launch_for(
     chat_reservation: int = 0,
     reserved_by_device: dict[int, int] | None = None,
     est_vram_bytes: int = 0,
+    model_path: Path | None = None,
 ) -> InstanceLaunch:
     """Build the launch spec (argv + device-pinning env) for one planned instance."""
     from lilbee.providers.engine_params import (
@@ -1116,7 +1117,9 @@ def _launch_for(
     )  # circular: fleet.planning -> engine_params -> app.services
     from lilbee.providers.gguf_meta import read_gguf_metadata
 
-    model_path = resolve_model_path(model_ref)
+    # The self-check holds a downloaded file rather than a configured reference,
+    # so it hands the path over instead of asking for one to be resolved.
+    model_path = model_path or resolve_model_path(model_ref)
     weights_bytes = _weights_bytes(model_path)
     meta = read_gguf_metadata(model_path)
     from lilbee.core.config import cfg
@@ -1239,6 +1242,39 @@ def _launch_for(
         # the engine's own report of what it really allocated.
         est_vram_bytes=est_vram_bytes,
         est_vram_by_device=_charge_by_device(chosen, plan.tensor_split, est_vram_bytes),
+    )
+
+
+def build_single_role_launch(role: WorkerRole, model_path: Path) -> InstanceLaunch:
+    """The launch the fleet would build for *role* serving *model_path*, alone.
+
+    One construction path. The self-check used to assemble its own beside this
+    one and the two disagreed on slot count, on the context that follows from it,
+    on device pinning and on the tensor split, so a green check proved nothing
+    about the launch serving actually performs, and a red one could be a
+    configuration serving would never have chosen.
+
+    Placement is the planner's, on the devices the plan snapshot holds, so the
+    check runs on the card the role would really land on.
+    """
+    from lilbee.providers.fleet.cuda_runtime import apply_cuda_runtime_env
+    from lilbee.providers.fleet.gpu_env import apply_fleet_gpu_env
+
+    apply_fleet_gpu_env()
+    binary = resolve_llama_server()
+    apply_cuda_runtime_env(binary)
+    devices = _plan_devices(binary)
+    by_index = {d.index: d for d in devices}
+    # The whole machine, since nothing else is resident during a self-check.
+    placed = (min(by_index),) if by_index else ()
+    plan = InstancePlan(role=role, devices=placed)
+    return _launch_for(
+        plan,
+        str(model_path),
+        binary,
+        by_index,
+        unified_budget=_unified_memory_budget(devices),
+        model_path=model_path,
     )
 
 

@@ -11,6 +11,7 @@ This page records what has been run and what has not. A backend listed as untest
 | 2x NVIDIA A40 (46 GB) | CUDA | 9665 `e3a74b299` | Per-device buffer reporting on a tensor split, `CUDA0`/`CUDA1` labels, `CUDA_Host` excluded from device memory, cgroup memory limits honoured over `/proc/meminfo` |
 | NVIDIA GTX 1070 Ti (8 GB) | Vulkan | 9665 `e3a74b299` | `Vulkan0` labels, `Vulkan_Host` excluded from device memory, vision projector accounting, Vulkan device enumeration and its crash isolation |
 | Apple Silicon | Metal | 9310 `e2ef8fe42` | `MTL0` labels, unified-memory budgeting |
+| Intel UHD (CometLake) + GTX 1650 Ti | Vulkan, hybrid | 9665 `e3a74b299` | Integrated adapters classified as shared memory, and a discrete card the loader cannot see still treated as dedicated |
 | Intel Xeon Platinum 8481C | CPU | 9665 `e3a74b299` | Host-only load with no GPU present, `CPU`/`CPU_Mapped` attribution |
 
 The captured logs behind these rows live on the `tools/gpu-verification-harness` branch, alongside the script that produced them.
@@ -27,6 +28,12 @@ Vulkan is where every AMD and Intel GPU lands, so its wording matters well beyon
 
 A vision model on the same card settled a second question: a projector's weights appear in **no** buffer line at all. The engine reports them only as prose, so the estimate has to be corrected before it is compared, or every correctly-sized vision load reports a shortfall that is not there.
 
+### What the hybrid laptop settled
+
+Optimus and its equivalents leave the discrete card powered down until something asks for it, so the Vulkan loader enumerates the integrated adapter alone while a dedicated card sits on the PCI bus. Reading that list as the whole truth marked a real 4 GB card as sharing system memory and shrank its budget to match.
+
+The integrated adapter also reported 11.5 GB of "VRAM", which is system RAM it can borrow rather than memory it owns. Both halves matter: an integrated GPU must be budgeted against the host's memory, and a discrete one must not be, and on this machine the two live side by side.
+
 ## Not yet tested
 
 | Backend | Status |
@@ -35,7 +42,7 @@ A vision model on the same card settled a second question: a projector's weights
 | Vulkan on AMD or Intel silicon | No hardware run. Vulkan itself is verified, but only on an NVIDIA ICD |
 | SYCL (Intel Arc, Max) | No engine wheel is published for SYCL, so this cannot be tested on any hardware today |
 | CANN (Huawei Ascend) | No hardware run |
-| Mixed-vendor host | No hardware run. Two vendors in one machine is what the ICD-conflict handling exists for, and cloud providers do not sell it |
+| Mixed-vendor host with two discrete cards | Partly covered. A hybrid Intel plus NVIDIA laptop is verified above; two discrete cards from different vendors in one machine is not, and cloud providers do not sell it |
 | MIG-partitioned NVIDIA | No hardware run. Needs an A100 or H100 plus root to partition it |
 | AMX-enabled CPU build | Not reachable. The published CPU wheel is an AVX2 baseline with AMX compiled out, verified on a Xeon that has the instructions |
 

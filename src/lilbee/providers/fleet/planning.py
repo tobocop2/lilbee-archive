@@ -383,8 +383,54 @@ def _role_ctx(
     if role is WorkerRole.VISION:
         return resolve_vision_ctx(model_path)
     if cfg.num_ctx is not None:
-        return cfg.num_ctx
+        return _pinned_chat_ctx(model_path, meta)
     return resolve_chat_ctx(model_path, meta, available_bytes=plan_sizing_budget(device))
+
+
+def _pinned_chat_ctx(model_path: Path, meta: dict[str, str] | None) -> int:
+    """``cfg.num_ctx``, clamped to what the model was trained for.
+
+    Every unpinned resolver already clamps, and both docstrings here claimed the
+    pin did too. It did not, so a pin past the trained window was passed straight
+    to the engine, which clamps it silently and serves a different number than
+    every budget was sized for.
+
+    Only against a window that is actually known. A GGUF whose header cannot be
+    read falls back to a default that is a guess, and contradicting an explicit
+    pin with a guess would break the hosts where the header is the thing that is
+    broken.
+    """
+    from lilbee.core.config import cfg
+
+    pinned = cfg.num_ctx
+    assert pinned is not None  # noqa: S101 - callers check; this documents the contract
+    ceiling = _known_chat_ceiling(model_path, meta)
+    if ceiling is None or pinned <= ceiling:
+        return pinned
+    log.warning(
+        "num_ctx is set to %d but %s was trained for %d, so %d is what will be served. "
+        "Lower num_ctx to stop planning against a window this model does not have.",
+        pinned,
+        model_path.name,
+        ceiling,
+        ceiling,
+    )
+    return ceiling
+
+
+def _known_chat_ceiling(model_path: Path, meta: dict[str, str] | None) -> int | None:
+    """The largest chat window this model is known to support, or ``None``.
+
+    ``None`` when the GGUF header gave no usable context length and the user set
+    no ``cfg.num_ctx_max``: there is then no measured ceiling, only a default.
+    """
+    from lilbee.core.config import cfg
+    from lilbee.providers.gguf_meta import train_ctx_from_meta
+
+    sentinel = -1
+    trained = train_ctx_from_meta(meta, fallback=sentinel, model_path=model_path)
+    known = [value for value in (trained, cfg.num_ctx_max) if value is not None and value > 0]
+    return min(known) if known else None
 
 
 def _rerank_mode_for(meta: dict[str, str] | None) -> RerankMode:
@@ -610,7 +656,11 @@ def _chat_serve_budget_footprint(footprint: int) -> int:
     """
     from lilbee.core.config import cfg
 
-    return int(footprint * (usable_vram_fraction() / cfg.gpu_memory_fraction))
+    # Never below 1.0. The ratio only compensates while the serve budget is the
+    # smaller of the two; a gpu_memory_fraction raised past the usable fraction
+    # inverts it, and the same line that exists to charge chat more starts
+    # charging it less than the model takes.
+    return int(footprint * max(1.0, usable_vram_fraction() / cfg.gpu_memory_fraction))
 
 
 def _placement_estimate_ctx(role: WorkerRole, model_path: Path, meta: dict[str, str] | None) -> int:
@@ -627,7 +677,7 @@ def _placement_estimate_ctx(role: WorkerRole, model_path: Path, meta: dict[str, 
 
     if role is WorkerRole.CHAT:
         if cfg.num_ctx is not None:
-            return cfg.num_ctx
+            return _pinned_chat_ctx(model_path, meta)
         return min(
             chat_ctx_ceiling(meta, model_path), max(cfg.chat_n_ctx_target, _MIN_USABLE_CHAT_CTX)
         )

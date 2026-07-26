@@ -902,10 +902,13 @@ def test_raise_for_status_surfaces_upstream_tail_on_premature_exit(monkeypatch, 
             return None
 
         def iter_text(self):
-            # Padded past the tail cap so the read stops at the size limit
-            # instead of waiting out the stream timeout.
-            yield "x" * 2500 + "E srv start: couldn't bind HTTP server socket, port: 5801\n"
-            raise AssertionError("must stop reading once the tail cap is reached")
+            # llama-swap's shape: the whole ring replayed first, the fatal line
+            # last in it, then the route stays open for live lines.
+            yield "x" * 65536
+            yield "x" * 30000 + "E srv start: couldn't bind HTTP server socket, port: 5801\n"
+            for _ in range(6):
+                yield "live chatter\n"
+            raise AssertionError("must stop reading once the chunk cap is reached")
 
     def _fake_stream(method: str, url: str, timeout: float) -> _FakeStream:
         seen["url"] = url

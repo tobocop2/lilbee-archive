@@ -166,6 +166,11 @@ _ALTERNATION_PROBE_OPTIONS = {"max_tokens": 1}
 _ALTERNATION_PROBE_TIMEOUT_S = 30.0
 _UPSTREAM_LOG_TAIL_CHARS = 2000
 _UPSTREAM_LOG_TIMEOUT_S = 2.0
+# Enough reads to cover one replay of llama-swap's 100KB per-model ring at
+# httpx's 64KB ceiling per chunk, with room to spare. The route keeps streaming
+# live lines afterwards, so without a bound this would cost the read timeout on
+# every death.
+_UPSTREAM_LOG_MAX_CHUNKS = 8
 
 log = logging.getLogger(__name__)
 
@@ -248,7 +253,15 @@ _OOM_MARKERS: tuple[str, ...] = (
     "outofdevicememory",  # a vk::OutOfDeviceMemoryError that reached the log
     "unable to allocate",
     "insufficient memory",
+    "out_of_device_memory",  # SYCL, which exits through the runtime's own code
+    "out_of_resources",
 )
+
+# Lines that report a failure the engine then works around. ggml-vulkan warns
+# that pinned memory could not be allocated and falls back to unpinned, and that
+# text matches an allocation marker word for word, so a later unrelated death
+# would be read as a memory shortfall and answered with a context reduction.
+_SURVIVABLE_LINE_MARKERS: tuple[str, ...] = ("warning:", "warn:")
 
 
 def classify_upstream_death(tail: str) -> ProviderErrorKind | None:
@@ -262,8 +275,12 @@ def classify_upstream_death(tail: str) -> ProviderErrorKind | None:
     same one. ``None`` leaves the existing classification alone rather than
     guessing at an unfamiliar death.
     """
-    lowered = tail.lower()
-    if any(marker in lowered for marker in _OOM_MARKERS):
+    fatal = [
+        line
+        for line in tail.lower().splitlines()
+        if not any(marker in line for marker in _SURVIVABLE_LINE_MARKERS)
+    ]
+    if any(marker in line for line in fatal for marker in _OOM_MARKERS):
         return ProviderErrorKind.CAPACITY
     if _BIND_FAILURE_MARKER in tail:
         return ProviderErrorKind.PORT_CONFLICT
@@ -350,9 +367,17 @@ def _fetch_log_tail(url: str) -> str:
         contextlib.suppress(httpx.HTTPError),
         httpx.stream("GET", url, timeout=_UPSTREAM_LOG_TIMEOUT_S) as stream,
     ):
-        for chunk in stream.iter_text():
+        for taken, chunk in enumerate(stream.iter_text(), start=1):
+            # Bounded by chunk count, not by the tail size. llama-swap replays a
+            # model's whole ring in one write and httpx hands over at most 64KB
+            # at a time, so stopping at the first chunk past the tail size
+            # returned the head of a warm model's log, where the fatal last line
+            # never is. Only the tail is retained as the replay goes by, and the
+            # route streams live lines afterwards, so the count is what keeps
+            # this from waiting out the timeout on every death.
             chunks.append(chunk)
-            if sum(len(piece) for piece in chunks) > _UPSTREAM_LOG_TAIL_CHARS:
+            chunks = ["".join(chunks)[-_UPSTREAM_LOG_TAIL_CHARS:]]
+            if taken >= _UPSTREAM_LOG_MAX_CHUNKS:
                 break
     return "".join(chunks)[-_UPSTREAM_LOG_TAIL_CHARS:]
 

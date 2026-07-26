@@ -1693,12 +1693,6 @@ _plan_probe_store = _PlanProbeStore()
 # surfaces after the one retry.
 MIN_DOWNSHIFT_CTX = 4096
 
-# Halvings allowed before the ladder gives up, which is what it takes to walk a
-# typical 32k window down to the floor. A count rather than a computation over
-# the configured target: the applied context is clamped to the floor anyway, so
-# deriving a per-role depth only decided how many no-op steps to permit.
-_MAX_DOWNSHIFT_STEPS = 3
-
 
 class _CtxDownshiftStore:
     """How many halvings each role's auto context has taken after a load OOM.
@@ -1712,10 +1706,22 @@ class _CtxDownshiftStore:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._steps: dict[WorkerRole, int] = {}
+        # The last unshifted context each role was sized from, recorded as it is
+        # applied. Deciding whether another halving would change anything needs
+        # the number being halved, and this is the only place that sees it.
+        self._base: dict[WorkerRole, int] = {}
 
     def steps(self, role: WorkerRole) -> int:
         with self._lock:
             return self._steps.get(role, 0)
+
+    def note_base(self, role: WorkerRole, ctx: int) -> None:
+        with self._lock:
+            self._base[role] = ctx
+
+    def base(self, role: WorkerRole) -> int | None:
+        with self._lock:
+            return self._base.get(role)
 
     def step(self, role: WorkerRole) -> int:
         with self._lock:
@@ -1723,9 +1729,14 @@ class _CtxDownshiftStore:
             self._steps[role] = taken
             return taken
 
-    def clear(self) -> None:
+    def clear(self, role: WorkerRole | None = None) -> None:
         with self._lock:
-            self._steps.clear()
+            if role is None:
+                self._steps.clear()
+                self._base.clear()
+                return
+            self._steps.pop(role, None)
+            self._base.pop(role, None)
 
 
 _ctx_downshift_store = _CtxDownshiftStore()
@@ -1749,7 +1760,12 @@ def apply_ctx_downshift(role: WorkerRole, ctx: int) -> int:
 
     if role is WorkerRole.CHAT and cfg.num_ctx is not None:
         return ctx
-    steps = _ctx_downshift_store.steps(role)
+    _ctx_downshift_store.note_base(role, ctx)
+    return _shifted(ctx, _ctx_downshift_store.steps(role))
+
+
+def _shifted(ctx: int, steps: int) -> int:
+    """*ctx* halved *steps* times, never below the floor and never above *ctx*."""
     return min(ctx, max(MIN_DOWNSHIFT_CTX, ctx >> steps)) if steps else ctx
 
 
@@ -1763,15 +1779,33 @@ def record_ctx_downshift(role: WorkerRole) -> bool:
 
     if role is WorkerRole.CHAT and cfg.num_ctx is not None:
         return False
-    if _ctx_downshift_store.steps(role) >= _MAX_DOWNSHIFT_STEPS:
+    base = _ctx_downshift_store.base(role)
+    if base is None:
+        # Nothing has been sized for this role yet, so there is no number to
+        # decide against. Allow one step rather than trusting that a plan always
+        # runs first: an unbounded grant here would let a caller that never
+        # sizes anything loop forever.
+        if _ctx_downshift_store.steps(role):
+            return False
+        _ctx_downshift_store.step(role)
+        return True
+    steps = _ctx_downshift_store.steps(role)
+    if _shifted(base, steps + 1) == _shifted(base, steps):
         return False
     _ctx_downshift_store.step(role)
     return True
 
 
-def clear_ctx_downshift() -> None:
-    """Forget every recorded downshift, so the next plan starts from full size."""
-    _ctx_downshift_store.clear()
+def clear_ctx_downshift(role: WorkerRole | None = None) -> None:
+    """Forget *role*'s recorded downshift, or every role's, back to full size.
+
+    Called when a role's engine reports ready, which is proof the reduced plan
+    loaded: keeping the reduction after that would carry a shrunken window into
+    a machine that has since freed memory, or into a smaller model the user
+    switched to, and would then refuse on its first failure with a budget it
+    had already spent.
+    """
+    _ctx_downshift_store.clear(role)
 
 
 def _probe_engine_devices() -> tuple[list[FleetDevice], bool]:

@@ -120,8 +120,10 @@ class TestAnAutoContextStepsDownAfterAnOom:
         steps = 0
         while planning.record_ctx_downshift(WorkerRole.CHAT):
             steps += 1
+            planning.apply_ctx_downshift(WorkerRole.CHAT, 32768)  # as a plan would
             assert steps < 20, "the ladder has to terminate"
-        assert planning.apply_ctx_downshift(WorkerRole.CHAT, 32768) >= planning.MIN_DOWNSHIFT_CTX
+        assert planning.apply_ctx_downshift(WorkerRole.CHAT, 32768) == planning.MIN_DOWNSHIFT_CTX
+        planning.clear_ctx_downshift()
 
     def test_a_pinned_context_is_never_stepped_down(self, monkeypatch) -> None:
         from lilbee.core.config import cfg

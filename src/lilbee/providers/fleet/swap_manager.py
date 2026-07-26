@@ -31,6 +31,7 @@ from lilbee.providers.fleet.binary import engine_pin, resolve_llama_swap
 from lilbee.providers.fleet.child_guard import release_death_pipe, spawn_bound_child
 from lilbee.providers.fleet.groups import SwapGroup
 from lilbee.providers.fleet.launch import role_model_prefix
+from lilbee.providers.fleet.planning import clear_ctx_downshift
 from lilbee.providers.fleet.readback import check_launch, report_missing_log
 from lilbee.providers.fleet.swap_config import PORT_FLAG, build_swap_config
 from lilbee.runtime.engine_lock import clear_keep_warm
@@ -353,6 +354,10 @@ class SwapManager:
             self._estimate_checked.add(model_id)
             if launch is None:
                 continue
+            # Ready means this role's context loaded, so any reduction taken to
+            # get here has done its job and must not follow the role into the
+            # next plan, a freed machine, or a model the user switched to.
+            clear_ctx_downshift(launch.role)
             # The engine is ready, so a missing log is not "too early" any more.
             if report_missing_log(self._log_path.parent, model_id, launch.role):
                 continue

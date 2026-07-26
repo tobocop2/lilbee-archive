@@ -24,13 +24,16 @@ THE FORMAT THIS PARSES, and where it comes from upstream:
     src/llama-kv-cache.cpp  "%s: %10s KV buffer size = %8.2f MiB"
     src/llama-context.cpp   "%s: %10s compute buffer size = %8.2f MiB"
 
-Verified against llama.cpp build 9310 (e2ef8fe42), which is the build the
-checked-in fixture was captured from. These are plain format strings in upstream
-source, not an interface anyone has promised to keep, so treat a version bump of
-the bundled engine as a change that can break this: re-capture the fixture and
-confirm :func:`parse_device_buffers` still finds every line. A build that stops
-matching is reported rather than swallowed (see :func:`check_launch`), so the
-failure announces itself instead of turning the check into decoration.
+Verified against llama.cpp build 9310 (e2ef8fe42), the build the checked-in
+fixture was captured from, and again on build 9665 (e3a74b299) running on two
+A40s, where both a single-card and a tensor-split load produced every line with
+the CUDA0/CUDA1 device labels this module joins on. These are plain format
+strings in upstream source, not an interface anyone has promised to keep, so
+treat a version bump of the bundled engine as a change that can break this:
+re-capture the fixture and confirm :func:`parse_device_buffers` still finds every
+line. A build that stops matching is reported rather than swallowed (see
+:func:`check_launch`), so the failure announces itself instead of turning the
+check into decoration.
 """
 
 from __future__ import annotations
@@ -46,9 +49,17 @@ log = logging.getLogger(__name__)
 
 MIB = 1024 * 1024
 
-# The llama.cpp build the buffer-report format above was verified against, and
-# the one the checked-in fixture came from. Named in the drift warning so a
-# report says what to compare with.
+# The build the checked-in fixture was captured from, named in the drift warning
+# so a report says what to compare with. Tracks the fixture rather than the
+# shipped engine, because reproducing a drift report means re-running the parser
+# against that exact capture.
+#
+# A landmark, not a gate. Refusing on a version mismatch would be the wrong
+# check: the format held unchanged from this build through 9665, confirmed on
+# two A40s, so a gate would have fired on every bump while the parser was
+# working. What detects drift is the parse coming back empty on a load that
+# finished, which cannot happen while the format is intact and cannot be missed
+# once it is not.
 VERIFIED_ENGINE_BUILD = "9310 (e2ef8fe42)"
 
 # "load_tensors:  MTL0_Mapped model buffer size =    82.41 MiB", and its siblings.

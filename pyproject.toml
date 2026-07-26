@@ -36,7 +36,11 @@ classifiers = [
 dependencies = [
     "lancedb",
     "xberg>=1.0.0rc39",
-    "filelock",
+    # filelock <3.26: 3.26+ changed is_singleton reentrancy so a released engine
+    # user-lock still reports is_locked, and a warm-off shutdown never reclaims the
+    # engine (fleet user-lock relies on the pre-3.26 semantics). Revisit to adopt
+    # the newer behavior deliberately rather than let a lock refresh pull it in.
+    "filelock<3.26",
     "tree-sitter-language-pack>=1.8.0,<2.0",
     "typer>=0.12",
     "tiktoken",

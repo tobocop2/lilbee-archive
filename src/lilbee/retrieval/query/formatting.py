@@ -25,15 +25,24 @@ _MAX_CITE_RANGE = 32
 # markdown-decorated (ATX hashes, emphasis around the word or the colon:
 # "**Sources:**", "*References:*", "**Sources**:").
 _HEADING_WORDS = r"(?:(?:Key\s+)?Sources|References|Bibliography|Citations)"
-_HEADING_LINE = rf"\n{{1,3}}(?:#+\s*)?[*_]{{0,3}}{_HEADING_WORDS}[*_]{{0,3}}\s*:?\s*[*_]{{0,3}}"
+# Anchored to a preceding newline OR the start of the text (\A), so an answer that
+# is nothing but a fabricated citation block (heading at position 0) is still stripped.
+_HEADING_LINE = (
+    rf"(?:\n{{1,3}}|\A)(?:#+\s*)?[*_]{{0,3}}{_HEADING_WORDS}[*_]{{0,3}}\s*:?\s*[*_]{{0,3}}"
+)
+
+# One list line: a bullet, arrow, "[1]" or "1." marker and the rest of its line.
+_CITE_LIST_LINE = r"[ \t]*(?:[-*•→\[]|\d+[.)])[^\n]*"
 
 # An LLM-generated citation block: a heading line followed by a list (bullets,
 # arrows, "[1]" or "1." numbering). Requiring the list keeps an answer that
 # legitimately discusses such a heading in prose (e.g. "References:\n\nIt
-# lists 40 works.") from being clipped.
+# lists 40 works.") from being clipped. The match ends with the last list line,
+# not end-of-text, so an answer that resumes after its citations keeps the
+# continuation.
 _LLM_CITATION_BLOCK_RE = re.compile(
-    _HEADING_LINE + r"\n\s*(?:[-*•→\[]|\d+[.)]).*",
-    re.IGNORECASE | re.DOTALL,
+    _HEADING_LINE + r"\n\s*" + _CITE_LIST_LINE + r"(?:\n" + _CITE_LIST_LINE + r")*",
+    re.IGNORECASE,
 )
 
 # A citation-style heading at the very end of the text, nothing after it yet.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import numpy as np
 import pytest
 
 from lilbee.core.config import cfg
@@ -118,7 +119,9 @@ class TestSyncEmbeddingBackend:
         reg, _unreg = self._patch_xberg(monkeypatch, listed=[])
         monkeypatch.setattr(cfg, "embedding_dim", 7)
         provider = MagicMock()
-        provider.embed.return_value = [[0.0] * 7]
+        # provider.embed returns numpy vectors; the backend converts them to the
+        # plain-float lists xberg's chunker expects.
+        provider.embed.return_value = [np.zeros(7, dtype=np.float32)]
         sync_embedding_backend(provider)
         backend = reg.call_args.args[0]
         assert backend.name() == "lilbee"
@@ -470,7 +473,7 @@ class TestGetServicesThreadSafety:
 
         builds: list[int] = []
 
-        def slow_build(config, provider=None, registry=None):
+        def slow_build(config, provider=None, registry=None, interactive=False):
             builds.append(threading.get_ident())
             time.sleep(0.05)
             return make_mock_services()

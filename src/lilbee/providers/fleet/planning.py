@@ -10,6 +10,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from lilbee.core.config import cfg
 from lilbee.core.config.enums import KvCacheType
 from lilbee.core.system import is_network_path
 from lilbee.providers import model_cache
@@ -274,7 +275,6 @@ def _resolve_vision_slots(
 ) -> int:
     """Largest OCR batching slot count (<= ``cfg.vision_ocr_concurrency``) that fits
     the memory budget; 1 when the ceiling is 1 or nothing larger fits."""
-    from lilbee.core.config import cfg
 
     ceiling = max(1, cfg.vision_ocr_concurrency)
     if ceiling == 1:
@@ -374,7 +374,6 @@ def _role_ctx(
     once placement has chosen one. A tensor-split chat is sized against its
     per-device headroom instead (see :func:`fit_split_ctx`).
     """
-    from lilbee.core.config import cfg
     from lilbee.providers.engine_params import (
         resolve_chat_ctx,
         resolve_embed_ctx,
@@ -443,7 +442,6 @@ def _known_chat_ceiling(model_path: Path, meta: dict[str, str] | None) -> int | 
 
 def _rerank_mode_for(meta: dict[str, str] | None) -> RerankMode:
     """Resolve the RERANK serving mode from cfg + the reranker GGUF arch."""
-    from lilbee.core.config import cfg
 
     arch = meta.get("architecture") if meta else None
     return resolve_rerank_mode(cfg.reranker_type, arch)
@@ -483,7 +481,6 @@ def _role_gpu_layers(role: WorkerRole) -> int:
 
 def _flash_enabled() -> bool:
     """Flash attention is on unless ``cfg.flash_attention`` is explicitly ``False``."""
-    from lilbee.core.config import cfg
 
     return cfg.flash_attention is not False
 
@@ -545,7 +542,6 @@ def _role_flash(role: WorkerRole, rerank_mode: RerankMode | None = None) -> bool
 
 def _role_kv_cache_type(role: WorkerRole) -> KvCacheType:
     """Chat honors ``cfg.kv_cache_type``; embed/rerank/vision run f16 KV."""
-    from lilbee.core.config import cfg
 
     return cfg.kv_cache_type if role is WorkerRole.CHAT else KvCacheType.F16
 
@@ -665,7 +661,6 @@ def _chat_serve_budget_footprint(footprint: int) -> int:
     its context. Small models are unaffected -- they fit the serve budget with KV
     room to spare.
     """
-    from lilbee.core.config import cfg
 
     # Never below 1.0. The ratio only compensates while the serve budget is the
     # smaller of the two; a gpu_memory_fraction raised past the usable fraction
@@ -683,7 +678,6 @@ def _placement_estimate_ctx(role: WorkerRole, model_path: Path, meta: dict[str, 
     single-card placement) nor the full trained ceiling (which over-reserves). A
     model that cannot hold weights + this floor on one card is tensor-split.
     """
-    from lilbee.core.config import cfg
     from lilbee.providers.engine_params import chat_ctx_ceiling
 
     if role is WorkerRole.CHAT:
@@ -707,7 +701,6 @@ def _placement_estimate_slots(role: WorkerRole, meta: dict[str, str] | None) -> 
     real headroom with as many full-context slots as fit (``_resolve_split_chat_slots``),
     never exceeding what those cards hold, so a larger launch count can't OOM.
     """
-    from lilbee.core.config import cfg
 
     if role is WorkerRole.CHAT:
         return _SPLIT_CHAT_SLOTS
@@ -1420,7 +1413,6 @@ def _launch_for(
     model_path = model_path or resolve_model_path(model_ref)
     weights_bytes = _weights_bytes(model_path)
     meta = read_gguf_metadata(model_path)
-    from lilbee.core.config import cfg
 
     chosen = tuple(by_index[i] for i in plan.devices)
     # ctx and slots are sized against the card this role landed on, not the fleet's
@@ -2090,8 +2082,6 @@ def _plan_devices(binary: Path) -> list[FleetDevice]:
 
 def plan_sizing_budget(device: FleetDevice | None = None) -> int:
     """Usable memory for ctx/slot sizing: *device*'s own, else the snapshot, else live."""
-    from lilbee.core.config import cfg
-
     if device is not None:
         return int(device.total_bytes * cfg.gpu_memory_fraction)
     probe = _plan_probe_store.get()
@@ -2509,7 +2499,6 @@ def plan_launches(
     devices: list[FleetDevice],
 ) -> FleetPlan:
     """Plan placement for *roles* (``None`` = all configured) and build their launches."""
-    from lilbee.core.config import cfg
 
     unified_budget = _unified_memory_budget(devices)
     inputs, model_refs, reservation, skipped_not_installed = _server_model_inputs(

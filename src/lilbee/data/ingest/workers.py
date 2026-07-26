@@ -43,6 +43,7 @@ if TYPE_CHECKING:
         FileToProcess,
         PageTextRecord,
     )
+    from lilbee.data.store import SourceMeta
 
 log = logging.getLogger(__name__)
 
@@ -128,6 +129,7 @@ class WorkerOutcome:
     page_texts: list[PageTextRecord] | None = None
     concept_records: ConceptRecords | None = None
     entity_rows: list[dict] | None = None
+    meta: SourceMeta | None = None
     error: WorkerIngestError | None = None
 
 
@@ -209,7 +211,7 @@ async def _produce_one(entry: FileToProcess) -> WorkerOutcome:
 
     page_texts: list[PageTextRecord] = []
     try:
-        records = await produce_records(
+        records, meta = await produce_records(
             entry.path, entry.name, entry.content_type, page_texts_out=page_texts
         )
         return WorkerOutcome(
@@ -218,6 +220,7 @@ async def _produce_one(entry: FileToProcess) -> WorkerOutcome:
             page_texts=page_texts,
             concept_records=await build_concept_records(records, entry.name),
             entity_rows=await build_entity_records(records, entry.name),
+            meta=meta,
         )
     except Exception as exc:
         return WorkerOutcome(name=entry.name, error=WorkerIngestError(error_reason(exc)))

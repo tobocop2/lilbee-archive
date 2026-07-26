@@ -44,6 +44,7 @@ from lilbee.providers.fleet.placement import (
 from lilbee.providers.fleet.placement_spec import PlacementError, PlacementSpec
 from lilbee.providers.fleet.replicas import resolve_replica_count
 from lilbee.providers.fleet.vram import estimate_instance_footprint, usable_vram_fraction
+from lilbee.providers.model_cache import free_system_memory, total_system_memory
 from lilbee.providers.model_ref import parse_model_ref
 from lilbee.providers.roles import ROLE_REGISTRY, RerankMode, WorkerRole
 
@@ -638,7 +639,10 @@ def _estimate_role(
     if role is WorkerRole.CHAT and unified_budget is None:
         fp = _chat_serve_budget_footprint(fp)
     return ModelPlacementInput(
-        role=role, est_vram_bytes=fp, replicas=_replica_count(role, device_count)
+        role=role,
+        est_vram_bytes=fp,
+        replicas=_replica_count(role, device_count),
+        est_ram_bytes=est.ram_bytes,
     )
 
 
@@ -678,10 +682,14 @@ def _placement_estimate_ctx(role: WorkerRole, model_path: Path, meta: dict[str, 
     if role is WorkerRole.CHAT:
         if cfg.num_ctx is not None:
             return _pinned_chat_ctx(model_path, meta)
-        return min(
-            chat_ctx_ceiling(meta, model_path), max(cfg.chat_n_ctx_target, _MIN_USABLE_CHAT_CTX)
+        return apply_ctx_downshift(
+            role,
+            min(
+                chat_ctx_ceiling(meta, model_path),
+                max(cfg.chat_n_ctx_target, _MIN_USABLE_CHAT_CTX),
+            ),
         )
-    return _role_ctx(role, model_path, meta)
+    return apply_ctx_downshift(role, _role_ctx(role, model_path, meta))
 
 
 def _placement_estimate_slots(role: WorkerRole, meta: dict[str, str] | None) -> int:
@@ -926,9 +934,30 @@ def _estimate_or_fallback(
         return _sizing_failure_fallback(
             role, ref, exc, device_count=device_count, total_vram=total_vram
         )
+    return _admit_estimate(
+        estimate, role, ref, total_vram=total_vram, ram_bytes=estimate.est_ram_bytes
+    )
+
+
+def _admit_estimate(
+    estimate: ModelPlacementInput,
+    role: WorkerRole,
+    ref: str,
+    *,
+    total_vram: int,
+    ram_bytes: int,
+) -> ModelPlacementInput | None:
+    """*estimate*, or ``None`` when this model cannot load on this machine.
+
+    Two hardware bounds, one per kind of memory: the weights must fit the GPUs
+    unless something offloads, and whatever offloading puts in system memory must
+    fit the system.
+    """
     weights = _role_weights_bytes(role, ref)
     if _weights_exceed_hardware(weights, total_vram, is_moe=_ref_is_moe(ref)):
         _warn_weights_exceed(role, ref, weights, total_vram)
+        return None
+    if _host_memory_verdict(role, ref, ram_bytes) == "refuse":
         return None
     return estimate
 
@@ -1019,6 +1048,54 @@ def _ref_is_moe(ref: str) -> bool:
         return _is_moe(read_gguf_metadata(resolve_model_path(ref)))
     except (ProviderError, OSError):
         return False
+
+
+def _cpu_offload_in_play() -> bool:
+    """Whether this configuration puts any of a model's weights in system memory.
+
+    Expert offload moves the experts, a partial ``n_gpu_layers`` moves whole
+    layers, and zero moves the model. Without one of these the engine keeps
+    everything on the card and the estimator's host figure describes memory
+    nobody will allocate.
+    """
+    from lilbee.core.config import cfg
+
+    return _expert_offload_configured() or cfg.n_gpu_layers is not None
+
+
+def _host_memory_verdict(role: WorkerRole, ref: str, ram_bytes: int) -> str:
+    """Whether *role*'s system-memory half fits: ``ok``, ``warn`` or ``refuse``.
+
+    Charged only when something actually offloads. Total memory is ground truth,
+    so exceeding it refuses on the same standard the VRAM bound uses; exceeding
+    free memory only warns, because free memory moves and an estimate is not
+    worth a false refusal over.
+    """
+    if not _cpu_offload_in_play() or ram_bytes <= 0:
+        return "ok"
+    total = total_system_memory()
+    if total and ram_bytes > total:
+        log.warning(
+            "The %s model %s cannot load: offloading puts %.1f GiB in system memory and "
+            "this machine has %.1f GiB in total. Use a smaller model, or offload less.",
+            role.value,
+            ref,
+            ram_bytes / 1024**3,
+            total / 1024**3,
+        )
+        return "refuse"
+    free = free_system_memory()
+    if free and ram_bytes > free:
+        log.warning(
+            "Offloading the %s model %s puts %.1f GiB in system memory and only %.1f GiB "
+            "is free. It will still load; close other programs if it swaps or runs slowly.",
+            role.value,
+            ref,
+            ram_bytes / 1024**3,
+            free / 1024**3,
+        )
+        return "warn"
+    return "ok"
 
 
 def _warn_weights_exceed(role: WorkerRole, ref: str, weights: int, total_vram: int) -> None:
@@ -1605,6 +1682,93 @@ class _PlanProbeStore:
 _plan_probe_store = _PlanProbeStore()
 
 
+# The smallest chat window worth serving. Below this the answers are too short
+# to be useful, so a role that still will not load here has a real problem the
+# planner cannot size its way out of and the failure should surface.
+MIN_DOWNSHIFT_CTX = 4096
+
+
+class _CtxDownshiftStore:
+    """How many halvings each role's auto context has taken after a load OOM.
+
+    An estimate that was too optimistic is only recoverable if the retry asks
+    for something different. Halving the auto context does that, and keeping the
+    count here rather than in the launch means the whole plan is re-predicted
+    against the smaller number, including the placement it implies.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._steps: dict[WorkerRole, int] = {}
+
+    def steps(self, role: WorkerRole) -> int:
+        with self._lock:
+            return self._steps.get(role, 0)
+
+    def step(self, role: WorkerRole) -> int:
+        with self._lock:
+            taken = self._steps.get(role, 0) + 1
+            self._steps[role] = taken
+            return taken
+
+    def clear(self) -> None:
+        with self._lock:
+            self._steps.clear()
+
+
+_ctx_downshift_store = _CtxDownshiftStore()
+
+
+def apply_ctx_downshift(role: WorkerRole, ctx: int) -> int:
+    """*ctx* halved once per downshift step recorded for *role*, floored.
+
+    A user's ``cfg.num_ctx`` pin is returned untouched: serving a window smaller
+    than the one that was asked for, without being asked, is worse than failing
+    to load and saying so.
+    """
+    from lilbee.core.config import cfg
+
+    if role is WorkerRole.CHAT and cfg.num_ctx is not None:
+        return ctx
+    steps = _ctx_downshift_store.steps(role)
+    return max(MIN_DOWNSHIFT_CTX, ctx >> steps) if steps else ctx
+
+
+def record_ctx_downshift(role: WorkerRole) -> bool:
+    """Take one downshift step for *role*; False when there is none left to take.
+
+    False means the retry would ask for the same thing again, so the caller must
+    surface the load failure instead of respawning an identical launch.
+    """
+    from lilbee.core.config import cfg
+
+    if role is WorkerRole.CHAT and cfg.num_ctx is not None:
+        return False
+    if _downshift_target(role) <= MIN_DOWNSHIFT_CTX:
+        return False
+    _ctx_downshift_store.step(role)
+    return True
+
+
+def _downshift_target(role: WorkerRole) -> int:
+    """What *role*'s auto context currently steps down from."""
+    from lilbee.core.config import cfg
+
+    base = cfg.chat_n_ctx_target if role is WorkerRole.CHAT else _NON_CHAT_DOWNSHIFT_BASE
+    return apply_ctx_downshift(role, max(base, MIN_DOWNSHIFT_CTX))
+
+
+# Non-chat roles size their context from the model rather than from config, so
+# there is no single number to step from; this bounds their ladder to the same
+# depth chat gets from a default target.
+_NON_CHAT_DOWNSHIFT_BASE = 32768
+
+
+def clear_ctx_downshift() -> None:
+    """Forget every recorded downshift, so the next plan starts from full size."""
+    _ctx_downshift_store.clear()
+
+
 def _probe_engine_devices() -> tuple[list[FleetDevice], bool]:
     """Apply the fleet GPU/CUDA env, resolve the binary, and enumerate devices.
 
@@ -2142,8 +2306,9 @@ def _log_placement_findings(placement: Placement, model_refs: dict[WorkerRole, s
     for role, shortfall in placement.tight_roles.items():
         log.warning(
             "Memory is tight for the %s model %s: it is estimated to need %.1f GiB more "
-            "GPU memory than is available. It will still load on demand; if it fails to "
-            "load or runs slowly, free up GPU memory or use a smaller model.",
+            "GPU memory than is available. It will still load on demand, keeping the "
+            "layers that fit on the GPU and the rest in system memory; if it runs "
+            "slowly, free up GPU memory or use a smaller model.",
             role.value,
             model_refs[role],
             # A sub-0.05 GiB shortfall would render as "0.0 GiB more".

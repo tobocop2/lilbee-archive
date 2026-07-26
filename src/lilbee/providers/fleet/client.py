@@ -218,16 +218,62 @@ def _raise_for_status(resp: httpx.Response) -> None:
         tail = _upstream_failure_tail(resp)
         if tail:
             detail = f"{detail}\nupstream server output:\n{tail}"
-        if _BIND_FAILURE_MARKER in tail:
-            # A death from losing the port-bind race is transient, not a dead
-            # replica: the retry re-drives llama-swap's spawn, which normally
-            # binds once the passing connection has released the port.
-            kind = ProviderErrorKind.SERVER
+        classified = classify_upstream_death(tail)
+        if classified is not None:
+            kind = classified
     raise ProviderError(
         f"llama-server returned HTTP {resp.status_code}{detail}",
         provider=_PROVIDER_NAME,
         kind=kind,
     )
+
+
+# What the engine prints when a device allocation fails during load. Every
+# backend words it differently and all of them mean the same thing: the plan
+# asked for more memory than the device had.
+_OOM_MARKERS: tuple[str, ...] = (
+    "out of memory",
+    "failed to allocate",
+    "cudamalloc failed",
+    "hipmalloc failed",
+    "unable to allocate",
+    "insufficient memory",
+)
+
+
+def classify_upstream_death(tail: str) -> ProviderErrorKind | None:
+    """The kind of failure an engine's dying output describes, or ``None``.
+
+    ``CAPACITY`` for a load that ran out of device memory: retrying the identical
+    launch respawns it into a crash loop, while a smaller context might fit.
+    ``PORT_CONFLICT`` for losing the port-bind race, which is worth retrying
+    because the retry re-drives llama-swap's spawn, and worth naming because a
+    port held for good needs a different port rather than another attempt at the
+    same one. ``None`` leaves the existing classification alone rather than
+    guessing at an unfamiliar death.
+    """
+    lowered = tail.lower()
+    if any(marker in lowered for marker in _OOM_MARKERS):
+        return ProviderErrorKind.CAPACITY
+    if _BIND_FAILURE_MARKER in tail:
+        return ProviderErrorKind.PORT_CONFLICT
+    return None
+
+
+# Deaths a role's rebuild can fix, and a retry against the same launch cannot: a
+# memory shortfall needs a smaller plan, a held port needs a different port. Both
+# come from rebuilding the role, which re-plans and re-picks.
+_REBUILDABLE_KINDS = frozenset({ProviderErrorKind.CAPACITY, ProviderErrorKind.PORT_CONFLICT})
+
+
+def is_load_capacity_failure(exc: BaseException) -> bool:
+    """True when *exc* is an engine that died for lack of device memory on load."""
+    return isinstance(exc, ProviderError) and exc.kind is ProviderErrorKind.CAPACITY
+
+
+def is_rebuildable_failure(exc: BaseException) -> bool:
+    """True when rebuilding the role is what stands a chance, not another retry."""
+    return isinstance(exc, ProviderError) and exc.kind in _REBUILDABLE_KINDS
 
 
 def _classify_error(status_code: int, body: str) -> ProviderErrorKind:
@@ -344,7 +390,9 @@ _TRANSIENT_GATEWAY_STATUSES = frozenset({502, 503, 504})
 # Error kinds the busy retry treats as transient: a 429 (slots still loading)
 # and a bare gateway error (upstream momentarily unreachable) both clear on
 # their own once the server is ready again.
-_TRANSIENT_KINDS = frozenset({ProviderErrorKind.RATE_LIMIT, ProviderErrorKind.SERVER})
+_TRANSIENT_KINDS = frozenset(
+    {ProviderErrorKind.RATE_LIMIT, ProviderErrorKind.SERVER, ProviderErrorKind.PORT_CONFLICT}
+)
 _DONE_SENTINEL = "[DONE]"
 _DATA_PREFIX = "data:"
 _DEFAULT_TIMEOUT_S = 300.0

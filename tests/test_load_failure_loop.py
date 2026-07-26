@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from itertools import pairwise
+
 import pytest
 
 from lilbee.providers.base import ProviderErrorKind
@@ -27,6 +29,26 @@ class TestAnEngineOomIsItsOwnFailure:
         from lilbee.providers.fleet.client import classify_upstream_death
 
         tail = "llama_init_from_model: failed to allocate compute buffers"
+        assert classify_upstream_death(tail) is ProviderErrorKind.CAPACITY
+
+    def test_a_vulkan_device_oom_counts(self) -> None:
+        # Vulkan words it differently from every CUDA-shaped backend, and it is
+        # the backend every AMD and Intel GPU lands on.
+        from lilbee.providers.fleet.client import classify_upstream_death
+
+        tail = "ggml_vulkan: Device memory allocation of size 4294967296 failed."
+        assert classify_upstream_death(tail) is ProviderErrorKind.CAPACITY
+
+    def test_a_vulkan_out_of_device_memory_error_counts(self) -> None:
+        from lilbee.providers.fleet.client import classify_upstream_death
+
+        tail = "vk::Device::allocateMemory: ErrorOutOfDeviceMemory"
+        assert classify_upstream_death(tail) is ProviderErrorKind.CAPACITY
+
+    def test_a_metal_buffer_failure_counts(self) -> None:
+        from lilbee.providers.fleet.client import classify_upstream_death
+
+        tail = "ggml_metal_device_init: error: failed to allocate buffer, size =  4096.00 MiB"
         assert classify_upstream_death(tail) is ProviderErrorKind.CAPACITY
 
     def test_an_unrecognised_death_is_left_alone(self) -> None:
@@ -362,3 +384,48 @@ class TestTheUncoveredEdgesOfTheseLadders:
             lambda *a, **k: (_ for _ in ()).throw(subprocess.SubprocessError("no sysctl")),
         )
         assert swap_manager._ephemeral_range() is None
+
+
+class TestADownshiftNeverAsksForMore:
+    """The floor is a stopping point, not a target. Applied to a context already
+    below it, a bare max() raises the number, so the retry after a load OOM asks
+    for more memory than the launch that just ran out of it."""
+
+    def test_a_small_non_chat_context_is_never_raised(self) -> None:
+        from lilbee.providers.fleet import planning
+        from lilbee.providers.roles import WorkerRole
+
+        planning.clear_ctx_downshift()
+        planning.record_ctx_downshift(WorkerRole.EMBED)
+        assert planning.apply_ctx_downshift(WorkerRole.EMBED, 512) <= 512
+        planning.clear_ctx_downshift()
+
+    def test_a_chat_model_with_a_short_window_is_never_raised(self, monkeypatch) -> None:
+        # A model trained for 2048 tokens sits below the floor; stepping it must
+        # not hand back 4096, which the model cannot serve at all.
+        from lilbee.core.config import cfg
+        from lilbee.providers.fleet import planning
+        from lilbee.providers.roles import WorkerRole
+
+        monkeypatch.setattr(cfg, "num_ctx", None, raising=False)
+        planning.clear_ctx_downshift()
+        planning.record_ctx_downshift(WorkerRole.CHAT)
+        assert planning.apply_ctx_downshift(WorkerRole.CHAT, 2048) <= 2048
+        planning.clear_ctx_downshift()
+
+    def test_every_step_of_a_normal_ladder_still_shrinks(self, monkeypatch) -> None:
+        from lilbee.core.config import cfg
+        from lilbee.providers.fleet import planning
+        from lilbee.providers.roles import WorkerRole
+
+        monkeypatch.setattr(cfg, "num_ctx", None, raising=False)
+        # The ladder's length comes from the configured target, so pin it rather
+        # than asserting against whatever this machine's config happens to say.
+        monkeypatch.setattr(cfg, "chat_n_ctx_target", 32768, raising=False)
+        planning.clear_ctx_downshift()
+        seen = [32768]
+        while planning.record_ctx_downshift(WorkerRole.CHAT):
+            seen.append(planning.apply_ctx_downshift(WorkerRole.CHAT, 32768))
+        assert seen == [32768, 16384, 8192, 4096]
+        assert all(b < a for a, b in pairwise(seen))
+        planning.clear_ctx_downshift()

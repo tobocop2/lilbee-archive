@@ -1273,7 +1273,8 @@ class FleetProvider:
                 )
                 raise err
             log.warning(
-                "%s ran out of device memory on load; rebuilding it against a smaller context",
+                "%s ran out of device memory on load; re-planning it with a smaller "
+                "context where its window has room to give",
                 role.value,
             )
         else:

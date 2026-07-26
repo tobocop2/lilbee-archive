@@ -237,10 +237,13 @@ def _place_beside_disjoint(
 
 
 def _tight_device_group(needed: int, remaining: dict[int, float]) -> tuple[int, ...]:
-    """Cards to give a model that fits nowhere: the fewest that could hold it.
+    """Cards to give a model that fits nowhere else.
 
-    The most-free card alone when that is enough, else every card with headroom,
-    ordered most-free first so the split's main device is the roomiest.
+    The most-free card alone when that one card is enough, otherwise every card
+    with headroom, ordered most-free first so the split's main device is the
+    roomiest. Not a minimal subset: finding the smallest group that fits would
+    need an estimate per candidate group, and this path is reached only after
+    the estimating search has already failed.
     """
     by_room = sorted(remaining, key=lambda idx: remaining[idx], reverse=True)
     if not by_room:
@@ -637,6 +640,9 @@ def _vram_proportional_split(
 # unbounded ladder on a wide box turns a plan into a minute of subprocesses; the
 # cap is what keeps the search's cost linear in cards rather than in cards times
 # candidates.
+# Rungs on the ladder below. Not a cap applied to it: the ladder builds exactly
+# this many, and a slice pretending to enforce a bound it cannot reach would be
+# decoration. Named so the estimator memo can be sized against a whole plan.
 _MAX_RATIO_CANDIDATES = 3
 _MAX_SPLIT_ESTIMATES = 24
 # Sub-GiB resolution for the shifted candidates. Whole GiB is coarse enough that
@@ -669,7 +675,7 @@ def _split_ratio_candidates(
     seen: dict[tuple[int, ...], tuple[int, ...]] = {}
     for candidate in candidates:
         seen.setdefault(_normalized(candidate), candidate)
-    return tuple(seen.values())[:_MAX_RATIO_CANDIDATES]
+    return tuple(seen.values())
 
 
 def _normalized(ratio: tuple[int, ...]) -> tuple[int, ...]:

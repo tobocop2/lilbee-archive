@@ -230,12 +230,22 @@ def _raise_for_status(resp: httpx.Response) -> None:
 
 # What the engine prints when a device allocation fails during load. Every
 # backend words it differently and all of them mean the same thing: the plan
-# asked for more memory than the device had.
+# asked for more memory than the device had. Taken from the emit sites in
+# upstream rather than guessed, and matched lowercased.
+#
+# One entry covers CUDA, HIP and MUSA: the vendor headers #define cudaMalloc to
+# their own allocator, but the log string in ggml-cuda.cu is a literal, so an
+# AMD or Moore Threads build still prints "cudaMalloc failed". A separate
+# hipMalloc marker would match nothing.
+#
+# Vulkan is the one that needs its own wording. It is where every AMD and Intel
+# GPU lands, and it says neither "out of memory" nor "failed to allocate".
 _OOM_MARKERS: tuple[str, ...] = (
     "out of memory",
-    "failed to allocate",
-    "cudamalloc failed",
-    "hipmalloc failed",
+    "failed to allocate",  # Metal's buffer failure, and most generic paths
+    "cudamalloc failed",  # CUDA, HIP and MUSA alike
+    "device memory allocation of size",  # ggml-vulkan's fatal allocation failure
+    "outofdevicememory",  # a vk::OutOfDeviceMemoryError that reached the log
     "unable to allocate",
     "insufficient memory",
 )

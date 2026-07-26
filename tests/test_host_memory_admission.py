@@ -33,7 +33,10 @@ class TestHostMemoryIsChargedWhenLayersLeaveTheGpu:
 
         monkeypatch.setattr(planning, "total_system_memory", lambda: 16 * _GB)
         monkeypatch.setattr(planning, "free_system_memory", lambda: 8 * _GB)
-        assert planning._host_memory_verdict(WorkerRole.CHAT, _REF, 40 * _GB) == "refuse"
+        assert (
+            planning._host_memory_verdict(WorkerRole.CHAT, _REF, 40 * _GB)
+            is planning.HostMemoryVerdict.REFUSE
+        )
 
     def test_a_model_that_exceeds_only_free_memory_is_allowed_with_a_warning(
         self, monkeypatch, offload_configured, caplog
@@ -44,7 +47,7 @@ class TestHostMemoryIsChargedWhenLayersLeaveTheGpu:
         monkeypatch.setattr(planning, "free_system_memory", lambda: 8 * _GB)
         with caplog.at_level(logging.WARNING):
             verdict = planning._host_memory_verdict(WorkerRole.CHAT, _REF, 40 * _GB)
-        assert verdict == "warn"
+        assert verdict is planning.HostMemoryVerdict.WARN
         assert "system memory" in caplog.text
 
     def test_a_model_that_fits_free_memory_is_silent(
@@ -56,7 +59,7 @@ class TestHostMemoryIsChargedWhenLayersLeaveTheGpu:
         monkeypatch.setattr(planning, "free_system_memory", lambda: 40 * _GB)
         with caplog.at_level(logging.WARNING):
             verdict = planning._host_memory_verdict(WorkerRole.CHAT, _REF, 8 * _GB)
-        assert verdict == "ok"
+        assert verdict is planning.HostMemoryVerdict.OK
         assert caplog.text == ""
 
     def test_nothing_is_charged_when_no_layer_ever_leaves_the_gpu(self, monkeypatch) -> None:
@@ -69,7 +72,10 @@ class TestHostMemoryIsChargedWhenLayersLeaveTheGpu:
         monkeypatch.setattr(cfg, "n_cpu_moe", None, raising=False)
         monkeypatch.setattr(cfg, "n_gpu_layers", None, raising=False)
         monkeypatch.setattr(planning, "total_system_memory", lambda: 1, raising=False)
-        assert planning._host_memory_verdict(WorkerRole.CHAT, _REF, 999 * _GB) == "ok"
+        assert (
+            planning._host_memory_verdict(WorkerRole.CHAT, _REF, 999 * _GB)
+            is planning.HostMemoryVerdict.OK
+        )
 
     def test_a_partial_gpu_layer_budget_counts_as_offload(self, monkeypatch) -> None:
         from lilbee.core.config import cfg
@@ -80,7 +86,10 @@ class TestHostMemoryIsChargedWhenLayersLeaveTheGpu:
         monkeypatch.setattr(cfg, "n_gpu_layers", 12, raising=False)
         monkeypatch.setattr(planning, "total_system_memory", lambda: 16 * _GB)
         monkeypatch.setattr(planning, "free_system_memory", lambda: 8 * _GB)
-        assert planning._host_memory_verdict(WorkerRole.CHAT, _REF, 40 * _GB) == "refuse"
+        assert (
+            planning._host_memory_verdict(WorkerRole.CHAT, _REF, 40 * _GB)
+            is planning.HostMemoryVerdict.REFUSE
+        )
 
     def test_a_cpu_only_role_counts_as_offload(self, monkeypatch) -> None:
         from lilbee.core.config import cfg
@@ -91,7 +100,10 @@ class TestHostMemoryIsChargedWhenLayersLeaveTheGpu:
         monkeypatch.setattr(cfg, "n_gpu_layers", 0, raising=False)
         monkeypatch.setattr(planning, "total_system_memory", lambda: 16 * _GB)
         monkeypatch.setattr(planning, "free_system_memory", lambda: 8 * _GB)
-        assert planning._host_memory_verdict(WorkerRole.CHAT, _REF, 40 * _GB) == "refuse"
+        assert (
+            planning._host_memory_verdict(WorkerRole.CHAT, _REF, 40 * _GB)
+            is planning.HostMemoryVerdict.REFUSE
+        )
 
 
 class TestTheVerdictReachesAdmission:
@@ -102,7 +114,9 @@ class TestTheVerdictReachesAdmission:
 
         monkeypatch.setattr(planning, "_role_weights_bytes", lambda *_a: 1)
         monkeypatch.setattr(planning, "_weights_exceed_hardware", lambda *_a, **_k: False)
-        monkeypatch.setattr(planning, "_host_memory_verdict", lambda *_a: "refuse")
+        monkeypatch.setattr(
+            planning, "_host_memory_verdict", lambda *_a: planning.HostMemoryVerdict.REFUSE
+        )
         assert (
             planning._admit_estimate(
                 _estimate(), WorkerRole.CHAT, _REF, total_vram=64 * _GB, ram_bytes=40 * _GB
@@ -115,7 +129,9 @@ class TestTheVerdictReachesAdmission:
 
         monkeypatch.setattr(planning, "_role_weights_bytes", lambda *_a: 1)
         monkeypatch.setattr(planning, "_weights_exceed_hardware", lambda *_a, **_k: False)
-        monkeypatch.setattr(planning, "_host_memory_verdict", lambda *_a: "warn")
+        monkeypatch.setattr(
+            planning, "_host_memory_verdict", lambda *_a: planning.HostMemoryVerdict.WARN
+        )
         estimate = _estimate()
         assert (
             planning._admit_estimate(

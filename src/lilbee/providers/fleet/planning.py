@@ -7,6 +7,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -957,7 +958,7 @@ def _admit_estimate(
     if _weights_exceed_hardware(weights, total_vram, is_moe=_ref_is_moe(ref)):
         _warn_weights_exceed(role, ref, weights, total_vram)
         return None
-    if _host_memory_verdict(role, ref, ram_bytes) == "refuse":
+    if _host_memory_verdict(role, ref, ram_bytes) is HostMemoryVerdict.REFUSE:
         return None
     return estimate
 
@@ -1063,7 +1064,15 @@ def _cpu_offload_in_play() -> bool:
     return _expert_offload_configured() or cfg.n_gpu_layers is not None
 
 
-def _host_memory_verdict(role: WorkerRole, ref: str, ram_bytes: int) -> str:
+class HostMemoryVerdict(StrEnum):
+    """Whether a role's system-memory demand fits the machine."""
+
+    OK = "ok"
+    WARN = "warn"
+    REFUSE = "refuse"
+
+
+def _host_memory_verdict(role: WorkerRole, ref: str, ram_bytes: int) -> HostMemoryVerdict:
     """Whether *role*'s system-memory half fits: ``ok``, ``warn`` or ``refuse``.
 
     Charged only when something actually offloads. Total memory is ground truth,
@@ -1072,7 +1081,7 @@ def _host_memory_verdict(role: WorkerRole, ref: str, ram_bytes: int) -> str:
     worth a false refusal over.
     """
     if not _cpu_offload_in_play() or ram_bytes <= 0:
-        return "ok"
+        return HostMemoryVerdict.OK
     total = total_system_memory()
     if total and ram_bytes > total:
         log.warning(
@@ -1083,7 +1092,7 @@ def _host_memory_verdict(role: WorkerRole, ref: str, ram_bytes: int) -> str:
             ram_bytes / 1024**3,
             total / 1024**3,
         )
-        return "refuse"
+        return HostMemoryVerdict.REFUSE
     free = free_system_memory()
     if free and ram_bytes > free:
         log.warning(
@@ -1094,8 +1103,8 @@ def _host_memory_verdict(role: WorkerRole, ref: str, ram_bytes: int) -> str:
             ram_bytes / 1024**3,
             free / 1024**3,
         )
-        return "warn"
-    return "ok"
+        return HostMemoryVerdict.WARN
+    return HostMemoryVerdict.OK
 
 
 def _warn_weights_exceed(role: WorkerRole, ref: str, weights: int, total_vram: int) -> None:
@@ -1682,9 +1691,12 @@ class _PlanProbeStore:
 _plan_probe_store = _PlanProbeStore()
 
 
-# The smallest chat window worth serving. Below this the answers are too short
+# Where the ladder stops. Sized for chat, below which the answers are too short
 # to be useful, so a role that still will not load here has a real problem the
-# planner cannot size its way out of and the failure should surface.
+# planner cannot size its way out of and the failure should surface. Roles whose
+# window already sits under it (a small embedding context) are left alone rather
+# than raised to meet it, so for them the ladder is a no-op and the failure
+# surfaces after the one retry.
 MIN_DOWNSHIFT_CTX = 4096
 
 
@@ -1722,6 +1734,13 @@ _ctx_downshift_store = _CtxDownshiftStore()
 def apply_ctx_downshift(role: WorkerRole, ctx: int) -> int:
     """*ctx* halved once per downshift step recorded for *role*, floored.
 
+    Never more than *ctx*. The floor is a stopping point, not a target: applied
+    to a context already below it (a small embedding window, a model trained for
+    2048 tokens) a bare floor would hand back a larger number, and the retry
+    after a load OOM would ask for more memory than the launch that just ran out
+    of it. Such a role simply has nothing to give back, and its failure surfaces
+    after the one retry instead.
+
     A user's ``cfg.num_ctx`` pin is returned untouched: serving a window smaller
     than the one that was asked for, without being asked, is worse than failing
     to load and saying so.
@@ -1731,7 +1750,7 @@ def apply_ctx_downshift(role: WorkerRole, ctx: int) -> int:
     if role is WorkerRole.CHAT and cfg.num_ctx is not None:
         return ctx
     steps = _ctx_downshift_store.steps(role)
-    return max(MIN_DOWNSHIFT_CTX, ctx >> steps) if steps else ctx
+    return min(ctx, max(MIN_DOWNSHIFT_CTX, ctx >> steps)) if steps else ctx
 
 
 def record_ctx_downshift(role: WorkerRole) -> bool:

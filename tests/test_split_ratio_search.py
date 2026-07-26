@@ -20,13 +20,15 @@ class TestTheRatioLadder:
         remaining = {0: 24.0 * _GB, 1: 12.0 * _GB}
         assert _split_ratio_candidates([0, 1], remaining)[0] == (24, 12)
 
-    def test_candidates_are_distinct_and_bounded(self) -> None:
+    def test_candidates_are_distinct_and_match_the_declared_rung_count(self) -> None:
+        # _MAX_RATIO_CANDIDATES is what the memo is sized against, so it has to
+        # equal what the ladder actually produces when nothing deduplicates.
         from lilbee.providers.fleet.placement import _MAX_RATIO_CANDIDATES, _split_ratio_candidates
 
         remaining = {0: 24.0 * _GB, 1: 12.4 * _GB, 2: 7.9 * _GB}
         candidates = _split_ratio_candidates([0, 1, 2], remaining)
         assert len(candidates) == len(set(candidates))
-        assert 1 < len(candidates) <= _MAX_RATIO_CANDIDATES
+        assert len(candidates) == _MAX_RATIO_CANDIDATES
         assert all(len(c) == 3 and all(part >= 1 for part in c) for c in candidates)
 
     def test_a_lone_card_has_nothing_to_shift_against(self) -> None:

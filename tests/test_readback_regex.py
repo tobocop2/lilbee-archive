@@ -20,8 +20,8 @@ _EMITS = [
 
 # Lines that contain "buffer size" and must NOT be read as an allocation.
 _NOT_ALLOCATIONS = [
-    "~llama_context:       MTL0 compute buffer size is  97.1250 MiB, matches expectation of  97.1250 MiB",
-    "~llama_context:       MTL0 compute buffer size of  97.1250 MiB, does not match expectation of  1.0 MiB",
+    "~llama_context:  MTL0 compute buffer size is 97.1250 MiB, matches expectation of 97.1250 MiB",
+    "~llama_context:  MTL0 compute buffer size of 97.1250 MiB, does not match expectation of 1.0 MiB",
     "ggml_backend: copy buffer size: 128 MB",
     "ggml_opencl: A_q_d buffer size reduced from 100 to 50 due to device limitations.",
     "ggml_opencl: device max image buffer size (pixels): 16384",

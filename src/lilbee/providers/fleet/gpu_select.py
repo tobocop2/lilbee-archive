@@ -1052,7 +1052,22 @@ def disable_conflicting_vulkan_icds() -> str | None:
     vendors = _vulkan_vendors_present()
     if len(vendors) < _MIN_VENDORS_FOR_CONFLICT:
         return None
-    best = _select_best_vendor(_vendors_with_hardware(vendors) or vendors)
-    if best is None:  # pragma: no cover - invariant: vendors is non-empty here
+    with_hardware = _vendors_with_hardware(vendors)
+    if not with_hardware:
+        # The device tree could not be read, so nothing here is known to be
+        # present. Ranking the manifests alone is how a host whose /sys is
+        # masked, or WSL2, or an ARM SoC whose GPU is not on the PCI bus, could
+        # have its only working ICD disabled by a static vendor order. Silence is
+        # the safe answer: an extra ICD risks the crash class this avoids, while
+        # disabling the wrong one costs the GPU outright.
+        log.debug(
+            "Not disabling any Vulkan ICD: none of the %d manifest vendors could be "
+            "confirmed present in this host's device tree, so which one drives this "
+            "machine is unknown.",
+            len(vendors),
+        )
+        return None
+    best = _select_best_vendor(with_hardware)
+    if best is None:  # pragma: no cover - invariant: with_hardware is non-empty here
         return None
     return ",".join(_icds_to_disable(best, vendors))

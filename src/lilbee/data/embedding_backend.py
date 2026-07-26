@@ -16,6 +16,8 @@ from lilbee.data.ingest.types import EmbeddingBackendName
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from lilbee.core.vectors import Vector
+
 
 class LilbeeEmbeddingBackend:
     """Routes xberg's boundary-detection embeddings to lilbee's embedder.
@@ -30,7 +32,7 @@ class LilbeeEmbeddingBackend:
     def __init__(
         self,
         *,
-        embed_fn: Callable[[list[str]], list[list[float]]],
+        embed_fn: Callable[[list[str]], list[Vector]],
         dim_fn: Callable[[], int],
     ) -> None:
         self._embed_fn = embed_fn
@@ -47,4 +49,5 @@ class LilbeeEmbeddingBackend:
         return self._dim_fn()
 
     def embed(self, texts: list[str]) -> list[list[float]]:
-        return self._embed_fn(texts)
+        # The provider returns numpy vectors; xberg's chunker wants plain floats.
+        return [vector.tolist() for vector in self._embed_fn(texts)]

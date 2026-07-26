@@ -558,7 +558,7 @@ class TestRoutingProvider:
         count_lock = threading.Lock()
 
         class FakeFleet:
-            def __init__(self) -> None:
+            def __init__(self, *, hold_warm: bool = False) -> None:
                 with count_lock:
                     construct_count["n"] += 1
                 # Widen the check-then-set window: without it the cheap __init__
@@ -1284,166 +1284,7 @@ class TestReadMmprojProjectorType:
 
 
 class TestVulkanGpuSelect:
-    """``autoselect_best_gpu_index`` probes libvulkan via ctypes and picks discrete."""
-
-    def test_pick_best_prefers_discrete_over_integrated(self) -> None:
-        from lilbee.providers.fleet.gpu_select import (
-            VkDeviceType,
-            VulkanDevice,
-            _pick_best_device,
-        )
-
-        devices = [
-            VulkanDevice(
-                index=0, device_type=VkDeviceType.INTEGRATED_GPU, device_name="iGPU", vendor_id=0
-            ),
-            VulkanDevice(
-                index=1, device_type=VkDeviceType.DISCRETE_GPU, device_name="dGPU", vendor_id=0
-            ),
-        ]
-        best = _pick_best_device(devices)
-        assert best is not None
-        assert best.index == 1
-
-    def test_pick_best_returns_none_for_cpu_only(self) -> None:
-        from lilbee.providers.fleet.gpu_select import (
-            VkDeviceType,
-            VulkanDevice,
-            _pick_best_device,
-        )
-
-        devices = [
-            VulkanDevice(
-                index=0, device_type=VkDeviceType.CPU, device_name="llvmpipe", vendor_id=0
-            ),
-        ]
-        assert _pick_best_device(devices) is None
-
-    def test_pick_best_returns_none_for_empty_list(self) -> None:
-        from lilbee.providers.fleet.gpu_select import _pick_best_device
-
-        assert _pick_best_device([]) is None
-
-    def test_rank_for_unknown_device_type_returns_zero(self) -> None:
-        """Drivers may report a deviceType outside the Vulkan 1.0 enum; we treat as CPU-rank."""
-        from lilbee.providers.fleet.gpu_select import _rank_for
-
-        assert _rank_for(999) == 0
-
-    def test_autoselect_returns_discrete_index_for_dual_gpu(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from lilbee.providers.fleet import gpu_select
-        from lilbee.providers.fleet.gpu_select import (
-            VkDeviceType,
-            VulkanDevice,
-        )
-
-        monkeypatch.setattr(
-            gpu_select,
-            "_enumerate_vulkan_devices",
-            lambda: [
-                VulkanDevice(
-                    index=0,
-                    device_type=VkDeviceType.INTEGRATED_GPU,
-                    device_name="iGPU",
-                    vendor_id=0,
-                ),
-                VulkanDevice(
-                    index=1,
-                    device_type=VkDeviceType.DISCRETE_GPU,
-                    device_name="dGPU",
-                    vendor_id=0,
-                ),
-            ],
-        )
-        assert gpu_select.autoselect_best_gpu_index() == "1"
-
-    def test_autoselect_returns_none_when_single_visible_device(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Single-device hosts keep the default ordering; auto-pin would be churn."""
-        from lilbee.providers.fleet import gpu_select
-        from lilbee.providers.fleet.gpu_select import (
-            VkDeviceType,
-            VulkanDevice,
-        )
-
-        monkeypatch.setattr(
-            gpu_select,
-            "_enumerate_vulkan_devices",
-            lambda: [
-                VulkanDevice(
-                    index=0,
-                    device_type=VkDeviceType.DISCRETE_GPU,
-                    device_name="RTX 4090",
-                    vendor_id=0,
-                ),
-            ],
-        )
-        assert gpu_select.autoselect_best_gpu_index() is None
-
-    def test_autoselect_returns_none_when_loader_missing(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from lilbee.providers.fleet import gpu_select
-
-        monkeypatch.setattr(gpu_select, "_enumerate_vulkan_devices", lambda: None)
-        assert gpu_select.autoselect_best_gpu_index() is None
-
-    def test_autoselect_returns_none_when_only_cpu_devices(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """All-CPU adapter list shouldn't force a pin: software rendering is never right."""
-        from lilbee.providers.fleet import gpu_select
-        from lilbee.providers.fleet.gpu_select import (
-            VkDeviceType,
-            VulkanDevice,
-        )
-
-        monkeypatch.setattr(
-            gpu_select,
-            "_enumerate_vulkan_devices",
-            lambda: [
-                VulkanDevice(
-                    index=0, device_type=VkDeviceType.CPU, device_name="cpu0", vendor_id=0
-                ),
-                VulkanDevice(
-                    index=1, device_type=VkDeviceType.CPU, device_name="cpu1", vendor_id=0
-                ),
-            ],
-        )
-        assert gpu_select.autoselect_best_gpu_index() is None
-
-    def test_autoselect_returns_none_when_all_devices_same_rank(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Two discrete GPUs of equal rank: no auto-pin (no decision to make)."""
-        from lilbee.providers.fleet import gpu_select
-        from lilbee.providers.fleet.gpu_select import (
-            VkDeviceType,
-            VulkanDevice,
-        )
-
-        monkeypatch.setattr(
-            gpu_select,
-            "_enumerate_vulkan_devices",
-            lambda: [
-                VulkanDevice(
-                    index=0,
-                    device_type=VkDeviceType.DISCRETE_GPU,
-                    device_name="dgpu0",
-                    vendor_id=0,
-                ),
-                VulkanDevice(
-                    index=1,
-                    device_type=VkDeviceType.DISCRETE_GPU,
-                    device_name="dgpu1",
-                    vendor_id=0,
-                ),
-            ],
-        )
-        assert gpu_select.autoselect_best_gpu_index() is None
+    """Opening libvulkan through ctypes and reading what it reports."""
 
     def test_loader_returns_none_on_darwin(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """macOS uses Metal; the Vulkan probe explicitly skips."""
@@ -1561,14 +1402,16 @@ class TestVulkanGpuSelect:
             return 0
 
         def _get_properties(handle: object, props_ref: object) -> None:
-            i = handle - 0xCAFE
+            # The probe passes a c_void_p; unwrap it to recover the fake index.
+            i = handle.value - 0xCAFE
             dtype, name = fake_props[i]
             props_ref._obj.deviceType = dtype
             props_ref._obj.deviceName = name
 
         def _get_memory(handle: object, mem_ref: object) -> None:
             # device 1 reports a 12 GB device-local heap + a host heap to ignore.
-            i = handle - 0xCAFE
+            # The probe passes a c_void_p; unwrap it to recover the fake index.
+            i = handle.value - 0xCAFE
             mem_ref._obj.memoryHeapCount = 2
             mem_ref._obj.memoryHeaps[0].size = (i + 1) * 12_000_000_000
             mem_ref._obj.memoryHeaps[0].flags = 1  # VK_MEMORY_HEAP_DEVICE_LOCAL_BIT
@@ -1732,7 +1575,10 @@ class TestVulkanGpuSelect:
                 ),
             ],
         )
-        assert gpu_select.enumerate_gpu_vram() == [(0, 24_000_000_000), (1, 8_000_000_000)]
+        assert gpu_select.enumerate_gpu_vram() == [
+            (0, 24_000_000_000, 24_000_000_000),
+            (1, 8_000_000_000, 8_000_000_000),
+        ]
 
     def test_enumerate_gpu_vram_none_when_probe_unavailable(
         self, monkeypatch: pytest.MonkeyPatch
@@ -2003,7 +1849,7 @@ class TestIterWindowsVulkanManifestPaths:
         assert r"C:\soft\nv-vk64.json" in result
         assert any("amdvlk64.json" in path for path in result)
         # Both PnP class GUIDs (display adapter + software component) must be walked.
-        assert vulkan_icd_discovery._PNP_DISPLAY_ADAPTER_CLASS_GUID in pnp_calls
+        assert vulkan_icd_discovery.PNP_DISPLAY_ADAPTER_CLASS_GUID in pnp_calls
         assert vulkan_icd_discovery._PNP_SOFTWARE_COMPONENT_CLASS_GUID in pnp_calls
 
 
@@ -2285,7 +2131,7 @@ class TestIterPnpClassManifests:
 
         result = list(
             vulkan_icd_discovery._iter_pnp_class_manifests(
-                winreg, vulkan_icd_discovery._PNP_DISPLAY_ADAPTER_CLASS_GUID
+                winreg, vulkan_icd_discovery.PNP_DISPLAY_ADAPTER_CLASS_GUID
             )
         )
         assert r"C:\nv-vk64.json" in result
@@ -2304,7 +2150,7 @@ class TestIterPnpClassManifests:
         assert (
             list(
                 vulkan_icd_discovery._iter_pnp_class_manifests(
-                    winreg, vulkan_icd_discovery._PNP_DISPLAY_ADAPTER_CLASS_GUID
+                    winreg, vulkan_icd_discovery.PNP_DISPLAY_ADAPTER_CLASS_GUID
                 )
             )
             == []
@@ -2333,7 +2179,7 @@ class TestIterPnpClassManifests:
 
         result = list(
             vulkan_icd_discovery._iter_pnp_class_manifests(
-                winreg, vulkan_icd_discovery._PNP_DISPLAY_ADAPTER_CLASS_GUID
+                winreg, vulkan_icd_discovery.PNP_DISPLAY_ADAPTER_CLASS_GUID
             )
         )
         assert result == [r"C:\nv-vk64.json"]
@@ -2345,7 +2191,70 @@ class TestDisableConflictingVulkanIcds:
     Detection is registry-only: no Vulkan call runs while the disable env var
     is still unset, so the buggy vendor's ICD never gets pre-loaded into
     the process before we ask the loader to skip it.
+
+    Tests that don't name the host's GPUs leave ``installed_gpu_vendor_ids`` empty
+    (the "device tree says nothing" case) so the choice falls to the manifests.
     """
+
+    @pytest.fixture(autouse=True)
+    def _no_hardware_signal(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from lilbee.providers.fleet import gpu_select
+
+        monkeypatch.setattr(gpu_select, "installed_gpu_vendor_ids", frozenset)
+
+    def test_keeps_the_only_vendor_whose_gpu_is_installed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Mesa ships radeon_icd on an Intel-only laptop; Intel must survive.
+
+        The Flatpak freedesktop runtime carries every Mesa driver, so the manifests
+        alone read as AMD + Intel. Disabling Intel there leaves the host with no
+        working ICD at all and the engine reports zero GPUs.
+        """
+        from lilbee.providers.fleet import gpu_select
+        from lilbee.providers.fleet.gpu_select import PCIVendorID
+
+        monkeypatch.setattr(gpu_select.sys, "platform", "linux")
+        monkeypatch.setattr(gpu_select.os, "environ", {})
+        monkeypatch.setattr(
+            gpu_select,
+            "_vulkan_vendors_present",
+            lambda: {PCIVendorID.AMD, PCIVendorID.INTEL},
+        )
+        monkeypatch.setattr(
+            gpu_select, "installed_gpu_vendor_ids", lambda: frozenset({PCIVendorID.INTEL})
+        )
+
+        result = gpu_select.disable_conflicting_vulkan_icds()
+        assert result is not None
+        assert "radeon*" in result
+        assert "intel*" not in result
+        assert "igvk*" not in result
+
+    def test_preference_order_applies_among_installed_gpus(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With NVIDIA and Intel both really present, NVIDIA still wins."""
+        from lilbee.providers.fleet import gpu_select
+        from lilbee.providers.fleet.gpu_select import PCIVendorID
+
+        monkeypatch.setattr(gpu_select.sys, "platform", "linux")
+        monkeypatch.setattr(gpu_select.os, "environ", {})
+        monkeypatch.setattr(
+            gpu_select,
+            "_vulkan_vendors_present",
+            lambda: {PCIVendorID.NVIDIA, PCIVendorID.INTEL},
+        )
+        monkeypatch.setattr(
+            gpu_select,
+            "installed_gpu_vendor_ids",
+            lambda: frozenset({PCIVendorID.NVIDIA, PCIVendorID.INTEL}),
+        )
+
+        result = gpu_select.disable_conflicting_vulkan_icds()
+        assert result is not None
+        assert "intel*" in result
+        assert "nv*" not in result
 
     def test_pins_nvidia_when_amd_also_installed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """NVIDIA + AMD installed on Windows -> disable AMD ICD globs, keep NVIDIA."""

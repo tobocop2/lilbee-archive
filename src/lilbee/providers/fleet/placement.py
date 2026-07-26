@@ -104,18 +104,20 @@ def plan_placement(
     device index; see ``planning.capture_plan_probe``). See
     docs/architecture.md (Placement). Other splits keep the fewest-cards behavior.
 
-    No GPU devices is the CPU/unified-memory case (a GPU-less host, or an Apple
-    Silicon box where the probe found nothing): roles run as single un-pinned
-    instances. ``unified_budget`` (free system RAM, bytes) gates them against one
-    shared pool so an oversize model is unplaceable instead of OOM-livelocking the
-    host; ``None`` keeps the legacy ungated behavior.
+    A ``unified_budget`` (free system RAM, bytes) means every device this host has
+    shares the host's memory, or it has none: an integrated GPU, an Apple Silicon
+    Mac, a GPU-less box. Those go through the shared pool whether or not a device
+    enumerated, because the constraint is the same RAM either way, and only that
+    path can refuse a role. Bin-packing them per device instead reads one pool as
+    several and never refuses anything, so a role set that cannot fit is admitted,
+    loads, and swap-livelocks the machine, which is what the budget exists to
+    prevent. ``None`` means at least one device has memory of its own, and the
+    per-GPU packing below applies.
     """
+    if unified_budget is not None:
+        return _place_shared_memory(models, unified_budget)
     if not devices:
-        return (
-            _place_ungated(models)
-            if unified_budget is None
-            else _place_shared_memory(models, unified_budget)
-        )
+        return _place_ungated(models)
     remaining: dict[int, float] = {idx: vram * USABLE_VRAM_FRACTION for idx, vram in devices}
 
     # The persistent singles are every replicas<=1 role plus replica 0 of each
@@ -591,7 +593,18 @@ def _charge_devices(
     remaining: dict[int, float],
     device_capacity: dict[int, int],
 ) -> None:
-    """Subtract one instance's per-device peaks from *remaining*; fail loud if a card overflows."""
+    """Subtract one instance's per-device peaks from *remaining*; fail loud if a card overflows.
+
+    An estimate that does not cover every pinned device is a PlacementError rather
+    than a zip mismatch: gguf-parser returns no per-device breakdown for some
+    models, and the auto planner skips such a candidate (see :func:`_place_split`),
+    so the manual path must refuse in the currency callers already handle.
+    """
+    if len(per_device) != len(devices):
+        raise PlacementError(
+            f"{role.value} is pinned to {len(devices)} device(s) but its memory estimate "
+            f"covers {len(per_device)}; clear the placement to place it automatically"
+        )
     for idx, peak in zip(devices, per_device, strict=True):
         if peak > remaining[idx]:
             raise PlacementError(

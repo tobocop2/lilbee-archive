@@ -66,6 +66,33 @@ flowchart LR
     INGEST --> HF
 ```
 
+### Process boundaries: engine out of process, retrieval in
+
+One rule decides every process boundary: **a separate process is warranted only where
+the kernel cannot share the resource through the filesystem.**
+
+The engine qualifies. VRAM is per-process and a C++ inference crash must not take the
+app down, so llama-server runs externally behind llama-swap over localhost HTTP. The
+hop carries token streaming, where transport cost is noise next to per-token compute.
+
+The retrieval index does not. LanceDB is an embedded mmap'd store: queries read index
+pages in-process, and the OS page cache shares those pages across processes for free.
+In-process retrieval is already shared retrieval.
+
+What this buys:
+
+- **No transport on the hottest read path.** Candidate sets flow between search stages
+  as in-memory objects, not round-trips.
+- **Search cannot be "down."** No retrieval service to start, health-check, or crash.
+- **Library-first, CLI-first.** `lilbee search "q" --json` boots, maps the index, runs
+  the full pipeline, prints, and exits. No server, no daemon.
+- **Concurrency scales with processes**, not a shared service's event loop.
+
+The price is write coordination: writers serialize through a cross-process file lock
+and readers tolerate a bounded staleness window (LanceDB MVCC, 5s read-consistency).
+Cheap for a read-heavy knowledge base. Surfaces that cannot run in-process still get
+the full pipeline over HTTP via `/api/search`.
+
 ---
 
 ## Ingestion Pipeline
@@ -170,6 +197,115 @@ Safety limits are identical across both adaptive profiles; only the climb speed 
 | CPU soft / critical | — | — | 90% / 97% |
 | free RAM soft / min | — | — | 20% / 10% |
 | GPU temp warn / critical | — | — | 80°C / 85°C |
+
+### Three ceilings govern ingest throughput
+
+Admission control keeps the GPUs fed, but it is only one of three limits, and tuning the
+wrong one wastes effort. Ingest throughput is the minimum of:
+
+1. **The GPU ceiling.** How fast the cards can actually run the model.
+2. **The admission ceiling.** How many documents the controller lets in flight, which is
+   what the adaptive profiles above tune.
+3. **The CPU decode ceiling.** How fast one core can turn embed responses back into
+   Python objects, because that step holds the GIL and therefore does not scale with
+   threads or with GPUs.
+
+The third is the least obvious and the easiest to misread as a GPU problem, so it is
+worth knowing how to tell them apart:
+
+| What you observe | Which ceiling is binding |
+|---|---|
+| All cards near 100% util, throughput flat | GPU. Add or upgrade cards. |
+| Cards well under 100%, CPU cores all moderate | Admission. The controller is holding back. |
+| Cards uneven and starved, **one** core pegged at 100% | CPU decode. More concurrency will not help. |
+
+The third row is a real failure lilbee hit: 8 A100s capped near 161 docs/sec at roughly
+78% util with cards ranging 10 to 98 percent, while 2 slower L40S cards sat at an even
+97/97 percent. The slower pair was GPU-bound and healthy; the faster eight were waiting
+on a single core. The rest of this section is why, and what fixed it.
+
+#### Embedding responses are binary, not JSON floats
+
+Ingest dispatches embed calls from a thread pool, so many files are in flight at once.
+The network wait overlaps well, because httpx releases the GIL while waiting. Decoding
+the response does not.
+
+That is the whole problem. A vector arriving as JSON decimal literals becomes one Python
+float per dimension, parsed individually under the GIL. A 4096-dimensional vector is
+4096 separately parsed numbers. However many threads or GPUs are running, one core
+decodes all of them, and that core's rate is the fleet's rate.
+
+So lilbee asks for `encoding_format: base64`. The response is still JSON, with the same
+envelope and the same fields. Only the vector itself is written differently:
+
+```jsonc
+// before: 4096 decimal literals to parse, one Python float each
+"embedding": [-0.0029101597, -0.0131583912, 0.0144413067, ...]
+
+// after: one string, decoded by numpy.frombuffer in a single C call
+"embedding": "Ybg+u0uWV7w7m2w8foWVvaJerzvbiCq8C1Yo..."
+```
+
+Measured through the client's own embed path, one core, 4096-dimensional vectors,
+64 per batch:
+
+| | Before (JSON floats) | After (base64) |
+|---|---|---|
+| CPU per 1k vectors | 785 ms | **110 ms** |
+| Response body per batch | 5.41 MB | **1.40 MB** |
+| One-core decode ceiling | ~1,300 vectors/sec | **~9,000 vectors/sec** |
+| Work per vector | 4096 Python float objects | 1 buffer copy |
+| 8xA100 observed | 161 docs/sec, cards 10-98% util | GPU-bound |
+
+Roughly seven times cheaper. The last row is the point: at about eight chunks per
+document, 1,300 vectors/sec works out to about 160 docs/sec, which is exactly where the
+8-card host was stuck. That arithmetic is the quickest field test for whether decode is
+your limit. Divide one core's decode rate by chunks per document and compare it to
+observed throughput.
+
+Reranking shares the `/v1/embeddings` endpoint under rank pooling, so it receives the
+same encoding. Both callers decode through one helper, which keeps the wire format out
+of the score path.
+
+**Why not a real binary protocol?** MessagePack or protobuf would drop base64's 33% size
+inflation, but most of the remaining 110 ms is building Python floats for the caller, not
+the wire format. On the decode alone a raw binary buffer costs 55 ms per 1k vectors
+against base64's 97, so the entire protocol change is worth about 40 ms. It is also not
+reachable: the endpoint is llama.cpp's OpenAI-compatible API, which speaks JSON. Base64
+takes most of the available win using a format the engine already implements.
+
+**Why no strict base64 validation?** Rejecting non-alphabet characters during decode
+measured 12% slower, to guard against corruption that loopback HTTP already excludes. A
+wrong buffer length, a wrong response shape, and a wrong vector dimension are each still
+caught, the last by the store on write.
+
+**Vectors stay numpy to the store.** Most of what was left after base64 was not the wire
+at all. `numpy.frombuffer` gives a float32 array, and the client then called `.tolist()`
+on it, building 4096 Python float objects per vector to satisfy a `list[list[float]]`
+signature. Nothing downstream wanted them: pyarrow and LanceDB take float32 arrays
+directly, and the vector column is float32 either way. So `LLMProvider.embed` returns
+`list[NDArray[float32]]` (`Vector` in `core/vectors.py`) and the conversion is gone.
+
+Measured end to end through `LlamaServerClient.embed` against a mock transport, so the
+figure includes envelope parse, base64 decode, and the client's own batching, not decode
+alone. 4096-dimensional, 64 per batch, median of 7 reps:
+
+| | base64 + `tolist` | base64, numpy |
+|---|---|---|
+| CPU per 1k vectors | 128 ms | **70 ms** |
+
+Base measured against itself across runs varies about 1.5%, so the 46% drop is signal.
+Isolating the decode alone puts the remaining cost near 40 ms per 1k and the one-core
+ceiling around 25,000 vectors/sec, up from roughly 9,000.
+
+Batching the conversion was not the alternative. One contiguous 2D `tolist` measured
+101 ms per 1k against 96 ms per vector: the cost is allocating float objects, not call
+overhead, so only not allocating them helps.
+
+The SDK backends (Ollama, OpenAI via litellm) receive JSON float lists from their SDK
+and convert once at the provider boundary. They are network-bound, so the conversion
+does not show up. Two places still need Python lists and say so: `MemoryRow` serializes
+to JSON on write, and LanceDB read rows (`SearchChunk.vector`) come back as lists.
 
 ---
 
@@ -289,14 +425,31 @@ flowchart LR
   GPU-driver I/O is killed (and abandoned if unkillable) and surfaces as a named
   error through the warm tracker, health, and the TUI, never as an empty device
   list or a silent never-ready fleet.
-- **Pinning** (`devices.visible_env`): per backend, never by a foreign index —
-  CUDA via `CUDA_VISIBLE_DEVICES` with `CUDA_DEVICE_ORDER` (`PCI_BUS_ID` unless the
-  environment presets another order), ROCm via
-  `ROCR_VISIBLE_DEVICES`/`HIP_VISIBLE_DEVICES`, Vulkan via `GGML_VK_VISIBLE_DEVICES`.
-  When the parent environment already restricts a visible-devices var (a pod preset
-  like `CUDA_VISIBLE_DEVICES=2,3`), the probe's indices are relative to that list,
-  so the child env maps them back through it (integer or UUID entries) and keeps
-  naming the same physical cards the probe saw.
+- **Pinning**: per backend, never by a foreign index, and in two shapes depending on
+  whether the backend's environment variable speaks the same space `--list-devices`
+  numbers.
+  - By name, via `--device` (`planning._device_names`): **Vulkan** and **SYCL**.
+    `GGML_VK_VISIBLE_DEVICES` indexes the raw loader enumeration, not ggml's
+    filtered list, and setting it also disables ggml's device-type filter, its
+    `storageBuffer16BitAccess` support check and its same-UUID dedup.
+    `ONEAPI_DEVICE_SELECTOR` is a selector over a backend runtime rather than an
+    index list, so a device the engine calls `SYCL1` need not be Level Zero
+    ordinal 1. `--device` names devices exactly as `--list-devices` printed them,
+    which is where the indices came from. Devices synthesized by the Vulkan
+    fallback are never pinned: they carry raw loader ordinals, so the engine is
+    left to select for itself.
+  - By environment (`devices.visible_env`): **CUDA** via `CUDA_VISIBLE_DEVICES`
+    with `CUDA_DEVICE_ORDER` (`PCI_BUS_ID` unless the environment presets another
+    order), **ROCm/HIP** via one of `ROCR_VISIBLE_DEVICES`/`HIP_VISIBLE_DEVICES`
+    (never both: ROCr filters first and HIP re-indexes within the survivors, so
+    writing both double-filters). When the parent environment already restricts a
+    visible-devices var (a pod preset like `CUDA_VISIBLE_DEVICES=2,3`), the probe's
+    indices are relative to that list, so the child env maps them back through it
+    (integer or UUID entries) and keeps naming the same physical cards the probe
+    saw.
+  - When the engine listed GPUs and placement refused all of them, the launch
+    carries `--device none`: dropping a device from lilbee's view does not stop
+    ggml choosing it, and its fallback takes the first non-CPU adapter.
 - **VRAM estimation** (`vram.py`): each instance's footprint comes from
   **`gguf-parser`** (`estimate_instance_footprint`), a UMA-aware estimator run as a
   subprocess and memoized on the GGUF's path + mtime + sizing. It reports both a
@@ -478,7 +631,13 @@ touching the running fleet.
 - **Loader flags** (`adapters.build_server_argv`): each server's flags derive from
   cfg and the model's GGUF metadata for that role and config. Chat carries
   `--jinja`, `--flash-attn` (on unless `flash_attention` is disabled) and
-  `--cache-type-k/-v` from `kv_cache_type`; it also loads with `--no-mmap`
+  `--cache-type-k/-v` from `kv_cache_type` -- but a quantized KV type needs flash
+  attention, so with it disabled the launch falls back to f16 (and the estimate
+  sizes against f16 to match). A mixture-of-experts model also offloads its expert
+  weights to system memory when `cpu_moe`/`n_cpu_moe` is set (`--cpu-moe`/
+  `--n-cpu-moe`, gated on the GGUF declaring routed experts), and the VRAM estimate
+  charges the same tensors to the host so the plan matches the launch. Chat also
+  loads with `--no-mmap`
   (a malloc'd host copy) when its weights fit in at most half of total system
   RAM -- a buffered sequential read reaches ready ~20% faster than mmap's
   page-fault-driven upload (measured 33s vs 43s for a 112GB model on 3 GPUs),
@@ -543,18 +702,13 @@ touching the running fleet.
 
 ### Startup sequence and engine lifecycle
 
-The TUI opens the way Ollama and LM Studio do: the app is usable within a
-couple of seconds and the model loads in the background. The launcher never
-blocks on the engine; the same amber wordmark carries every stage. The onefile
-bootstrap paints an unpack progress bar (one-time; later launches skip it via
-the extraction stamp), parks the wordmark for the Python start, and the startup
-gate (`cli/tui/screens/startup_gate.py`) holds only while the services
-container builds. Nothing slower than widget mounting runs on the mount path:
-model canonicalization (disk reads, server probes) lives in the gate's boot
-worker, off the event loop. A prompt sent before the engine is ready waits
-inside its own answer bubble, whose thinking row renders the live load phase
-(`wait_chat_ready(on_progress=...)` in `app/placement.py`), byte progress
-included; a failed load lands there with the model hint.
+The TUI opens in a couple of seconds and the model loads in the background,
+the way Ollama and LM Studio do. The startup gate
+(`cli/tui/screens/startup_gate.py`) holds only while the services container
+builds; anything slower than widget mounting (disk reads, server probes) runs
+in the gate's boot worker. A prompt sent before the engine is ready waits in
+its own answer bubble, which renders the live load phase with byte progress
+(`wait_chat_ready(on_progress=...)` in `app/placement.py`).
 
 ```mermaid
 flowchart TD
@@ -567,35 +721,60 @@ flowchart TD
     F -- no --> H
 ```
 
-By default the engine lives and dies with lilbee. With `keep_engine_warm` on,
-terminal shutdown detaches instead: the fleet state file gains a `detached`
-marker (owner-PID state files in `providers/fleet/swap_manager.py`) and the
-next launch adopts the running fleet after a health, version, and model match,
-skipping planning and the load entirely. llama-swap's per-model `ttl`
-(`engine_idle_ttl_minutes`, default five minutes) frees idle GPU memory on its
-own; `lilbee engine stop` frees everything from any terminal. `reap_stale`
-spares detached fleets only while the setting is on, so toggling it off cleans
-up at the next start of any lilbee process.
+The engine is machine-level infrastructure. One **machine engine slot** per
+OS user (`~/.local/state/lilbee/engine/`, `~/Library/Application
+Support/lilbee/engine` on macOS, `%LOCALAPPDATA%\lilbee\engine` on Windows)
+holds the running fleet's records; every process acquires its engine
+through the same ladder, under a cross-process build lock:
+
+1. **Bind** when the slot's engine is healthy and its contract (per-role
+   models plus the bundled **engine pin**) covers the configuration. Binders
+   spawn nothing and write nothing. lilbee version is not in the contract:
+   releases sharing a pin share an engine; differing pins never run on a
+   build they were not tested against.
+2. **Build** into the empty slot otherwise. An incumbent is replaced in place
+   when no live user holds it, and also when it is this contract's own engine
+   left partially dead (a killed group) or partially covering (config grew a
+   role): its members need that rebuild too, and rediscover it, so leftovers
+   never poison the slot and weights are never duplicated.
+3. **Overflow** to the config root's private dir (`<root>/data/engine/`) only
+   when the slot holds a live *incompatible* engine in active use: two engines
+   exist exactly while two different model setups run at once.
+
+Lifetime is kernel-refcounted membership: each process holds a user lock the
+OS releases on any death, and the last clean exit stops the engine.
+`keep_engine_warm` opts the engine into outliving lilbee; the idle TTL
+(`engine_idle_ttl_minutes`, default five minutes) applies in every mode;
+`lilbee engine stop` frees everything now, whoever started it. Reaping never
+disagrees with binding: an engine answering on its proxy is spared, anything
+else is stopped through its state record.
+
+Two costs ride along. A model or placement change restarts the shared engine;
+peers rediscover the new ports with a one-shot retry, and an in-flight
+request surfaces a retry error. And the proxy still listens on an
+unauthenticated localhost port; the machine slot only makes discovery easier.
 
 ```mermaid
 flowchart TD
-    subgraph OFF ["default: on-demand"]
-        q1["quit, kill, or terminal close"] --> s1["engine stopped<br/>GPU memory freed"]
-    end
-    subgraph ON ["keep_engine_warm on"]
-        q2[quit] --> d["fleet keeps running,<br/>state file marked detached"]
-        d --> l2([next launch]) --> ok{"healthy, same lilbee<br/>version, same models?"}
-        ok -- yes --> a["adopt: bind to the running fleet<br/>first answer immediate"]
-        ok -- no --> r["reap it, start fresh"]
-        d --> i["idle past the ttl<br/>default five minutes"] --> u["weights unloaded<br/>GPU memory freed"]
-        t["setting turned off"] --> r
-        e["lilbee engine stop"] --> s2["everything freed now"]
-    end
+    S["lilbee process starts"] --> L["hold user lock<br/>(kernel releases on ANY death)"]
+    L --> Q{"machine slot engine healthy,<br/>models + engine pin match?"}
+    Q -- bind --> B["use its proxy ports<br/>spawn nothing"]
+    Q -- "slot empty" --> BU["build engine in the slot"]
+    Q -- "occupied, incompatible,<br/>in live use" --> PR["build private engine<br/>in this config root"]
+    Q -- "occupied, incompatible,<br/>no live users" --> RP["replace it:<br/>build in the slot"]
+    RP --> X
+    B --> X{"clean exit:<br/>last user out?"}
+    BU --> X
+    PR --> X
+    X -- "yes, warm off" --> STOP["stop engine<br/>machine clean"]
+    X -- "no, or warm on" --> LEAVE["engine keeps serving;<br/>idle weights nap after the ttl"]
 ```
 
-There is no background daemon: the only processes that outlive a session are
-the engine's own, and only when the user opted in. A crashed or force-killed
-session's engine is reclaimed at the next launch.
+A SIGKILLed last user cannot run its exit hook: the engine lingers, its models
+nap on the ttl, and the next lilbee run binds to it or cleans it. There is no
+background daemon; the only processes that can outlive a session are the
+engine's own, either because another lilbee still uses them or because the
+user opted into warm.
 
 ### Chat context-window management
 
@@ -943,9 +1122,13 @@ All chat-generating endpoints (`/api/ask`, `/api/chat`, both their `/stream` var
 
 ### Auth model
 
-All network surfaces, the `/v1/*` model runtime, the `/api/*` REST routes, and the `/mcp` streamable-http endpoint, share **one** bearer session token. The daemon generates it on startup, persists it to `server.json` (mode `0600`), and hands it to local clients through `lilbee agent-config` / `lilbee launch`. Clients send `Authorization: Bearer <token>`; `AuthMiddleware` (`src/lilbee/server/auth.py`) checks it on every mutating request.
+All network surfaces, the `/v1/*` model runtime, the `/api/*` REST routes, and the `/mcp` streamable-http endpoint, share **one** bearer session token. The daemon generates it on startup, persists it to `server.json` (mode `0600`), and hands it to local clients through `lilbee agent-config` / `lilbee launch`. Clients send `Authorization: Bearer <token>`; `AuthMiddleware` (`src/lilbee/server/auth.py`) checks it on **every** request, reads included. There is no unauthenticated route, `GET /api/health` included: health reports the chat engine's last error, which carries model paths and loader failures, so an open liveness probe would hand out the most useful reconnaissance on the box. A local probe runs as the user and reads the token out of `server.json` like every other local client.
+
+`/v1/models` and `/v1/chat/completions` are the only routes the middleware skips, and they are not exempt: they check the same token inside the handler so a bad one comes back in the OpenAI error envelope rather than Litestar's 401 shape. `tests/server/test_every_route_is_authenticated.py` walks the live route table and asserts every path answers 401 without a token, so a new route cannot quietly opt out.
 
 This is deliberately a single, unscoped token rather than a per-client or per-scope system. lilbee is a local-first, single-user tool: the daemon binds localhost only (with DNS-rebinding protection), and any process running as the user can read `server.json` regardless, so a per-agent token would not add a boundary that the filesystem doesn't already remove. The token exists to keep out other local users and drive-by browser requests, not to isolate the user's own agents from each other.
+
+That purpose is why reads are gated too. Reads used to be open on the reasoning that they only exposed local state, but `server.json` is `0600` precisely so another local user cannot act as the daemon, and leaving `GET /api/export` open handed that same user the entire corpus without it. The boundary only means something if it covers the data.
 
 The tradeoff is that the token is all-or-nothing: a client trusted with retrieval also gets generation and the mutating tools (`reset`, `remove`, `model_rm`, `settings_set`). That is acceptable for the user's own agents on localhost. Giving retrieval-only access to a less-trusted client would require a scoped token, which lilbee does not have today.
 
@@ -1005,7 +1188,7 @@ tools (~10% of a 32K context, ~35% of Gemma 4's 7K).
   `cfg.wiki` is on or `lilbee[crawler]` is installed.
 - Tool docstrings stay at one or two sentences (FastMCP turns them
   into per-parameter schema descriptions).
-- `_strip_schema_noise` in `mcp_server.py` drops the FastMCP/Pydantic
+- `LilbeeMCP.list_tools` in `mcp_server.py` drops the FastMCP/Pydantic
   auto-generated `title` keys before the tools hit the wire.
 - `tests/test_mcp.py::TestToolsSchemaSize` caps the schema at 7 KB; new
   tools or doc bloat trip the cap and force a deliberate review.
@@ -1121,6 +1304,52 @@ Thick arrow = the publish path; dotted = triggered/side paths. Timings, what-wai
 
 `build-cuda-executables.yml` is also dispatchable standalone (`gh workflow run build-cuda-executables.yml -f tag=v...`) to backfill CUDA binaries onto a historical release; in that mode each cell attaches directly to the named release tag instead of relying on `attach-prerelease`.
 
+### Where a build's inputs come from
+
+A release is dominated by two things it should almost never do: compiling `llama-server` (~50 min per leg) and compiling ~9056 C files with Nuitka (~176 min on Windows). Both are pure functions of pinned inputs, so both are fetched rather than rebuilt.
+
+```mermaid
+flowchart TB
+    subgraph WARM["on main · non-tag refs only"]
+        WEC["warm-engine-cache.yml<br/>weekly · on pin change"] --> BMG["build-multigpu.yml"]
+        WXC["warm-executables-cache.yml<br/>weekly · on demand"] --> REL["release.yml"]
+        WXC --> BCE["build-cuda-executables.yml"]
+    end
+
+    BMG ==> MIRROR[["engine-binaries release<br/>content-addressed engine assets"]]
+    BCE ==> MIRROR
+    REL ==> MIRROR
+    REL --> CACHE[("Actions cache<br/>ccache · Nuitka objects")]
+    BCE --> CACHE
+
+    subgraph TAG["on a v* tag · the release"]
+        TB["release.yml · build-cuda-executables.yml"]
+    end
+
+    MIRROR ==>|"1 · engine, ~2 min"| TB
+    CACHE -->|"2 · objects, restore only"| TB
+    SRC["build from source<br/>~50 min engine · ~176 min Nuitka"] -.->|"3 · fallback"| TB
+```
+
+Thick arrow = the fast path. Engines resolve mirror, then Actions cache, then source build, so a missing asset degrades to the old timing rather than failing.
+
+Two properties do the work:
+
+**Tag runs read, they never write.** GitHub scopes a cache save to the creating ref, and a tag is its own scope, so anything a release saved was unreadable by every later run while still evicting the main-scoped entry that would have hit. Every save is now guarded on `github.ref_type != 'tag'`; the warm workflows on main are what populate.
+
+**Engines live on a release, not in the cache.** The Actions cache has a hard 10 GiB per-repo cap with LRU eviction and drops anything unaccessed for 7 days. Engine binaries are ~3.5 GiB of that and are perfectly immutable (every source pinned in `engine-versions.env`), so they sit on the `engine-binaries` release instead, keyed by the same hash the cache key uses.
+
+A built engine is written to the mirror and nowhere else. Storing it in the Actions cache too would spend the cap duplicating what the mirror already holds durably, and that cap is exactly what the Nuitka object caches need: object caches want per-file granularity and must be a cache, engines are a single immutable blob and need not be. Restores still fall through mirror, then cache, then a source build, so engines cached before the mirror existed are still read. `asset_name()` in `tools/wheel-build/ci_mirror.sh` maps key to asset name for both the reader and the writer, because a mismatch there would not fail, it would silently never hit. Fetched with `curl`, not `gh`: the manylinux container the Linux legs build in ships no `gh`.
+
+**Nothing here can change a shipped binary.** Every mechanism either serves bytes that are already identical or misses:
+
+- ccache and clcache key each entry on the preprocessed source plus the compiler and its flags, so a hit is by definition the same object file and a mismatch misses. ccache's correctness sloppiness is left at its conservative default, so translation units using `__DATE__` / `__TIME__` are not cached at all.
+- The engine key covers every input `build_llama_server.sh` reads: backend, toolkit version, the llama.cpp pin, the three pins in `engine-versions.env`, and the build scripts themselves. The remaining variables are parallelism (`ENGINE_BUILD_JOBS`), a scratch path (`LLAMA_BUILD_DIR`), and `TARGET_ARCH`, which CI never sets.
+- `cache-env` carries the runner image or container, which is what fixes the glibc floor. A repointed runner label changes the key and forces a rebuild.
+- Mirror assets never expire, unlike cache entries. That is benign for engines: they are self-contained with a baked rpath, and an engine built on an older image of the same label carries a lower glibc floor, not a higher one.
+
+Two optimisations were tried and rejected for exactly this reason. `--nofollow-import-to=litellm.proxy` would have dropped 581 modules and ~18 min of compile, but `litellm/__init__.py` imports 9 of them on a bare import, so the binary would raise `ImportError` on first use. Gating the CUDA toolkit install on a mirror probe would have saved 4.9 min, but the probe and the fetch are separate requests, and a cell that skips the toolkit and then has to build the engine fails with no `CUDA_PATH`; since these cells are `continue-on-error`, that ships a release missing a CUDA binary rather than failing it.
+
 ### Notes
 
 - **Single build location.** The lilbee wheel (pure Python), sdist, the per-backend `lilbee-engine` wheels, and every executable (Vulkan, Metal, CUDA) are produced only by the `release-candidate.yml` run for the tag. `build-default-wheels.yml` builds the lilbee wheel + sdist, `build-multigpu.yml` builds the engine wheels, `release.yml` the Vulkan/Metal exes, `build-cuda-executables.yml` the CUDA exes. `publish.yml` / `emergency-publish.yml` resolve that run by commit SHA and pull its artifacts; they never invoke a builder. The engine wheels and CUDA executable cells are `continue-on-error` so a slow GPU cell never holds up anything.
@@ -1129,7 +1358,9 @@ Thick arrow = the publish path; dotted = triggered/side paths. Timings, what-wai
 - **`sources-cuda.json` is the CUDA flake state.** `publish-packages.yml` rewrites `sources.json` from scratch on every release (the Vulkan/Metal entries); the CUDA flake entry lives in a separate `sources-cuda.json` so the Vulkan publish can't wipe it. `flake.nix` reads both files; the `lilbee-cuda` package output only appears when `sources-cuda.json` lists a system. `flake-check.yml` triggers on either file.
 - **`lilbee` and `lilbee-cuda` are separate Homebrew / AUR / Nix packages.** Both ship a `lilbee` binary; the formula and `PKGBUILD` declare `conflicts_with` / `provides` so users swap between them. The Nix flake exposes them as parallel package outputs (`#default` vs `#lilbee-cuda`).
 - **Promotion is a same-source re-release, not a mutation.** `make promote FROM=<tag> TO=<version>` (`scripts/promote_release.sh`) puts a commit on top of the FROM tag's commit that changes only the version line in `pyproject.toml`/`uv.lock`, tags it, and pushes just the tag — `main` and the FROM release stay untouched, so releases are immutable and anyone pinned to the old one is unaffected. The rebuild is unavoidable (the version is baked into `--version`, the wheel metadata, and every manifest), but same-source is guaranteed: `release-candidate.yml` classifies a tag as a promotion when its parent commit is itself a `v*` tag and the diff is version-only — read from the git graph, not declared, so it can't be spoofed — and creates the new release with the FROM release's notes under a "Promoted from" banner. `attach-prerelease` skips note regeneration for promoted tags and `make release-promote` keeps the copied notes when marking one latest.
-- **Executable caches are warmed on main.** GitHub cache saves are scoped to the creating ref, so tag runs can never save a cache a later run restores — cold, that's ~2h Linux, ~1h15 macOS, ~4h Windows per release. `warm-executables-cache.yml` (weekly + on demand) runs `release.yml` on main so tag runs restore warm ccache (Linux/macOS) and Nuitka caches (Windows, `NUITKA_CACHE_DIR`) instead. Dispatch it before a promotion: a promoted tag compiles identical source, so the build should hit nearly everything.
+- **Executable caches are warmed on main.** GitHub cache saves are scoped to the creating ref, so tag runs can never save a cache a later run restores — cold, that's ~2h Linux, ~1h15 macOS, ~4h Windows per release. `warm-executables-cache.yml` (weekly + on demand) runs both `release.yml` and `build-cuda-executables.yml` on main so tag runs restore warm ccache (Linux/macOS) and Nuitka caches (Windows, `NUITKA_CACHE_DIR`) instead. Dispatch it before a promotion: a promoted tag compiles identical source, so the build should hit nearly everything.
+- **`CCACHE_DIR` has to be exported, not configured.** `hendrikmuhs/ccache-action` sets ccache's cache directory through its config file, but Nuitka exports its own `CCACHE_DIR` unless one is already set (`nuitka/build/SconsCaching.py`), and the env var outranks the config. Without the explicit export, Nuitka's objects land in a runner-local directory and every release compiles cold while `ccache -s` truthfully reports zero hits on zero lookups.
+- **Cache keys carry the compile flags.** The compat cells build at `-march=x86-64-v2`; sharing a ccache key with the stock cells poisoned both. Keys include `march` where it differs. The two Windows cells compile the same C and deliberately share a restore prefix.
 - **Executable build skips redundant CI.** `release.yml` has a `gate` job that checks whether the `CI` workflow already went green on the same commit (every `main` push runs it). If so it skips the lint + test re-run and goes straight to Nuitka; if not (or if anything is uncertain) it runs them. `skip_tests: true` lets you build past a known-flaky test after eyeballing the failure; lint always gates. `build-cuda-executables.yml` has no such gate (CI cost there is dominated by the CUDA-toolkit install + Nuitka build itself, not the test re-run).
 - **Package versions auto-increment.** `publish-docker.yml`, `publish-packages.yml`, and `publish-cuda-packages.yml` derive the version from the `-f tag=` input (`version = ${tag#v}`), so Docker tags, the Homebrew formulas, the AUR `PKGBUILD`s, and the Nix flake all bump to the new version on their own — no manual edits.
 - **PyPI Trusted Publishing is pinned to filenames.** PyPI's trusted-publisher config keys on the `publish.yml` workflow filename and the `pypi` GitHub environment name. Don't rename either.

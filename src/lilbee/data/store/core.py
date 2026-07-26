@@ -7,7 +7,6 @@ import math
 from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pyarrow as pa
@@ -24,7 +23,7 @@ from lilbee.core.config import (
     SOURCES_TABLE,
     Config,
 )
-from lilbee.core.security import validate_path_within
+from lilbee.core.vectors import Vector
 from lilbee.runtime.lock import LOCK_TIMEOUT, write_lock
 
 from .fusion import adaptive_weight_scale, fuse_arms, normalized_bm25, vector_similarity
@@ -172,6 +171,11 @@ _PER_SOURCE_TABLES = (
     (CHUNK_CONCEPTS_TABLE, "chunk_source"),
     (ENTITIES_TABLE, "source"),
 )
+
+# (table, source column) pairs re-keyed when a source is relocated (moved on
+# disk, same content). Extends the per-source set with the wiki citation's raw
+# source_filename so citations keep pointing at the source after a move.
+_RELOCATABLE_TABLES = (*_PER_SOURCE_TABLES, (CITATIONS_TABLE, "source_filename"))
 
 # Stat backfills replace this many source rows per locked write: the first
 # sync after a stat-column upgrade backfills every source, and an unchunked
@@ -695,7 +699,7 @@ class Store:
 
     def search(
         self,
-        query_vector: list[float],
+        query_vector: Vector,
         top_k: int | None = None,
         max_distance: float | None = None,
         query_text: str | None = None,
@@ -762,7 +766,7 @@ class Store:
     def _vector_arm(
         self,
         table: lancedb.table.Table,
-        query_vector: list[float],
+        query_vector: Vector,
         limit: int,
         chunk_type: ChunkType | None,
     ) -> list[SearchChunk]:
@@ -838,7 +842,7 @@ class Store:
         self,
         table: lancedb.table.Table,
         query_text: str,
-        query_vector: list[float],
+        query_vector: Vector,
         top_k: int,
         max_distance: float,
         chunk_type: ChunkType | None = None,
@@ -897,7 +901,7 @@ class Store:
     def _filter_and_rerank(
         self,
         results: list[SearchChunk],
-        query_vector: list[float],
+        query_vector: Vector,
         top_k: int,
         max_distance: float,
     ) -> list[SearchChunk]:
@@ -1418,23 +1422,49 @@ class Store:
         if table is not None:
             _safe_delete_unlocked(table, f"filename IN ({quoted})")
 
-    def remove_documents(
-        self,
-        names: list[str],
-        *,
-        delete_files: bool = False,
-        documents_dir: Path | None = None,
-    ) -> RemoveResult:
+    def relocate_sources(self, moves: list[tuple[str, str, SourceStat | None]]) -> None:
+        """Re-key moved sources from old filename to new, preserving their chunks.
+
+        A source whose file moved (same content hash, new path) keeps its chunks
+        and embeddings; only its filename key and disk stat change. Each per-source
+        table's source column, the citation source_filename, and the sources row are
+        updated in place under one write lock, so a move costs no re-extraction or
+        re-embedding. ``moves`` is ``(old_name, new_name, new_stat)`` tuples.
+
+        Each table is opened once; the re-key is then a targeted per-move update.
+        A single-statement batch would need a ``CASE`` expression, which LanceDB's
+        update SQL does not support, and a delete+re-add across the vector tables is
+        not worth its risk for what is a rare mass relabel.
+        """
+        if not moves:
+            return
+        with self._write_lock():
+            tables = [(self.open_table(name), column) for name, column in _RELOCATABLE_TABLES]
+            sources = self.open_table(SOURCES_TABLE)
+            for old, new, stat in moves:
+                where_old = f"= '{escape_sql_string(old)}'"
+                for table, column in tables:
+                    if table is not None:
+                        table.update(where=f"{column} {where_old}", values={column: new})
+                if sources is not None:
+                    values: dict[str, object] = {"filename": new}
+                    if stat is not None:
+                        values["size_bytes"] = stat.size_bytes
+                        values["mtime_ns"] = stat.mtime_ns
+                        values["stat_captured_ns"] = stat.captured_ns
+                    sources.update(where=f"filename {where_old}", values=values)
+        self._invalidate_source_cache()
+
+    def remove_documents(self, names: list[str]) -> RemoveResult:
         """Remove documents from the knowledge base by source name.
-        Looks up known sources, deletes chunks and source records for each.
-        If *delete_files* is True, resolves the path and verifies it is
-        contained within *documents_dir* before unlinking (path traversal guard).
+
+        Looks up known sources and deletes their chunks and source records. Never
+        touches files on disk: source bytes are the user's, and a linked-in corpus
+        must never be deleted. Durable, file-aware removal (skip-markers, unlinking
+        a top-level link) lives in :func:`lilbee.app.ingest.remove_documents_durably`.
 
         Returns a RemoveResult with removed and not_found lists.
         """
-        if documents_dir is None:
-            documents_dir = self._config.documents_dir
-
         known = {s["filename"] for s in self.get_sources()}
         removed = [name for name in names if name in known]
         not_found = [name for name in names if name not in known]
@@ -1446,16 +1476,6 @@ class Store:
             with self._write_lock():
                 self._remove_many_unlocked(removed)
             self._invalidate_source_cache()
-
-        if delete_files:
-            for name in removed:
-                try:
-                    path = validate_path_within(documents_dir / name, documents_dir)
-                except ValueError:
-                    log.warning("Path traversal blocked: %s escapes %s", name, documents_dir)
-                    continue
-                if path.exists():
-                    path.unlink()
 
         return RemoveResult(removed=removed, not_found=not_found)
 
@@ -1612,7 +1632,7 @@ class Store:
 
     def search_memories(
         self,
-        query_vector: list[float],
+        query_vector: Vector,
         *,
         owner_predicate: str,
         top_k: int,
@@ -1673,7 +1693,7 @@ class Store:
         """SQL predicate matching a single memory id within *owner*'s namespace."""
         return f"id = '{escape_sql_string(memory_id)}' AND owner = '{escape_sql_string(owner)}'"
 
-    def rebuild_memory_embeddings(self, embed: Callable[[list[str]], list[list[float]]]) -> int:
+    def rebuild_memory_embeddings(self, embed: Callable[[list[str]], list[Vector]]) -> int:
         """Re-embed every memory under the current model, recreating the table.
 
         The vector column dimension is immutable, so a different-dim model needs a
@@ -1695,7 +1715,8 @@ class Store:
             memories = [MemoryRow(**r) for r in rows]
             vectors = embed([m.text for m in memories])
             for memory, vector in zip(memories, vectors, strict=True):
-                memory.vector = vector
+                # MemoryRow serializes to JSON on write, which has no ndarray encoding.
+                memory.vector = vector.tolist()
             db = self.get_db()
             db.drop_table(MEMORIES_TABLE)
             new_table = ensure_table(db, MEMORIES_TABLE, self._memories_schema())

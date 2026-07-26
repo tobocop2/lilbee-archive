@@ -53,6 +53,7 @@ scripts/*
 !scripts/demo.sh
 !scripts/release.sh
 !scripts/release_notes.sh
+!scripts/promote_release.sh
 !scripts/qa/
 scripts/qa/*
 !scripts/qa/*.py
@@ -76,3 +77,7 @@ packaging/snap-compat/payload/
 packaging/snap-cuda/payload/
 # Built engine binaries land here during wheel/executable builds.
 packaging/engine-wheel/lilbee_engine/bin/
+
+# Benchmark/soak run output is not version-controlled: it is machine- and
+# run-specific data, not documentation.
+docs/benchmarks/*-results/

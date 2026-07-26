@@ -1,0 +1,106 @@
+name: Auto Security Fix
+
+# Weekly agentic pass over open code-scanning alerts. Runs opencode headless
+# with a free model, lets it fix what Dependabot/Autofix can't, and opens a PR
+# for review. Nothing here merges on its own.
+
+on:
+  schedule:
+    - cron: "0 9 * * 1"  # Mondays 09:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  security-events: read
+
+concurrency:
+  group: auto-security-fix
+  cancel-in-progress: true
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Collect open code-scanning alerts
+        id: alerts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api -H "Accept: application/vnd.github+json" \
+            "/repos/${{ github.repository }}/code-scanning/alerts?state=open&per_page=100" \
+            > security-alerts.json || echo '[]' > security-alerts.json
+          count=$(jq 'length' security-alerts.json)
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "Open code-scanning alerts: $count"
+
+      - name: Set up uv + Python
+        if: steps.alerts.outputs.count != '0'
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Sync project (for make lint)
+        if: steps.alerts.outputs.count != '0'
+        run: |
+          uv python install 3.12
+          uv sync --locked --all-extras
+
+      - name: Install opencode
+        if: steps.alerts.outputs.count != '0'
+        run: |
+          curl -fsSL https://opencode.ai/install | bash
+          echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
+
+      - name: Run opencode security fixer
+        if: steps.alerts.outputs.count != '0'
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        run: |
+          opencode run --model opencode/minimax-m2.5-free "$(cat <<'PROMPT'
+          You are fixing open security findings in this repository. The file
+          security-alerts.json holds the currently-open code-scanning (CodeQL +
+          Gitleaks) alerts as JSON.
+
+          For each alert:
+          - Fix the root cause with the smallest change that resolves it, matching
+            the surrounding code style and project conventions.
+          - If a finding is a genuine false positive, suppress it with a documented
+            one-line rationale, mirroring the existing suppression style in
+            .github/codeql-config.yml, osv-scanner.toml, and the ignore lists in
+            .github/workflows/security-scan.yml. Do NOT touch findings that are
+            already suppressed.
+          - Do NOT weaken or skip tests, lower coverage thresholds, add broad
+            try/except, or disable lints to make things pass.
+
+          Skip anything Dependabot already opens PRs for (plain dependency version
+          bumps) — focus on what needs a code change or a justified suppression.
+
+          When done, run `make format` then `make lint` and resolve anything they
+          flag. Only modify files in the working tree; do not commit or push — a
+          later step opens the PR. If there is nothing safe to fix, make no changes.
+          PROMPT
+          )"
+
+      - name: Open pull request
+        if: steps.alerts.outputs.count != '0'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: auto/security-fixes
+          delete-branch: true
+          add-paths: |
+            .
+            ':!security-alerts.json'
+          commit-message: "fix: auto-resolve open security alerts"
+          title: "Auto: resolve open security alerts"
+          body: |
+            Automated weekly pass over open code-scanning alerts, fixed by opencode
+            (MiniMax free model). Review carefully before merging — this is a draft,
+            not a trusted change.
+
+            Open alerts at run time: ${{ steps.alerts.outputs.count }}
+          labels: security, automated

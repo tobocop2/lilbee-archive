@@ -1394,12 +1394,13 @@ def _flush_batch(buffer: list[_IngestResult], rowid_ceiling: int | None = None) 
             needs_cleanup=r.needs_cleanup,
             stat=r.stat,
             page_texts=cast(list[dict], r.page_texts or []),
+            # Fragment mode strips records after the worker commits them, so the
+            # source row takes the count from the result, not len(records).
+            chunk_count=r.chunk_count,
         )
         for r in buffer
     ]
-    _retry_after_lock_timeout(
-        lambda: store.write_chunks_batch(items, rowid_ceiling=rowid_ceiling)
-    )
+    _retry_after_lock_timeout(lambda: store.write_chunks_batch(items, rowid_ceiling=rowid_ceiling))
     _flush_concept_records(buffer)
     _flush_entity_rows(buffer)
 

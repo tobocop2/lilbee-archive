@@ -62,6 +62,10 @@ class ChunkWrite(NamedTuple):
     stat: SourceStat | None = None
     page_texts: list[dict] | None = None
     source_type: SourceType = SourceType.DOCUMENT
+    # The source row's chunk count. Set explicitly because fragment-mode ingest
+    # strips ``records`` after a worker commits them, so ``len(records)`` would
+    # record zero; ``None`` falls back to ``len(records)`` for direct callers.
+    chunk_count: int | None = None
 
 
 class ChunkType(StrEnum):

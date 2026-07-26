@@ -464,6 +464,18 @@ class TestWriteChunksBatch:
         assert sources["a.md"]["chunk_count"] == 2
         assert sources["b.md"]["file_hash"] == "hash_b"
 
+    def test_source_row_uses_explicit_chunk_count_when_records_stripped(self, store):
+        from lilbee.data.store import ChunkWrite
+
+        # Fragment mode: the worker already committed the chunks, so records is
+        # empty but the true count travels in chunk_count. The source row must
+        # record that count, not len(records)=0.
+        store.write_chunks_batch(
+            [ChunkWrite("a.md", "hash_a", [], needs_cleanup=False, chunk_count=7)]
+        )
+        sources = {s["filename"]: s for s in store.get_sources()}
+        assert sources["a.md"]["chunk_count"] == 7
+
     def test_cleanup_replaces_a_source_without_duplicating(self, store):
         from lilbee.data.store import ChunkWrite
 

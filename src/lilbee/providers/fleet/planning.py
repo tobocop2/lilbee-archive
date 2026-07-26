@@ -51,7 +51,7 @@ from lilbee.providers.roles import ROLE_REGISTRY, RerankMode, WorkerRole
 log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
 # Fleet-only concurrency: continuous-batching slots (--parallel) per server.
 _CHAT_SLOTS = 4
@@ -909,6 +909,7 @@ def _estimate_or_fallback(
     device_count: int,
     total_vram: int,
     skipped_not_installed: dict[WorkerRole, str],
+    host_committed: int = 0,
 ) -> ModelPlacementInput | None:
     """Size *role* for placement, degrading rather than refusing.
 
@@ -932,10 +933,20 @@ def _estimate_or_fallback(
             skipped_not_installed[role] = ref
             return None
         return _sizing_failure_fallback(
-            role, ref, exc, device_count=device_count, total_vram=total_vram
+            role,
+            ref,
+            exc,
+            device_count=device_count,
+            total_vram=total_vram,
+            host_committed=host_committed,
         )
     return _admit_estimate(
-        estimate, role, ref, total_vram=total_vram, ram_bytes=estimate.est_ram_bytes
+        estimate,
+        role,
+        ref,
+        total_vram=total_vram,
+        ram_bytes=estimate.est_ram_bytes,
+        host_committed=host_committed,
     )
 
 
@@ -946,6 +957,7 @@ def _admit_estimate(
     *,
     total_vram: int,
     ram_bytes: int,
+    host_committed: int = 0,
 ) -> ModelPlacementInput | None:
     """*estimate*, or ``None`` when this model cannot load on this machine.
 
@@ -957,7 +969,7 @@ def _admit_estimate(
     if _weights_exceed_hardware(weights, total_vram, is_moe=_ref_is_moe(ref)):
         _warn_weights_exceed(role, ref, weights, total_vram)
         return None
-    if _host_memory_refuses(role, ref, ram_bytes):
+    if _host_memory_refuses(role, ref, ram_bytes, host_committed):
         return None
     return estimate
 
@@ -994,10 +1006,14 @@ def _sizing_failure_fallback(
     *,
     device_count: int,
     total_vram: int,
+    host_committed: int = 0,
 ) -> ModelPlacementInput | None:
     """Analytic-floor placement input for an installed model the estimator cannot
-    size; ``None`` skips the role (the file is unresolvable, or its weights alone
-    exceed the hardware)."""
+    size; ``None`` skips the role (the file is unresolvable, its weights alone
+    exceed the hardware, or offloading it would exceed system memory).
+
+    The host bound applies here too. Charging the whole floor to VRAM and
+    skipping it let an unsizable model past a check every sized model faces."""
     weights = _role_weights_bytes(role, ref)
     if weights == 0:
         log.warning("Skipping %s server: could not size model %r (%s).", role.value, ref, exc)
@@ -1015,6 +1031,8 @@ def _sizing_failure_fallback(
         exc,
         floor / 1024**3,
     )
+    if _host_memory_refuses(role, ref, floor, host_committed):
+        return None
     return ModelPlacementInput(
         role=role, est_vram_bytes=floor, replicas=_replica_count(role, device_count)
     )
@@ -1063,35 +1081,72 @@ def _cpu_offload_in_play() -> bool:
     return _expert_offload_configured() or cfg.n_gpu_layers is not None
 
 
-def _host_memory_refuses(role: WorkerRole, ref: str, ram_bytes: int) -> bool:
+def _host_bytes_must_be_resident(role: WorkerRole, ref: str) -> bool:
+    """Whether *role*'s host bytes have to fit RAM rather than page in and out.
+
+    The estimator's host figure counts mmap pages, and llama.cpp maps CPU-side
+    weights over that mapping instead of allocating them, so with mmap they are
+    evictable page cache: a model far larger than RAM streams from disk and
+    serves, which is a practiced setup for a large mixture-of-experts. Only
+    ``--no-mmap`` turns them into a buffered read that must be resident, and the
+    single path that asks for it is a chat model on a network filesystem.
+
+    Anything this cannot determine counts as mappable, because a false refusal
+    here has no override and costs the user a model that would have run.
+    """
+    if role is not WorkerRole.CHAT:
+        return False
+    try:
+        from lilbee.providers.engine_params import resolve_model_path
+
+        path = resolve_model_path(ref)
+    except (ProviderError, OSError, ValueError):
+        return False
+    if not is_network_path(path):
+        return False
+    return _chat_no_mmap(_role_weights_bytes(role, ref), on_network_fs=True)
+
+
+def _host_committed(admitted: Mapping[WorkerRole, ModelPlacementInput]) -> int:
+    """System-memory bytes the roles already admitted to this plan will hold."""
+    return sum(inp.est_ram_bytes for inp in admitted.values())
+
+
+def _host_memory_refuses(role: WorkerRole, ref: str, ram_bytes: int, committed: int) -> bool:
     """Whether *role*'s system-memory half is too big for this machine to load.
 
-    Charged only when something actually offloads. Total memory is ground truth,
-    so exceeding it refuses on the same standard the VRAM bound uses; exceeding
-    free memory only warns, because free memory moves and an estimate is not
-    worth a false refusal over.
+    Charged only when something actually offloads, and only when the bytes must
+    be resident: refusing a mapped model that would have streamed from disk is a
+    false refusal with no override, which is worse than a slow load.
+
+    Measured against the whole plan, not this role alone. Every role was
+    previously compared to the entire machine on its own, so two roles that each
+    fit and together do not were both admitted.
     """
     if not _cpu_offload_in_play() or ram_bytes <= 0:
         return False
+    wanted = committed + ram_bytes
     total = total_system_memory()
-    if total and ram_bytes > total:
+    if total and wanted > total and _host_bytes_must_be_resident(role, ref):
         log.warning(
-            "The %s model %s cannot load: offloading puts %.1f GiB in system memory and "
-            "this machine has %.1f GiB in total. Use a smaller model, or offload less.",
+            "The %s model %s cannot load: this plan puts %.1f GiB in system memory, which "
+            "cannot be paged out here, and the machine has %.1f GiB in total. Use a smaller "
+            "model, or offload less.",
             role.value,
             ref,
-            ram_bytes / 1024**3,
+            wanted / 1024**3,
             total / 1024**3,
         )
         return True
     free = free_system_memory()
-    if free and ram_bytes > free:
+    if free and wanted > free:
         log.warning(
-            "Offloading the %s model %s puts %.1f GiB in system memory and only %.1f GiB "
-            "is free. It will still load; close other programs if it swaps or runs slowly.",
+            "Offloading the %s model %s brings this plan to %.1f GiB in system memory and "
+            "only %.1f GiB is free. It will still load; close other programs if it swaps "
+            "or runs slowly.",
             role.value,
             ref,
-            ram_bytes / 1024**3,
+            wanted / 1024**3,
             free / 1024**3,
         )
     return False
@@ -1200,6 +1255,7 @@ def _server_model_inputs(
             device_count=device_count,
             total_vram=total_vram,
             skipped_not_installed=skipped_not_installed,
+            host_committed=_host_committed(inputs),
         )
         if estimate is None:
             return

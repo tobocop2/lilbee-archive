@@ -20,8 +20,12 @@ _REF = "some-org/some-model"
 @pytest.fixture
 def offload_configured(monkeypatch):
     from lilbee.core.config import cfg
+    from lilbee.providers.fleet import planning
 
     monkeypatch.setattr(cfg, "cpu_moe", True, raising=False)
+    # These cases are about the size comparison, not about whether the bytes can
+    # page out; residency has its own tests in test_host_memory_bound.
+    monkeypatch.setattr(planning, "_host_bytes_must_be_resident", lambda *_a: True)
     return cfg
 
 
@@ -33,7 +37,7 @@ class TestHostMemoryIsChargedWhenLayersLeaveTheGpu:
 
         monkeypatch.setattr(planning, "total_system_memory", lambda: 16 * _GB)
         monkeypatch.setattr(planning, "free_system_memory", lambda: 8 * _GB)
-        assert planning._host_memory_refuses(WorkerRole.CHAT, _REF, 40 * _GB)
+        assert planning._host_memory_refuses(WorkerRole.CHAT, _REF, 40 * _GB, 0)
 
     def test_a_model_that_exceeds_only_free_memory_is_allowed_with_a_warning(
         self, monkeypatch, offload_configured, caplog
@@ -43,7 +47,7 @@ class TestHostMemoryIsChargedWhenLayersLeaveTheGpu:
         monkeypatch.setattr(planning, "total_system_memory", lambda: 64 * _GB)
         monkeypatch.setattr(planning, "free_system_memory", lambda: 8 * _GB)
         with caplog.at_level(logging.WARNING):
-            refused = planning._host_memory_refuses(WorkerRole.CHAT, _REF, 40 * _GB)
+            refused = planning._host_memory_refuses(WorkerRole.CHAT, _REF, 40 * _GB, 0)
         assert not refused  # short on free memory is a warning, not a refusal
         assert "system memory" in caplog.text
 
@@ -55,7 +59,7 @@ class TestHostMemoryIsChargedWhenLayersLeaveTheGpu:
         monkeypatch.setattr(planning, "total_system_memory", lambda: 64 * _GB)
         monkeypatch.setattr(planning, "free_system_memory", lambda: 40 * _GB)
         with caplog.at_level(logging.WARNING):
-            refused = planning._host_memory_refuses(WorkerRole.CHAT, _REF, 8 * _GB)
+            refused = planning._host_memory_refuses(WorkerRole.CHAT, _REF, 8 * _GB, 0)
         assert not refused
         assert caplog.text == ""
 
@@ -69,7 +73,7 @@ class TestHostMemoryIsChargedWhenLayersLeaveTheGpu:
         monkeypatch.setattr(cfg, "n_cpu_moe", None, raising=False)
         monkeypatch.setattr(cfg, "n_gpu_layers", None, raising=False)
         monkeypatch.setattr(planning, "total_system_memory", lambda: 1, raising=False)
-        assert not planning._host_memory_refuses(WorkerRole.CHAT, _REF, 999 * _GB)
+        assert not planning._host_memory_refuses(WorkerRole.CHAT, _REF, 999 * _GB, 0)
 
     def test_a_partial_gpu_layer_budget_counts_as_offload(self, monkeypatch) -> None:
         from lilbee.core.config import cfg
@@ -78,9 +82,10 @@ class TestHostMemoryIsChargedWhenLayersLeaveTheGpu:
         monkeypatch.setattr(cfg, "cpu_moe", False, raising=False)
         monkeypatch.setattr(cfg, "n_cpu_moe", None, raising=False)
         monkeypatch.setattr(cfg, "n_gpu_layers", 12, raising=False)
+        monkeypatch.setattr(planning, "_host_bytes_must_be_resident", lambda *_a: True)
         monkeypatch.setattr(planning, "total_system_memory", lambda: 16 * _GB)
         monkeypatch.setattr(planning, "free_system_memory", lambda: 8 * _GB)
-        assert planning._host_memory_refuses(WorkerRole.CHAT, _REF, 40 * _GB)
+        assert planning._host_memory_refuses(WorkerRole.CHAT, _REF, 40 * _GB, 0)
 
     def test_a_cpu_only_role_counts_as_offload(self, monkeypatch) -> None:
         from lilbee.core.config import cfg
@@ -89,9 +94,10 @@ class TestHostMemoryIsChargedWhenLayersLeaveTheGpu:
         monkeypatch.setattr(cfg, "cpu_moe", False, raising=False)
         monkeypatch.setattr(cfg, "n_cpu_moe", None, raising=False)
         monkeypatch.setattr(cfg, "n_gpu_layers", 0, raising=False)
+        monkeypatch.setattr(planning, "_host_bytes_must_be_resident", lambda *_a: True)
         monkeypatch.setattr(planning, "total_system_memory", lambda: 16 * _GB)
         monkeypatch.setattr(planning, "free_system_memory", lambda: 8 * _GB)
-        assert planning._host_memory_refuses(WorkerRole.CHAT, _REF, 40 * _GB)
+        assert planning._host_memory_refuses(WorkerRole.CHAT, _REF, 40 * _GB, 0)
 
 
 class TestTheHostBoundReachesAdmission:
@@ -142,7 +148,7 @@ def test_the_estimators_own_host_figure_is_what_gets_judged(monkeypatch, tmp_pat
     monkeypatch.setattr(planning, "_role_weights_bytes", lambda *_a: 1)
     monkeypatch.setattr(planning, "_weights_exceed_hardware", lambda *_a, **_k: False)
     monkeypatch.setattr(
-        planning, "_host_memory_refuses", lambda _r, _f, ram: seen.append(ram) or "ok"
+        planning, "_host_memory_refuses", lambda _r, _f, ram, _c: bool(seen.append(ram))
     )
     model = tmp_path / "m.gguf"
     model.write_bytes(b"")

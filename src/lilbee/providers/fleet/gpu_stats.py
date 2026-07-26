@@ -19,6 +19,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
+from lilbee.providers.fleet.devices import _CUDA_ORDER_VAR, _PCI_BUS_ID_ORDER
 from lilbee.providers.fleet.gpu_backends import (
     IntelUtilHint,
     UtilSample,
@@ -115,15 +116,17 @@ _BACKEND_VISIBLE_VARS: dict[str, tuple[str, ...]] = {
 
 
 _CUDA_BACKEND = "CUDA"
-_CUDA_ORDER_VAR = "CUDA_DEVICE_ORDER"
-# The runtime's default, and the one nvidia-smi also uses.
-_CUDA_BUS_ORDER = "PCI_BUS_ID"
 
 
 def _cuda_order_is_reordered() -> bool:
-    """Whether CUDA_DEVICE_ORDER puts the runtime out of step with nvidia-smi."""
+    """Whether CUDA_DEVICE_ORDER puts the runtime out of step with nvidia-smi.
+
+    Reads the same variable and default the probe writes, so the two cannot
+    drift apart: unset means the probe supplies bus order and the two index
+    spaces agree, and a preset value is respected there and honoured here.
+    """
     order = os.environ.get(_CUDA_ORDER_VAR, "").strip().upper()
-    return bool(order) and order != _CUDA_BUS_ORDER
+    return bool(order) and order != _PCI_BUS_ID_ORDER
 
 
 def _physical_index(backend_name: str, fleet_index: int) -> int | None:

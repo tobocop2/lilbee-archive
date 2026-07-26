@@ -1084,8 +1084,15 @@ class Store:
         table and meta are left as they are. The return is the on-disk lance
         dataset path, not a lancedb handle, because workers commit fragments
         through pylance rather than the table ``add`` API.
+
+        The embedding-identity gate runs here because this is the only place it
+        can: a worker appending a fragment goes nowhere near the write path that
+        normally checks it on every write, so a store built under a different
+        model would otherwise take vectors of the wrong width against its
+        existing schema.
         """
         with self._write_lock():
+            self._ensure_embedding_compat()
             db = self.get_db()
             ensure_table(db, CHUNKS_TABLE, self._chunks_schema())
             if self.get_meta() is None:
@@ -1094,6 +1101,41 @@ class Store:
                     embedding_dim=self._config.embedding_dim,
                 )
         return str(self._config.lancedb_dir / f"{CHUNKS_TABLE}.lance")
+
+    def purge_chunks_for_sources(self, sources: list[str]) -> None:
+        """Clear the sources' existing rows before their files are dispatched.
+
+        Fragment mode inverts the cleanup order. Normally the delete and the
+        insert share one transaction, but a worker commits its chunks before the
+        parent flushes, so deleting afterwards would remove the rows just
+        written. Purging first is also what makes a crashed run self-healing: a
+        worker's chunks are durable before the source row exists, so an
+        interrupted file leaves rows nothing references, and the next sync
+        re-plans that file and would append a second copy. Only new or changed
+        files are ever dispatched, so clearing them first is right in both cases
+        and costs one predicate delete for the batch.
+        """
+        if not sources:
+            return
+        with self._write_lock(timeout=BATCH_LOCK_TIMEOUT):
+            self._delete_by_sources_unlocked(sources)
+        self._invalidate_source_cache()
+
+    def write_sources_batch(self, items: list[ChunkWrite]) -> None:
+        """Persist a flush unit whose chunks a worker already committed.
+
+        The same transaction and ordering as :meth:`write_chunks_batch` minus the
+        chunk add: page texts, then the source rows last, so an interrupted flush
+        still leaves the files un-sourced and re-planned. No cleanup delete --
+        :meth:`purge_chunks_for_sources` did that before dispatch.
+        """
+        if not items:
+            return
+        with self._write_lock(timeout=BATCH_LOCK_TIMEOUT):
+            self._fts_ready = False
+            self._add_page_texts_unlocked(self.get_db(), items)
+            self._replace_source_rows_unlocked(self._batch_source_rows(items))
+        self._invalidate_source_cache()
 
     def _cleanup_batch_unlocked(self, items: list[ChunkWrite]) -> None:
         """One ``IN`` delete per table for the flagged documents. Caller holds ``write_lock()``."""

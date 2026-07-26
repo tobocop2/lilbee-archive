@@ -12,7 +12,7 @@ This page records what has been run and what has not. A backend listed as untest
 | NVIDIA GTX 1070 Ti (8 GB) | Vulkan | 9665 `e3a74b299` | `Vulkan0` labels, `Vulkan_Host` excluded from device memory, vision projector accounting, Vulkan device enumeration and its crash isolation |
 | Apple Silicon | Metal | 9310 `e2ef8fe42` | `MTL0` labels, unified-memory budgeting |
 | Intel UHD (CometLake) | Vulkan | 9665 `e3a74b299` | `Vulkan0` and `Vulkan_Host` on non-NVIDIA silicon, chat and vision loads, reported figures identical to the same loads on a discrete card |
-| Intel UHD (CometLake) + GTX 1650 Ti | Vulkan + CUDA, hybrid | 9665 `e3a74b299` | Two adapters of different types on one host: the integrated one classified as shared memory, the discrete one as dedicated |
+| Intel UHD (CometLake) + GTX 1650 Ti | Vulkan, hybrid | 9665 `e3a74b299` | Two adapters of different types on one host: the integrated one classified as shared memory and excluded from packing, the discrete one kept, despite the integrated one advertising 2.7x more |
 | Intel Xeon Platinum 8481C | CPU | 9665 `e3a74b299` | Host-only load with no GPU present, `CPU`/`CPU_Mapped` attribution |
 
 The captured logs behind these rows live on the `tools/gpu-verification-harness` branch, alongside the script that produced them.
@@ -37,9 +37,18 @@ That the numbers match a discrete NVIDIA card exactly is the useful part. The bu
 
 ### What the hybrid laptop settled
 
-With the NVIDIA driver loaded, the Vulkan loader enumerates both adapters and reports their types correctly: the GTX 1650 Ti as discrete, the CometLake iGPU as integrated. lilbee then classifies each the way it should, the discrete card against its own 4 GB and the integrated one against host memory. That is the case this machine demonstrates, and it works.
+With both adapters live the engine lists them together, and the numbers are the trap:
 
-The integrated adapter reports 11.5 GB of "VRAM", which is system RAM it can borrow rather than memory it owns. Budgeting that as dedicated would double-book the host, which is why the type matters more than the number.
+```
+Vulkan0: NVIDIA GeForce GTX 1650 Ti   (4342 MiB)
+Vulkan1: Intel(R) UHD Graphics        (11748 MiB)
+```
+
+The integrated adapter advertises 2.7 times the memory of the real card, because what it is reporting is system RAM it may borrow rather than memory it owns. A planner that packed by size would put models on the host's own memory and leave a dedicated GPU idle.
+
+lilbee types them apart and drops the integrated one before packing, keeping the 4 GB card. That is the first time the packing filter has been exercised on hardware rather than on constructed device lists.
+
+Loads then behave identically in all three of the laptop's graphics modes. A chat model reports 157.13 MiB on the card and a vision model 215.73 MiB, in integrated mode and in hybrid mode alike, and both match the figures from a discrete NVIDIA card on another machine.
 
 The same machine with no NVIDIA driver installed enumerates the iGPU alone while the discrete card sits on the PCI bus. lilbee reads that as a host with no discrete GPU, which is harmless there because nothing can enumerate the card either. It would not be harmless on a host where the vendor's compute driver works but its Vulkan ICD is absent, so PCI presence is consulted as a second opinion. **That configuration has not been reproduced on hardware**; the check is a safety net rather than a fix for an observed failure.
 

@@ -1030,6 +1030,23 @@ def _platform_supports_icd_pin() -> bool:
 #     https://github.com/Heroic-Games-Launcher/HeroicGamesLauncher/issues/3796
 #   - Blender Vulkan backend startup failure on dual-vendor hosts:
 #     https://projects.blender.org/blender/blender/issues/129917
+def _icd_pin_is_ours_to_make() -> bool:
+    """Whether lilbee may set the ICD disable list at all.
+
+    Not on a platform with no documented dual-vendor crash class, not when the
+    caller has already set any of the loader's own variables, and not when a
+    gpu_devices pin has already named the hardware to use. Each is somebody
+    else's decision arriving first.
+    """
+    from lilbee.core.config import cfg
+
+    if not _platform_supports_icd_pin():
+        return False
+    if any(os.environ.get(env_var) for env_var in VulkanIcdEnvVar):
+        return False
+    return not cfg.gpu_devices
+
+
 def disable_conflicting_vulkan_icds() -> str | None:
     """Manifest-filename glob list of non-preferred ICDs to disable, or ``None``.
 
@@ -1041,13 +1058,7 @@ def disable_conflicting_vulkan_icds() -> str | None:
     Windows, XDG on Linux) and the device tree from the OS; enumerating via
     ``vkCreateInstance`` would pre-load every vendor's ICD before the disable lands.
     """
-    from lilbee.core.config import cfg
-
-    if not _platform_supports_icd_pin():
-        return None
-    if any(os.environ.get(env_var) for env_var in VulkanIcdEnvVar):
-        return None
-    if cfg.gpu_devices:
+    if not _icd_pin_is_ours_to_make():
         return None
     vendors = _vulkan_vendors_present()
     if len(vendors) < _MIN_VENDORS_FOR_CONFLICT:

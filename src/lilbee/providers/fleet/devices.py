@@ -390,11 +390,22 @@ def _is_unusable_vulkan(device: FleetDevice) -> bool:
     compute-incomplete or fails at allocation. Planning a fleet onto one costs
     more than planning no GPU at all, since a non-empty device list also turns
     off the shared-RAM budget.
+
+    Only a positive claim counts. VIRTUAL_GPU and CPU are the loader naming what
+    the adapter is; OTHER is it declining to, and refusing on a shrug took the
+    GPU away from real hardware whose driver simply does not classify itself.
     """
     if device.backend != VULKAN_BACKEND:
         return False
     device_type = _vulkan_device_type(device.name)
-    return device_type is not None and device_type not in USABLE_VULKAN_TYPES
+    if device_type is None or device_type in USABLE_VULKAN_TYPES:
+        return False
+    # OTHER is the loader shrugging, not an accusation. The spec's own wording is
+    # "does not match any other available types", which a driver reaches for when
+    # it cannot classify itself, and some real adapters do. Refusing on it took a
+    # working GPU away from a machine the engine had already listed one for.
+    # VIRTUAL_GPU and CPU are positive claims and keep their veto.
+    return device_type is not VkDeviceType.OTHER
 
 
 def _is_unified(backend: str, name: str) -> bool:

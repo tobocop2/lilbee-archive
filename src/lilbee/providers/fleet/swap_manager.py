@@ -370,6 +370,7 @@ class SwapManager:
                 launch.model,
                 launch.est_vram_bytes,
                 launch.est_vram_by_device,
+                launch.est_unreported_bytes,
             )
 
     def is_live(self) -> bool:

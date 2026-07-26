@@ -1475,6 +1475,7 @@ def _launch_for(
         # the engine's own report of what it really allocated.
         est_vram_bytes=est_vram_bytes,
         est_vram_by_device=_charge_by_device(chosen, plan.tensor_split, est_vram_bytes),
+        est_unreported_bytes=_unreported_bytes(plan.role, mmproj),
     )
 
 
@@ -2064,6 +2065,22 @@ def _plan_free_system_memory() -> int:
     """Free system RAM for the unified-memory budget: the snapshot, else live."""
     probe = _plan_probe_store.get()
     return probe.free_system if probe is not None else model_cache.free_system_memory()
+
+
+def _unreported_bytes(role: WorkerRole, mmproj: Path | None) -> int:
+    """Estimated bytes the engine allocates without printing a buffer line.
+
+    A vision projector's weights: llama.cpp allocates them in clip's own loader,
+    which prints a size but not the "buffer size = N MiB" shape the readback
+    reads, so the report is short by exactly this and the self-check would warn
+    on a load that was sized correctly.
+    """
+    if role is not WorkerRole.VISION or mmproj is None:
+        return 0
+    try:
+        return mmproj.stat().st_size
+    except OSError:
+        return 0
 
 
 def _chat_no_mmap(weights_bytes: int, *, on_network_fs: bool = False) -> bool:

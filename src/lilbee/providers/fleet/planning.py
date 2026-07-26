@@ -7,7 +7,6 @@ import re
 import threading
 import time
 from dataclasses import dataclass, field
-from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -958,7 +957,7 @@ def _admit_estimate(
     if _weights_exceed_hardware(weights, total_vram, is_moe=_ref_is_moe(ref)):
         _warn_weights_exceed(role, ref, weights, total_vram)
         return None
-    if _host_memory_verdict(role, ref, ram_bytes) is HostMemoryVerdict.REFUSE:
+    if _host_memory_refuses(role, ref, ram_bytes):
         return None
     return estimate
 
@@ -1064,16 +1063,8 @@ def _cpu_offload_in_play() -> bool:
     return _expert_offload_configured() or cfg.n_gpu_layers is not None
 
 
-class HostMemoryVerdict(StrEnum):
-    """Whether a role's system-memory demand fits the machine."""
-
-    OK = "ok"
-    WARN = "warn"
-    REFUSE = "refuse"
-
-
-def _host_memory_verdict(role: WorkerRole, ref: str, ram_bytes: int) -> HostMemoryVerdict:
-    """Whether *role*'s system-memory half fits: ``ok``, ``warn`` or ``refuse``.
+def _host_memory_refuses(role: WorkerRole, ref: str, ram_bytes: int) -> bool:
+    """Whether *role*'s system-memory half is too big for this machine to load.
 
     Charged only when something actually offloads. Total memory is ground truth,
     so exceeding it refuses on the same standard the VRAM bound uses; exceeding
@@ -1081,7 +1072,7 @@ def _host_memory_verdict(role: WorkerRole, ref: str, ram_bytes: int) -> HostMemo
     worth a false refusal over.
     """
     if not _cpu_offload_in_play() or ram_bytes <= 0:
-        return HostMemoryVerdict.OK
+        return False
     total = total_system_memory()
     if total and ram_bytes > total:
         log.warning(
@@ -1092,7 +1083,7 @@ def _host_memory_verdict(role: WorkerRole, ref: str, ram_bytes: int) -> HostMemo
             ram_bytes / 1024**3,
             total / 1024**3,
         )
-        return HostMemoryVerdict.REFUSE
+        return True
     free = free_system_memory()
     if free and ram_bytes > free:
         log.warning(
@@ -1103,8 +1094,7 @@ def _host_memory_verdict(role: WorkerRole, ref: str, ram_bytes: int) -> HostMemo
             ram_bytes / 1024**3,
             free / 1024**3,
         )
-        return HostMemoryVerdict.WARN
-    return HostMemoryVerdict.OK
+    return False
 
 
 def _warn_weights_exceed(role: WorkerRole, ref: str, weights: int, total_vram: int) -> None:
@@ -1699,6 +1689,12 @@ _plan_probe_store = _PlanProbeStore()
 # surfaces after the one retry.
 MIN_DOWNSHIFT_CTX = 4096
 
+# Halvings allowed before the ladder gives up, which is what it takes to walk a
+# typical 32k window down to the floor. A count rather than a computation over
+# the configured target: the applied context is clamped to the floor anyway, so
+# deriving a per-role depth only decided how many no-op steps to permit.
+_MAX_DOWNSHIFT_STEPS = 3
+
 
 class _CtxDownshiftStore:
     """How many halvings each role's auto context has taken after a load OOM.
@@ -1763,24 +1759,10 @@ def record_ctx_downshift(role: WorkerRole) -> bool:
 
     if role is WorkerRole.CHAT and cfg.num_ctx is not None:
         return False
-    if _downshift_target(role) <= MIN_DOWNSHIFT_CTX:
+    if _ctx_downshift_store.steps(role) >= _MAX_DOWNSHIFT_STEPS:
         return False
     _ctx_downshift_store.step(role)
     return True
-
-
-def _downshift_target(role: WorkerRole) -> int:
-    """What *role*'s auto context currently steps down from."""
-    from lilbee.core.config import cfg
-
-    base = cfg.chat_n_ctx_target if role is WorkerRole.CHAT else _NON_CHAT_DOWNSHIFT_BASE
-    return apply_ctx_downshift(role, max(base, MIN_DOWNSHIFT_CTX))
-
-
-# Non-chat roles size their context from the model rather than from config, so
-# there is no single number to step from; this bounds their ladder to the same
-# depth chat gets from a default target.
-_NON_CHAT_DOWNSHIFT_BASE = 32768
 
 
 def clear_ctx_downshift() -> None:

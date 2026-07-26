@@ -86,9 +86,19 @@ def test_the_estimator_memo_outlasts_one_plan() -> None:
     # context bisection asks again per candidate. A memo smaller than one plan's
     # working set evicts keys the next phase re-requests, turning a cache hit
     # into another subprocess.
-    from lilbee.providers.fleet.placement import _MAX_RATIO_CANDIDATES, _MAX_SPLIT_ESTIMATES
+    from lilbee.providers.fleet.placement import (
+        _CTX_FIT_ESTIMATE_COST,
+        _MAX_RATIO_CANDIDATES,
+        _MAX_SPLIT_ESTIMATES,
+    )
     from lilbee.providers.fleet.vram import _CACHE_SIZE
     from lilbee.providers.roles import ROLE_REGISTRY
 
-    per_plan = _MAX_SPLIT_ESTIMATES + _MAX_RATIO_CANDIDATES * len(ROLE_REGISTRY)
+    # The earlier arithmetic counted one key per candidate and missed the context
+    # bisection entirely, which is what made the memo look big enough when it was
+    # not. Each fitting candidate bisects, and every probe keys separately
+    # because the key carries ctx.
+    per_plan = _MAX_SPLIT_ESTIMATES * (1 + _CTX_FIT_ESTIMATE_COST) + _MAX_RATIO_CANDIDATES * len(
+        ROLE_REGISTRY
+    )
     assert per_plan <= _CACHE_SIZE

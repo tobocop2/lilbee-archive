@@ -50,7 +50,12 @@ _PARSE_TIMEOUT_S = 60
 # Bounded wait for a timed-out parser to die before abandoning it (matches the
 # device probe): a parser wedged in driver I/O must not hang the warm-up thread.
 _PARSE_KILL_WAIT_S = 5.0
-_CACHE_SIZE = 64
+# Sized for a whole plan on a wide box, not for one sweep. The ratio ladder and
+# the context bisection key separately (the key carries ctx), and slot fitting
+# adds more, so an eight-GPU chat split touches on the order of a hundred keys.
+# Too small and the winning candidate's keys are evicted before the launch reads
+# them back, which spawns gguf-parser again to recompute what was just measured.
+_CACHE_SIZE = 256
 
 # Mirrors vLLM's gpu_memory_utilization default: never charge a GPU past 90% of
 # its free VRAM, leaving headroom for allocator fragmentation and driver overhead.

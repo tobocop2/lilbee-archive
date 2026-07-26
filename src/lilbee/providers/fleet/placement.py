@@ -428,6 +428,13 @@ def _place_split(
             # the no-fitter generic path) takes the first shard that fits.
             if model.role is not WorkerRole.CHAT or chat_ctx_fit is None or free_headroom is None:
                 return _charge_split(model, chosen, ratio, per_device, remaining)
+            # The context fit bisects, and every probe is another gguf-parser
+            # run, so it costs far more than the estimate that preceded it and
+            # has to be charged against the same budget. Uncounted, a wide box
+            # ran roughly 190 subprocesses against a documented cap of 24, all
+            # while holding the cross-process build lock that every other lilbee
+            # start waits on for 90 seconds before failing.
+            spent += _CTX_FIT_ESTIMATE_COST
             served = chat_ctx_fit(ratio, [free_headroom[idx] for idx in chosen])
             if served >= chat_ctx_target:
                 return _charge_split(model, chosen, ratio, per_device, remaining)
@@ -645,6 +652,10 @@ def _vram_proportional_split(
 # decoration. Named so the estimator memo can be sized against a whole plan.
 _MAX_RATIO_CANDIDATES = 3
 _MAX_SPLIT_ESTIMATES = 24
+# What one context fit costs in estimator runs. It bisects the servable window,
+# so it is not one call but a handful, and charging it as one understated the
+# sweep by roughly an order of magnitude.
+_CTX_FIT_ESTIMATE_COST = 8
 # Sub-GiB resolution for the shifted candidates. Whole GiB is coarse enough that
 # two cards 700 MiB apart quantize to the same share.
 _RATIO_QUANTUM_DIVISOR = 4

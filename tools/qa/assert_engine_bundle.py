@@ -1,27 +1,23 @@
 #!/usr/bin/env python3
 """Assert a lilbee-engine wheel carries the backend it claims, and the runtime it links.
 
-Two checks, both on the wheel's payload, because neither failure is visible in a
-build log or on a driverless CI runner.
+Two checks on the wheel's payload. Neither failure is visible in a build log or on
+a driverless CI runner, which is why they are read off the artifact.
 
-THE BACKEND IT CLAIMS. Every flavor is built to produce one ggml backend library:
-rocm builds ``libggml-hip.so``, vulkan ``libggml-vulkan.so``, and so on. A wheel
-without its own is a build whose backend flag never took effect, and cmake makes
-that silent: an unknown ``-D`` is cached unused rather than failing, so the build
-succeeds and emits a CPU-only engine. That is not hypothetical. The published rocm
-wheel carried nothing but ``libggml-cpu.so`` for as long as the flag was spelled
-``GGML_HIPBLAS``, which upstream had renamed to ``GGML_HIP``, and no gate looked.
+The backend it claims: every flavor builds one ggml backend library (rocm ->
+``libggml-hip.so``, vulkan -> ``libggml-vulkan.so``). A wheel without its own is a
+build whose backend flag never took effect, which cmake does silently by caching
+an unknown ``-D`` instead of failing. The published rocm wheel shipped as a
+CPU-only build this way, still passing ``GGML_HIPBLAS`` after upstream had
+renamed the option to ``GGML_HIP``.
 
-THE RUNTIME IT LINKS. A CUDA build of llama-server links cudart, cublas and
-cublasLt dynamically. Only libcuda / nvcuda comes from the NVIDIA driver, so the
-rest have to ship inside the wheel beside the binary. When they are missing,
-Windows dies at process start on a user's machine and Linux silently falls back to
-CPU. Non-CUDA wheels are checked the other way, that they carry no CUDA runtime at
-all, so a copy step can't quietly bloat every backend.
+The runtime it links: a CUDA build links cudart, cublas and cublasLt, and only
+libcuda / nvcuda comes from the driver, so the rest ship in the wheel. Missing,
+Windows dies at process start and Linux falls back to CPU silently. Non-CUDA
+wheels are checked the other way, that they carry no CUDA runtime at all.
 
 Pass ``--backend`` at build time, where the flavor is known but the wheel has no
-build tag yet. Without it the flavor is read from the ``-1.<backend>-`` tag, which
-is what a released wheel carries.
+build tag yet. Otherwise it is read from the ``-1.<backend>-`` tag.
 
 Usage:
     assert_engine_bundle.py [--backend <flavor>] <wheel> [<wheel> ...]

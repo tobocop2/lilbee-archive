@@ -154,6 +154,14 @@ done < <(find "${src}/server-build" \( -name CMakeFiles -o -name CMakeScratch -o
 # import of the process, so llama-server.exe died before binding its port with a
 # "cudart64_12.dll was not found" dialog. On Linux ggml dlopens libggml-cuda.so and
 # tolerates the failure, so the GPU silently disappeared and work fell back to CPU.
+#
+# ROCm is deliberately NOT handled the same way, and this is the place someone
+# will ask why. libggml-hip.so links hip, hipblas and rocblas, none of which the
+# build output above contains, so the rocm wheel needs ROCm present on the user's
+# machine. Bundling it is not a small omission to fix later: rocBLAS carries
+# Tensile kernels per gfx target, and the nine targets this wheel builds for came
+# to 22 GB installed. The failure mode when ROCm is absent is the quiet Linux one
+# described above, so it is documented rather than detected.
 case "${backend}_$(uname -s)" in
   cu12*_MINGW* | cu12*_MSYS* | cu12*_CYGWIN*) cuda_platform="windows" ;;
   cu12*_Linux)                                cuda_platform="linux" ;;

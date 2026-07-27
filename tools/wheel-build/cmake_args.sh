@@ -97,7 +97,15 @@ case "${backend}_${runner_os}" in
     # Compute capabilities cover RDNA2/RDNA3/RDNA4 + CDNA: gfx906 (MI50),
     # gfx908 (MI100), gfx90a (MI200), gfx940/942 (MI300), gfx1030 (RDNA2),
     # gfx1100 (RDNA3), gfx1101/1102 (Navi 32/33).
-    args="${common_x86} -DGGML_HIPBLAS=ON -DAMDGPU_TARGETS=gfx906;gfx908;gfx90a;gfx940;gfx942;gfx1030;gfx1100;gfx1101;gfx1102 -DGGML_VULKAN=OFF -DGGML_CUDA=OFF -DGGML_BLAS=OFF"
+    # GGML_HIP, not GGML_HIPBLAS: upstream renamed it, and cmake caches an unknown
+    # -D without failing, so the old spelling built a CPU-only engine that shipped
+    # under the rocm index. AMDGPU_TARGETS is still forwarded to GPU_TARGETS.
+    #
+    # The compiler is pinned for the same reason sycl pins icx: HIP device code
+    # needs AMD's clang, and ROCm 7 keeps it under lib/llvm rather than the
+    # llvm/bin that earlier releases used.
+    rocm_clang="${ROCM_PATH:-/opt/rocm-7.2.0}/lib/llvm/bin/clang"
+    args="${common_x86} -DGGML_HIP=ON -DAMDGPU_TARGETS=gfx906;gfx908;gfx90a;gfx940;gfx942;gfx1030;gfx1100;gfx1101;gfx1102 -DGGML_VULKAN=OFF -DGGML_CUDA=OFF -DGGML_BLAS=OFF -DCMAKE_C_COMPILER=${rocm_clang} -DCMAKE_CXX_COMPILER=${rocm_clang}++"
     ;;
   sycl_Linux|sycl_Windows)
     # Intel oneAPI SYCL — Intel Arc + Data Center Max GPUs.

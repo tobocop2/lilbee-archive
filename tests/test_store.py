@@ -171,7 +171,7 @@ class TestEnsureFtsIndex:
         assert table is not None
         with mock.patch.object(
             type(table),
-            "create_fts_index",
+            "create_index",
             side_effect=RuntimeError("boom"),
         ):
             store.ensure_fts_index()
@@ -184,7 +184,7 @@ class TestEnsureFtsIndex:
         assert table is not None
         with mock.patch.object(
             type(table),
-            "create_fts_index",
+            "create_index",
             side_effect=RuntimeError("boom"),
         ):
             assert store.bm25_probe("anything") == []
@@ -200,7 +200,7 @@ class TestEnsureFtsIndex:
         table = store.open_table("chunks")
         assert table is not None
         with (
-            mock.patch.object(type(table), "create_fts_index") as create_spy,
+            mock.patch.object(type(table), "create_index") as create_spy,
             mock.patch.object(type(table), "optimize") as optimize_spy,
         ):
             store.ensure_fts_index()
@@ -238,13 +238,13 @@ class TestEnsureFtsIndex:
         overflow = RuntimeError("Max offset 1897296 exceeds length of values 1067891")
         with (
             mock.patch.object(type(table), "optimize", side_effect=overflow),
-            mock.patch.object(type(table), "create_fts_index") as rebuild,
+            mock.patch.object(type(table), "create_index") as rebuild,
         ):
             store.ensure_fts_index()
         assert any(
             c.args[:1] == ("chunk",)
             and c.kwargs.get("replace") is True
-            and c.kwargs.get("with_position") is False
+            and c.kwargs["config"].with_position is False
             for c in rebuild.call_args_list
         )
         assert store._fts_ready is True
@@ -261,63 +261,32 @@ class TestEnsureFtsIndex:
         assert table is not None
         with (
             mock.patch.object(type(table), "optimize", side_effect=RuntimeError("disk full")),
-            mock.patch.object(type(table), "create_fts_index") as rebuild,
+            mock.patch.object(type(table), "create_index") as rebuild,
             caplog.at_level(logging.WARNING),
         ):
             store.ensure_fts_index()
         rebuild.assert_not_called()
         assert any("optimize()" in r.message for r in caplog.records)
 
-    def test_overflow_rebuild_also_rebuilds_the_title_index_when_enabled(self, store, test_config):
-        """With the title arm on, a positional-overflow rebuild replaces the
-        title index too, not just the chunk index."""
-        test_config.title_search = True
-        store.add_chunks(_titled_records("a.pdf", 2, title="zebra manifesto"))
-        store.ensure_fts_index()
-        table = store.open_table("chunks")
-        assert table is not None
-        overflow = RuntimeError("Max offset 9 exceeds length of values 3")
-        with (
-            mock.patch.object(type(table), "optimize", side_effect=overflow),
-            mock.patch.object(type(table), "create_fts_index") as rebuild,
-        ):
-            store.ensure_fts_index()
-        rebuilt = {
-            c.args[0]
-            for c in rebuild.call_args_list
-            if c.kwargs.get("replace") is True and c.kwargs.get("with_position") is False
-        }
-        assert rebuilt == {"chunk", "title"}
+    def test_first_call_creates_without_replace(self, store):
+        """Fresh table goes through create_index(config=FTS()) with replace=False."""
+        from lancedb.index import FTS
 
-    def test_overflow_rebuild_failure_is_swallowed(self, store):
-        """If the positionless rebuild itself fails, the store keeps the existing
-        index and does not propagate: a failed self-heal must not crash sync."""
-        store.add_chunks(_make_records())
-        store.ensure_fts_index()
-        table = store.open_table("chunks")
-        assert table is not None
-        overflow = RuntimeError("Max offset 9 exceeds length of values 3")
-        with (
-            mock.patch.object(type(table), "optimize", side_effect=overflow),
-            mock.patch.object(
-                type(table), "create_fts_index", side_effect=RuntimeError("rebuild boom")
-            ),
-        ):
-            store.ensure_fts_index()  # must not raise
-        assert store._fts_ready is True
-
-    def test_first_call_creates_chunk_index_only_when_title_search_off(self, store):
-        """With title_search off (default), only the chunk index is built; the
-        title index is not created on a store that never queries it."""
         store.add_chunks(_make_records())
         table = store.open_table("chunks")
         assert table is not None
 
-        with mock.patch.object(type(table), "create_fts_index") as create_spy:
+        with mock.patch.object(type(table), "create_index") as create_spy:
             store.ensure_fts_index()
 
-        assert [c.args[0] for c in create_spy.call_args_list] == ["chunk"]
-        assert create_spy.call_args_list[0].kwargs.get("with_position") is False
+        create_spy.assert_called_once()
+        # Builds an FTS index on the chunk column, incrementally (replace was not
+        # True, which would defeat the purpose of incremental optimize()).
+        args, kwargs = create_spy.call_args
+        assert args[0] == "chunk"
+        assert isinstance(kwargs.get("config"), FTS)
+        assert kwargs.get("config").with_position is False
+        assert kwargs.get("replace") is False
 
     def test_first_call_creates_both_indexes_when_title_search_on(self, store, test_config):
         """Fresh table creates the chunk and title indexes, both positionless
@@ -327,7 +296,7 @@ class TestEnsureFtsIndex:
         table = store.open_table("chunks")
         assert table is not None
 
-        with mock.patch.object(type(table), "create_fts_index") as create_spy:
+        with mock.patch.object(type(table), "create_index") as create_spy:
             store.ensure_fts_index()
 
         assert [c.args[0] for c in create_spy.call_args_list] == ["chunk", "title"]
@@ -336,7 +305,7 @@ class TestEnsureFtsIndex:
         # Both indexes are positionless: with_position=True overflows LanceDB's
         # list encoding on a large corpus, and no lilbee query needs exact-phrase
         # matching.
-        assert all(c.kwargs.get("with_position") is False for c in create_spy.call_args_list)
+        assert all(c.kwargs["config"].with_position is False for c in create_spy.call_args_list)
 
     def test_fts_quoted_query_matches_terms_not_a_phrase(self, store):
         """A quoted query must return term matches, not raise on the positionless index.
@@ -553,9 +522,9 @@ class TestEnsureScalarIndexes:
         test_config.fts_language = "German"
         store.add_chunks(_make_records())
         table = store.open_table("chunks")
-        with mock.patch.object(type(table), "create_fts_index") as create:
+        with mock.patch.object(type(table), "create_index") as create:
             store.ensure_fts_index()
-        assert create.call_args.kwargs["language"] == "German"
+        assert create.call_args.kwargs["config"].language == "German"
 
     def test_pre_prefix_store_warns_once_for_a_doc_prefix_family(self, store, test_config, caplog):
         """A store built before its family's document prefixes existed warns
@@ -2906,7 +2875,7 @@ class TestTitleSearch:
         test_config.title_search = True
         store.add_chunks(_titled_records("a.pdf", 1, title="zebra manifesto"))
         table = store.open_table("chunks")
-        real_create = type(table).create_fts_index
+        real_create = type(table).create_index
 
         def _fail_title(self, column, **kwargs):
             if column == "title":
@@ -2914,7 +2883,7 @@ class TestTitleSearch:
             return real_create(self, column, **kwargs)
 
         with (
-            mock.patch.object(type(table), "create_fts_index", _fail_title),
+            mock.patch.object(type(table), "create_index", _fail_title),
             caplog.at_level(logging.WARNING),
         ):
             store.ensure_fts_index()

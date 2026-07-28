@@ -76,6 +76,7 @@ from .types import (
 if TYPE_CHECKING:
     import lancedb
     import lancedb.table
+    from lancedb.index import FTS
 
 log = logging.getLogger(__name__)
 
@@ -246,6 +247,14 @@ class Store:
         # Cache of {filename: ingested_at} rebuilt only when sources
         # mutate; callers (temporal filter) hit it per-query.
         self._source_ingested_cache: dict[str, str] | None = None
+
+    def _fts_config(self) -> FTS:
+        """Shared FTS index config: positionless (with_position=True overflows
+        LanceDB's list encoding on optimize()) and stemmed for the configured
+        corpus language."""
+        from lancedb.index import FTS
+
+        return FTS(with_position=False, language=self._config.fts_language)
 
     def _index_build_lock(self, blocking: bool) -> AbstractContextManager[None]:
         """Write lock for index builds: full budget from ingest, short from the read path."""
@@ -535,7 +544,7 @@ class Store:
         runs LanceDB's default compaction + version pruning (default prune
         window: 7 days). Work scales with recent deltas rather than total
         chunk count, so large corpora no longer pay the full
-        ``create_fts_index(replace=True)`` rebuild cost on every sync.
+        ``create_index(config=FTS(), replace=True)`` rebuild cost on every sync.
 
         ``blocking=False`` (the search path) marks an existing index ready
         without the lock and skips maintenance when another process holds it,
@@ -579,12 +588,7 @@ class Store:
             else:
                 # Positionless: with_position=True overflows LanceDB's list
                 # encoding on optimize(), and nothing issues phrase queries.
-                table.create_fts_index(
-                    _CHUNK_COLUMN,
-                    replace=False,
-                    with_position=False,
-                    language=self._config.fts_language,
-                )
+                table.create_index(_CHUNK_COLUMN, config=self._fts_config(), replace=False)
                 self._fts_ready = True
                 log.debug("FTS index created on '%s'", CHUNKS_TABLE)
             # Only the opt-in title arm needs the title index.
@@ -604,12 +608,7 @@ class Store:
             return
         try:
             # Positionless for the same reason as the chunk index.
-            table.create_fts_index(
-                _TITLE_COLUMN,
-                replace=False,
-                with_position=False,
-                language=self._config.fts_language,
-            )
+            table.create_index(_TITLE_COLUMN, config=self._fts_config(), replace=False)
             self._title_fts_ready = True
             log.debug("Title FTS index created on '%s'", CHUNKS_TABLE)
         except Exception:
@@ -650,19 +649,9 @@ class Store:
         title index is rebuilt too when the title arm is enabled.
         """
         try:
-            table.create_fts_index(
-                _CHUNK_COLUMN,
-                replace=True,
-                with_position=False,
-                language=self._config.fts_language,
-            )
+            table.create_index(_CHUNK_COLUMN, config=self._fts_config(), replace=True)
             if self._config.title_search and _TITLE_COLUMN in table.schema.names:
-                table.create_fts_index(
-                    _TITLE_COLUMN,
-                    replace=True,
-                    with_position=False,
-                    language=self._config.fts_language,
-                )
+                table.create_index(_TITLE_COLUMN, config=self._fts_config(), replace=True)
             log.warning("Rebuilt the FTS index positionless after a positional-index overflow")
         except Exception:
             log.warning(

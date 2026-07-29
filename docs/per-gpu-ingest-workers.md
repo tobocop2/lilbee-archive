@@ -116,10 +116,34 @@ fleet is already running.
 
 It is a hypothesis. The experiment that settles it is free (see Proof).
 
-## Changes: none required in lilbee
+## Changes: one, plus configuration
 
-The architecture runs on existing configuration. Four environment variables per
-worker, all verified:
+Almost everything the architecture needs already exists as configuration. One
+thing does not, and it is a race rather than a setting.
+
+### The one code change: deterministic port ranges
+
+`_pick_free_ports` claims a port by binding a socket and releases it before
+llama-server binds, so workers starting together can pick the same port. Measured
+on 2xH100 over the same corpus, changing only the launch stagger:
+
+| launch | per-card GPU | end-to-end |
+|---|---|---|
+| simultaneous | 8% / 87% | 53.9 docs/s |
+| 15s stagger | **90% / 88%** | **98.5 docs/s** |
+
+The 8%/87% signature is one worker driving the other's engine. A stagger narrows
+the window rather than closing it, and it scales badly: eight workers at 15s is
+two minutes of dead time and still probabilistic.
+
+Give each worker a disjoint port range derived from something it already knows,
+its worker index or a hash of `LILBEE_ENGINE_DIR`. No coordination, no
+reservation file, collisions impossible by construction. Roughly twenty lines in
+the port picker.
+
+### Everything else is configuration
+
+Four environment variables per worker, all verified:
 
 ```bash
 CUDA_VISIBLE_DEVICES=$i               # masks the device view
@@ -235,12 +259,18 @@ mechanism is plan-stream starvation — with streaming, an idle GPU means no
 planned files were available, and discovery's stat scan over a 10,000-entry
 directory could not feed it.
 
-**Rung 1b, ~$2, outstanding.** Rerun with 1000 files per bucket. One number
-matters: end-to-end docs/s against the 4xH100 80k baseline of 161.9.
+**Rung 1b, ~$2. Passed.** Bucketing 1000 files per directory cut wall clock from
+1334s to 401s and moved embedding from 13% to 82% of the run. Planning was never
+the problem; the streamed plan works, and the earlier layout starved it.
 
-**Rung 2, the full sweep**, only after 1b: N = 1, 2, 4, 8 on one 8xH100 host with
-a repeat at the best N. At that point it is closer to a production run than a
-validation.
+**Rung 1c/1d, ~$4. Found the second blocker.** 1c dropped the launch stagger and
+measured 8%/87% per-card at 53.9 docs/s. 1d restored it and measured 90%/88% at
+98.5 docs/s over the same corpus, changing nothing else. That isolates the port
+race above, and 98.5 on two cards is 1.66x the 59.5 single-card rate.
+
+**Rung 2, the full sweep**, next: N = 1, 2, 4, 8 on one 8xH100 host with the
+stagger (or the port fix) and a repeat at the best N. There is now a mechanism
+explaining why it should scale, which there was not before.
 
 Use the 8B production model throughout, not a small one: a 0.6B embedder on fast
 cards is client-bound rather than GPU-bound, and generalising across regimes is

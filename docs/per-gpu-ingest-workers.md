@@ -116,28 +116,36 @@ fleet is already running.
 
 It is a hypothesis. The experiment that settles it is free (see Proof).
 
-## Changes, in dependency order
+## Changes: none required in lilbee
 
-### 1. Engine identity per worker (blocking)
+The architecture runs on existing configuration. Four environment variables per
+worker, all verified:
 
-Give each worker its own engine slot and port range, keyed off the data root or
-an explicit worker index rather than a machine-wide directory. Disjoint port
-ranges per worker index cannot race by construction and need no coordination,
-which is simpler than a filesystem reservation.
+```bash
+CUDA_VISIBLE_DEVICES=$i               # masks the device view
+LILBEE_DATA=/root/w$i                 # private data root
+LILBEE_ENGINE_DIR=/root/w$i/engine    # private engine slot
+LILBEE_INGEST_WORKERS=$((CORES / N))  # divides the planning pool
+```
 
-Until this lands, N concurrent lilbee processes on one host cannot be measured.
+**Engine identity** was the one true blocker. `machine_engine_dir()`
+(`runtime/engine_lock.py:60`) returns `default_state_dir()/engine`, ignores
+`LILBEE_DATA`, and is documented as "the per-OS-user engine slot every lilbee
+process scans first"; `find_live_state` then globs it for any pid's state file so
+"a guest lilbee can bind to this live fleet". Pinned workers therefore adopted
+worker 0's fleet, which is exactly the observed one-engine-seven-idle-cards.
+`LILBEE_ENGINE_DIR` (`ENGINE_DIR_ENV`, same file, line 28) overrides it. Measured:
+two data roots collide on one slot; with the override set they do not.
 
-### 2. Host-share awareness (blocking only if measured)
+**Pool sizing** is already overridable. `resolve_process_count`
+(`workers.py:100`) reads `active_config().ingest_processes` and `_plan_workers`
+(`pipeline.py:336`) reads `active_config().ingest_workers`, which otherwise
+defaults to `available_cpu_count()` — so N pinned workers would each size a pool
+to the whole box. Setting the existing override per worker closes it; no new knob.
 
-`init_worker` divides CPU and admission across lilbee's own worker processes, but
-nothing tells a lilbee process that siblings share the box, so each sizes its CPU
-pools from the whole machine. Admission largely self-divides under pinning since
-the fleet-derived term comes from the masked device view; CPU pools are the gap.
-
-The launcher already sets `CUDA_VISIBLE_DEVICES` per worker, so it can set the
-existing pool-sizing environment variables too. Add a new knob only if
-oversubscription is measured at N=8. This did not bite in the failed run (load
-2.65 of 224).
+What is left is a product question, not a blocker: should lilbee *derive* a
+private engine slot and pool share when it detects it is pinned, rather than
+requiring an operator to know four environment variables?
 
 ### 3. Scope placement to declared roles (not blocking)
 
@@ -152,16 +160,25 @@ fully without one, and its absence should surface on the chat surface rather tha
 during unrelated work. A product requirement, tracked on its own; it does not
 block per-GPU workers.
 
-### Planning cost, unresolved
+### Planning cost, resolved
 
-The plan-progress line reports files planned over wall-clock since the plan
-stream opened, and the stream is pull-driven, so the reported rate is coupled to
-ingest throughput rather than being a pure planning cost. The 16-30 files/s seen
-in the failed run cannot be read as "planning is slow" on its own.
+Planning is streamed, not a preamble. #609 made the plan stream so embedding
+starts before the corpus is hashed: `_StreamedPlan` accumulates across shards,
+`_shard_bounds` ramps 256 to 4096, and `_ResultFeed` is a pull-based source where
+"the collector waits on the planner only when it has nothing left to run".
+Hashing overlaps GPU work.
 
-There is a real cost underneath: a first ingest hashes every file's contents
-(`_classify_file_change`), so the whole corpus is read off disk. Whether that
-matters at 8.8M is unmeasured. Tracked separately.
+That also means the plan-progress line cannot be read as planning cost. It
+reports files planned over wall-clock, and because the stream is pull-driven,
+planning advances only as fast as embedding consumes it — a low rate can mean
+embedding is not pulling. The 16-30 files/s seen in the failed run is not
+evidence that planning is slow.
+
+A first ingest does hash every file (`pipeline.py:312`; a fresh index has no
+stored stat, so the fast path is skipped), and the pass runs across
+`available_cpu_count()`. lilbee's own note says it "can run for tens of minutes
+on a multi-million-file corpus" — total hashing work overlapped with embedding,
+not blocking time.
 
 ## Orchestration
 
@@ -204,18 +221,30 @@ on any machine and check whether the second adopts the first's engine slot. This
 is a `default_state_dir()` question, not a GPU question. It confirms or kills the
 engine-collision hypothesis for nothing.
 
-**Rung 1, ~$1.50.** Two pinned workers on a 2xH100 pod over 20k passages. Two
-questions at once: do both start their own engine, and is aggregate throughput
-about twice the single-card rate at near-94% utilisation? If it lands near 118
-docs/s the architecture scales and eight cards is arithmetic. If it lands near 80
-at 40%, the design is dead and the 8-card run was never worth buying. Use the 8B
-production model, not a small one: a 0.6B embedder on fast cards is client-bound
-rather than GPU-bound, and generalising across regimes is how three earlier
-proposals went wrong.
+**Rung 1, ~$2. Passed.** Two pinned workers on 2xH100 over 20k passages. Both
+landed 10,000 rows with zero failures, each took its own engine dir, and GPU
+utilisation during the embed window was 92%/92% at 119.0 docs/s aggregate — 59.5
+per card, exactly the rate a single card reaches alone. Per-GPU workers scale
+linearly.
 
-**Rung 2, the full sweep**, only if rung 1 passes: N = 1, 2, 4, 8 on one 8xH100
-host with a repeat at the best N. At that point it is closer to a production run
-than a validation.
+The same run reported 15.0 docs/s end-to-end with embedding at 13% of wall clock.
+**Both figures are artifacts of the harness**, which dealt every worker's files
+into one directory where the corpus uses 1000 per directory. The numbers do not
+reconcile otherwise: 4xH100 ingested 80k in 494s, against 1334s for 20k here. The
+mechanism is plan-stream starvation — with streaming, an idle GPU means no
+planned files were available, and discovery's stat scan over a 10,000-entry
+directory could not feed it.
+
+**Rung 1b, ~$2, outstanding.** Rerun with 1000 files per bucket. One number
+matters: end-to-end docs/s against the 4xH100 80k baseline of 161.9.
+
+**Rung 2, the full sweep**, only after 1b: N = 1, 2, 4, 8 on one 8xH100 host with
+a repeat at the best N. At that point it is closer to a production run than a
+validation.
+
+Use the 8B production model throughout, not a small one: a 0.6B embedder on fast
+cards is client-bound rather than GPU-bound, and generalising across regimes is
+how three earlier proposals went wrong.
 
 **No regression.** N=1 must match the current single-process figure on the same
 hardware.

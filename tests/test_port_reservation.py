@@ -77,19 +77,15 @@ def test_separate_processes_do_not_start_at_the_same_offset(monkeypatch) -> None
 
 
 def _pick_as_pid(monkeypatch, pid: int, count: int) -> list[int]:
-    """One process's whole allocation: its own pid, its own empty reserved set."""
+    """One process's allocation: its own pid, its own empty reserved set."""
     monkeypatch.setattr(sm.os, "getpid", lambda p=pid: p)
     monkeypatch.setattr(sm, "_reserved_ports", set())
     return sm._pick_free_ports(count)
 
 
 def test_a_block_holds_a_whole_fleet(monkeypatch) -> None:
-    # A fleet asks for one proxy port plus one per member, and the replicated
-    # roles (embed, vision) scale to one per GPU, so a large host asks for tens
-    # of ports in one allocation. A group wider than a block spills into the next
-    # block, which is the overlap blocks exist to prevent, so the width is a
-    # property worth pinning. Stated as arithmetic rather than by binding 35 real
-    # sockets, which would depend on what else the host has bound.
+    # A group wider than a block spills into the next one. Stated as arithmetic
+    # rather than by binding 35 real sockets, which depends on the host.
     widest_real_fleet = 1 + 2 * 16 + 2  # 16-GPU host: proxy, embed+vision, two singles
     assert widest_real_fleet <= sm._PORT_BLOCK
     starts = [sm._search_start((32768, 60999)) for _ in (0, 1)]
@@ -101,9 +97,8 @@ def test_a_block_holds_a_whole_fleet(monkeypatch) -> None:
 
 
 def test_concurrent_wide_fleets_do_not_overlap(monkeypatch) -> None:
-    # Two processes each asking for a wide group: the pathological case for a
-    # block too narrow. Fake pids derive from the real one so parallel test
-    # workers land in different blocks instead of fighting over one.
+    # Fake pids derive from the real one so parallel test workers land in
+    # different blocks instead of fighting over one.
     monkeypatch.setattr(sm, "_ephemeral_range", lambda: (32768, 60999))
     real = os.getpid()
     first = _pick_as_pid(monkeypatch, real, 40)
@@ -112,11 +107,8 @@ def test_concurrent_wide_fleets_do_not_overlap(monkeypatch) -> None:
 
 
 def test_concurrent_workers_get_disjoint_port_groups(monkeypatch) -> None:
-    # Measured on 2xH100: one lilbee per GPU started at the same moment ran at
-    # 8%/87% per-card utilisation and 53.9 docs/s, against 90%/88% and 98.5 with
-    # a 15s stagger. A group of ports is taken contiguously and the probe sockets
-    # close before llama-server binds any of them, so starts one apart overlap on
-    # all but one port and one worker's fleet ends up on another's ports.
+    # Ports are taken contiguously and the probe sockets close before
+    # llama-server binds, so pid-offset starts one apart overlap on all but one.
     monkeypatch.setattr(sm, "_ephemeral_range", lambda: (32768, 60999))
     groups = [_pick_as_pid(monkeypatch, 4000 + i, 4) for i in range(8)]
     taken: set[int] = set()

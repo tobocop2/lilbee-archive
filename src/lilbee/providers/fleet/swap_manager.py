@@ -550,13 +550,10 @@ def _ephemeral_range() -> tuple[int, int] | None:
 # Above the registered-service crowd, below every default ephemeral range.
 _PORT_SEARCH_FLOOR = 20000
 _PORT_WINDOW_SPAN = 8192
-# The window is cut into blocks and a process searches the one its pid selects,
-# so concurrent lilbees hold disjoint ranges. A fleet takes one proxy port plus
-# one per member, and members are the replicated roles: embed and vision scale to
-# one per GPU, the rest are single. So 64 covers a 30-GPU host. A fleet wider than
-# a block spills into the next one, which is the pre-block behaviour for whoever
-# owns that block, so the width has to cover the widest real fleet rather than the
-# typical one.
+# Block width. Each process searches one block, so concurrent lilbees hold
+# disjoint ranges. A fleet takes one proxy port plus one per member, and embed
+# and vision replicate per GPU, so 64 covers a 30-GPU host; a wider fleet spills
+# into the next block.
 _PORT_BLOCK = 64
 
 # Ports handed to a child that has not bound them yet. llama-swap binds a member
@@ -579,14 +576,11 @@ def _window_span(ceiling: tuple[int, int]) -> int:
 
 
 def _search_start(ceiling: tuple[int, int]) -> int:
-    """Where this process begins its scan of the sub-ephemeral window.
+    """First port of the block this process owns.
 
-    The pid selects a whole block, not a single offset. Reservation only covers
-    this process and two lilbee starts racing each other cannot see each other's
-    picks at all, so the window is partitioned instead. Offsetting by pid alone
-    left the blocks overlapping: a group of ports is taken contiguously, so two
-    processes starting one port apart share all but one of them, and one worker's
-    fleet lands on another worker's ports.
+    The pid selects a whole block, not an offset: reservation is per-process, and
+    a fleet takes its ports contiguously, so pid-offset starts one apart overlap
+    on all but one port.
     """
     blocks = max(1, _window_span(ceiling) // _PORT_BLOCK)
     return _PORT_SEARCH_FLOOR + (os.getpid() % blocks) * _PORT_BLOCK

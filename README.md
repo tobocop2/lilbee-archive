@@ -620,7 +620,7 @@ Document extraction powered by [Xberg], code chunking by [tree-sitter]. lilbee h
 | Archives     | `.zip`, `.tar`, `.gz`, `.7z`, `.pst` (combined contents extracted)                                                                                      | none                                                                                                                                                                                             |
 | Code         | `.py`, `.js`, `.ts`, `.go`, `.rs`, `.java` and [150+ more](https://github.com/Goldziher/tree-sitter-language-pack) via tree-sitter (AST-aware chunking) | none                                                                                                                                                                                             |
 
-Plus notebooks, bibliographies, iWork, and audio/video, among others. See the [usage guide](docs/usage.md#ocr) for OCR setup and [model benchmarks](docs/benchmarks/vision-ocr.md).
+Plus notebooks, bibliographies, iWork, and audio/video, among others. See the [usage guide](docs/usage.md#ocr) for OCR setup.
 
 </details>
 

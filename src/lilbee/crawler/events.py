@@ -12,11 +12,39 @@ from typing import Any
 from lilbee.crawler.models import CrawlResult, FetchedPage
 from lilbee.runtime.progress import (
     CrawlPageEvent,
+    CrawlPageFailedEvent,
     DetailedProgressCallback,
     EventType,
 )
 
 log = logging.getLogger(__name__)
+
+# Reason reported when a fetch succeeded but produced no markdown to save.
+_EMPTY_MARKDOWN_REASON = "page produced empty markdown"
+
+
+def _failure_reason(result: CrawlResult) -> str | None:
+    """Why a page has nothing to save, or None when it does."""
+    if not result.success:
+        return result.error or "fetch failed"
+    if not result.markdown.strip():
+        return _EMPTY_MARKDOWN_REASON
+    return None
+
+
+def _emit_page_failure(
+    on_progress: DetailedProgressCallback | None, result: CrawlResult
+) -> None:
+    """Log and emit ``CRAWL_PAGE_FAILED`` for a page that yields nothing to save."""
+    reason = _failure_reason(result)
+    if reason is None:
+        return
+    log.warning("Crawled page yields no content: %s: %s", result.url, reason)
+    if on_progress:
+        on_progress(
+            EventType.CRAWL_PAGE_FAILED,
+            CrawlPageFailedEvent(url=result.url, reason=reason),
+        )
 
 
 def _fetched_to_result(page: FetchedPage) -> CrawlResult:
@@ -69,6 +97,7 @@ async def _drain_page_stream(
             )
         new_result = _fetched_to_result(page)
         results.append(new_result)
+        _emit_page_failure(on_progress, new_result)
         if on_result is not None:
             try:
                 rv = on_result(new_result)

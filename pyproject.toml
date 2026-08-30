@@ -1,11 +1,11 @@
 [project]
 name = "lilbee"
-version = "0.6.90b427"
+version = "0.6.90b431"
 description = "The whole local AI stack in one executable: run and manage local AI models across every GPU you have, and search your files, code, and the web pages you crawl, with answers that cite the source. Per-project libraries, semantic and hybrid search, vision OCR, an auto-built wiki, CLI, TUI, MCP server, REST API, and Python library. No model server, no database server, no containers. Works with your own Ollama or LM Studio models too."
-readme = "README.md"
 license = "MIT"
 authors = [{ name = "tobocop2", email = "5562156+tobocop2@users.noreply.github.com" }]
 requires-python = ">=3.11"
+dynamic = ["readme"]
 keywords = [
     "rag", "local-rag", "local-llm", "local-ai",
     "mcp", "mcp-server", "model-context-protocol",
@@ -57,7 +57,6 @@ dependencies = [
     "diskcache>=5.6.1",
     "jinja2>=2.11.3",
     "typing-extensions>=4.5.0",
-    "gguf>=0.18",
     "huggingface_hub>=1.27.0",
     "psutil>=5.9",
     "pydantic-settings>=2.14.2",
@@ -119,6 +118,11 @@ lilbee = "lilbee.runtime.launcher:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# The README shows each demo as a GitHub video player, which only GitHub
+# renders. hatch_build.py rewrites those back to the gh-pages GIFs so the PyPI
+# page keeps its moving pictures instead of a wall of links.
+[tool.hatch.metadata.hooks.custom]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/lilbee"]
 
@@ -150,6 +154,11 @@ dev = [
     # without this, chardet only arrives via the crawler extra, and the bare
     # `uv sync --locked` CI test env cannot run those tests.
     "chardet>=7",
+    # llama.cpp's Python package, for tests only. It is not a second GGUF reader
+    # in the product: gguf-parser is, built from the pin that builds
+    # llama-server. This supplies GGML_QUANT_SIZES so the measured
+    # bytes-per-weight table is checked against the authoritative block sizes.
+    "gguf>=0.18",
     "hypothesis>=6.100",
     "mypy>=1.19.1",
     "packaging>=24",
